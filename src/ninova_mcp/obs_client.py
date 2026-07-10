@@ -14,8 +14,18 @@ from typing import Any
 
 import requests
 
-from .client import NinovaAuthError, NinovaClient, NinovaError
-from .parsing import normalize_lookup_text
+from .cache import TtlCache
+from .client import DEFAULT_HEADERS, NinovaAuthError, NinovaClient, NinovaError
+from .parsing import (
+    COURSE_CODE_RE,
+    clean_text,
+    extract_course_search_results,
+    extract_course_select_options,
+    extract_prerequisite_list,
+    make_soup,
+    normalize_lookup_text,
+    parse_html_page,
+)
 
 DEFAULT_OBS_BASE_URL = "https://obs.itu.edu.tr"
 JWT_PATH = "/ogrenci/auth/jwt"
@@ -262,6 +272,345 @@ class ObsClient:
             f"{i.get('akademikDonemId')}:{i.get('akademikDonemAdi')}" for i in items[-8:]
         )
         raise ObsError(f"Semester not found: {semester}. Examples: {options}")
+
+
+class ObsPublicClient:
+    """Client for OBS **public** (no-auth) endpoints: course catalog and prerequisites.
+
+    These endpoints return HTML, not JSON, so parsing is handled by
+    ``parsing.py`` extractors.  No JWT or login is needed.
+    """
+
+    DEFAULT_BASE_URL = "https://obs.itu.edu.tr"
+    DEFAULT_CACHE_TTL = 3600.0  # 1 hour — course catalog rarely changes
+    DEFAULT_REQUEST_DELAY_SECONDS = 0.12
+
+    def __init__(
+        self,
+        session: requests.Session | None = None,
+        base_url: str | None = None,
+        cache_ttl: float | None = None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv("NINOVA_OBS_BASE_URL") or self.DEFAULT_BASE_URL).rstrip("/")
+        self._session = session
+        cttl = cache_ttl if cache_ttl is not None else float(
+            os.getenv("NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS") or self.DEFAULT_CACHE_TTL
+        )
+        self._cache: TtlCache[Any] = TtlCache(cttl)
+        self._course_index: dict[str, int] | None = None  # normalised code → bransKoduId
+        self._min_request_interval = self.DEFAULT_REQUEST_DELAY_SECONDS
+        self._last_request_at = 0.0
+
+    @property
+    def session(self) -> requests.Session:
+        if self._session is None:
+            self._session = requests.Session()
+            self._session.headers.update({
+                "User-Agent": DEFAULT_HEADERS.get("User-Agent", "itu-mcp/0.2"),
+                "Accept-Language": DEFAULT_HEADERS.get("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.7"),
+            })
+        return self._session
+
+    # -- internal helpers -------------------------------------------------
+
+    def _throttle(self) -> None:
+        if self._min_request_interval <= 0:
+            return
+        now = time.monotonic()
+        remaining = self._min_request_interval - (now - self._last_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
+        self._last_request_at = time.monotonic()
+
+    def _get_html(self, path: str, *, params: dict[str, Any] | None = None) -> tuple[str, str]:
+        """GET a public OBS page and return ``(html, final_url)``."""
+        if not path.startswith("/"):
+            path = "/" + path
+        url = self.base_url + path
+        self._throttle()
+        response = self.session.get(url, params=params, timeout=30, allow_redirects=True)
+        if response.status_code >= 400:
+            raise ObsError(
+                f"OBS public endpoint {path} returned HTTP {response.status_code}"
+            )
+        if not response.encoding or response.encoding.lower() == "iso-8859-1":
+            response.encoding = response.apparent_encoding or response.encoding
+        return response.text, response.url
+
+    # -- course index -----------------------------------------------------
+
+    def _build_course_index(self) -> dict[str, int]:
+        """Fetch and parse the master course-select dropdown.
+
+        Returns a mapping of normalised course code → ``DersBransKoduId``.
+        Cached for the session.
+        """
+        cached = self._cache.get("course_index")
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        html, url = self._get_html("/public/GenelTanimlamalar/DersOnsartList")
+        options = extract_course_select_options(html, url)
+        index: dict[str, int] = {}
+        for opt in options:
+            text = opt.get("text") or ""
+            value_str = opt.get("value") or ""
+            try:
+                numeric_id = int(value_str)
+            except (ValueError, TypeError):
+                continue
+
+            # The option text is usually "DEPARTMENT_CODE - Department Name".
+            # Store multiple variations so lookups succeed with or without spaces,
+            # trailing letters, etc.
+            parts = text.split("-", 1)
+            dept_code = clean_text(parts[0]) if parts else ""
+            if dept_code:
+                index[normalize_lookup_text(dept_code)] = numeric_id
+
+            # Also index the raw value as key for partial-match lookups later.
+            index[value_str] = numeric_id
+
+        self._cache.set("course_index", index)
+        self._course_index = index
+        return index
+
+    # -- course search ----------------------------------------------------
+
+    def search_courses(self, query: str) -> list[dict[str, Any]]:
+        """Search the OBS public course catalog."""
+        html, url = self._get_html(
+            "/public/DersBilgi/Search",
+            params={"searchText": query.strip()},
+        )
+        return extract_course_search_results(html, url)
+
+    # -- prerequisites ----------------------------------------------------
+
+    def get_prerequisites(self, course_id: int | str) -> dict[str, Any]:
+        """Return prerequisites for a course identified by its ``DersBransKoduId``.
+
+        Tries several URL patterns that OBS is known to use.
+        """
+        cid = str(course_id)
+        cache_key = f"prereq:{cid}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        errors: list[str] = []
+        html = url = ""
+
+        # Pattern 1: REST-style GET with id as path segment
+        try:
+            html, url = self._get_html(f"/public/GenelTanimlamalar/DersOnsartList/{cid}")
+        except ObsError as exc:
+            errors.append(f"GET /{cid}: {exc}")
+
+        # Pattern 2: GET with query param
+        if not html or not self._looks_like_prereq_page(html):
+            try:
+                html, url = self._get_html(
+                    "/public/GenelTanimlamalar/DersOnsartDetay",
+                    params={"dersBransKoduId": cid},
+                )
+            except ObsError as exc:
+                errors.append(f"GET DersOnsartDetay: {exc}")
+
+        # Pattern 3: The DersOnsartList page itself with a POST-like approach —
+        # try /DersOnsartListesi
+        if not html or not self._looks_like_prereq_page(html):
+            try:
+                html, url = self._get_html(
+                    "/public/GenelTanimlamalar/DersOnsartListesi",
+                    params={"DersBransKoduId": cid},
+                )
+            except ObsError as exc:
+                errors.append(f"GET DersOnsartListesi: {exc}")
+
+        if not html:
+            result: dict[str, Any] = {
+                "course_id": cid,
+                "available": False,
+                "error": "Tüm önşart URL desenleri başarısız oldu.",
+                "tried_patterns": errors,
+            }
+            self._cache.set(cache_key, result)
+            return result
+
+        parsed = extract_prerequisite_list(html, url, base_url=self.base_url)
+        parsed["course_id"] = cid
+        parsed["available"] = bool(parsed.get("prerequisites") or parsed.get("raw_tables"))
+        if errors:
+            parsed["_fallback_attempts"] = errors
+        self._cache.set(cache_key, parsed)
+        return parsed
+
+    def get_postrequisites(self, course_id: int | str) -> dict[str, Any]:
+        """Find courses that list *this* course as a prerequisite.
+
+        This requires scanning the full catalog, so results are cached
+        aggressively.
+        """
+        cid = str(course_id)
+        cache_key = f"postreq:{cid}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        target_code = self._resolve_brans_id_to_code(course_id)
+        if target_code is None:
+            return {
+                "course_id": cid,
+                "available": False,
+                "error": f"Course id {cid} could not be resolved to a code for reverse lookup.",
+            }
+
+        # Build the full index, then scan for matching prerequisites.
+        index = self._build_course_index()
+        postrequisites: list[dict[str, Any]] = []
+        scanned = 0
+        max_scan = 200  # safety cap
+
+        for _, other_id in index.items():
+            if scanned >= max_scan:
+                break
+            if str(other_id) == cid:
+                continue
+            try:
+                prereq_data = self.get_prerequisites(other_id)
+            except ObsError:
+                continue
+            scanned += 1
+
+            prereqs = prereq_data.get("prerequisites") or []
+            for prereq in prereqs:
+                prereq_code = prereq.get("code") or ""
+                if normalize_lookup_text(prereq_code) == normalize_lookup_text(target_code):
+                    postrequisites.append({
+                        "code": prereq_data.get("_resolved_code", str(other_id)),
+                        "course_id": str(other_id),
+                        "prerequisite_type": prereq.get("type"),
+                        "group": prereq.get("group"),
+                    })
+                    break
+
+        result: dict[str, Any] = {
+            "course_id": cid,
+            "course_code": target_code,
+            "available": True,
+            "postrequisites": postrequisites,
+            "scanned_courses": scanned,
+            "note": (
+                "Postrequisite lookup scans the full course index. "
+                f"Only {scanned} courses were checked."
+            ) if scanned >= max_scan else None,
+        }
+        self._cache.set(cache_key, result)
+        return result
+
+    # -- course info (public) ---------------------------------------------
+
+    def get_course_info_public(self, course_code: str) -> dict[str, Any]:
+        """Return public catalog metadata for a course code."""
+        results = self.search_courses(course_code)
+        target = normalize_lookup_text(course_code)
+        best: dict[str, Any] | None = None
+        for item in results:
+            item_code = normalize_lookup_text(item.get("code") or "")
+            if target == item_code:
+                best = item
+                break
+            if target in item_code and best is None:
+                best = item
+        if best is None and results:
+            best = results[0]
+        return {
+            "query": course_code,
+            "found": best is not None,
+            "course": best,
+            "all_results_count": len(results),
+        }
+
+    # -- code resolution ---------------------------------------------------
+
+    def resolve_course_code(self, course_code: str) -> dict[str, Any]:
+        """Resolve a course code like ``"BBF 201E"`` to an OBS bransKoduId.
+
+        Returns ``{"code": str, "brans_kodu_id": int, "name": str, ...}``.
+        Raises ``ObsError`` if no match is found.
+        """
+        raw = course_code.strip()
+        target = normalize_lookup_text(raw)
+
+        # Try the department-level index first (quick).
+        index = self._build_course_index()
+        if target in index:
+            return {
+                "code": raw.upper(),
+                "brans_kodu_id": index[target],
+                "source": "dept_index",
+            }
+
+        # Also try prefix match (e.g. "BBF 201E" → department code "bbf").
+        for key, value in index.items():
+            if len(key) >= 2 and target.startswith(key):
+                return {
+                    "code": raw.upper(),
+                    "brans_kodu_id": value,
+                    "matched_key": key,
+                    "source": "dept_index_prefix",
+                }
+
+        # Fallback: search the catalog.
+        results = self.search_courses(raw)
+        if not results:
+            raise ObsError(
+                f"Course not found in OBS public catalog: {raw}. "
+                "Try a different code format (e.g. 'BBF 201E' vs 'BBF201E')."
+            )
+
+        # Prefer exact code match.
+        for item in results:
+            if normalize_lookup_text(item.get("code") or "") == target:
+                return {
+                    "code": item.get("code") or raw.upper(),
+                    "name": item.get("name"),
+                    "brans_kodu_id": None,
+                    "url": item.get("url"),
+                    "source": "search_exact",
+                }
+
+        best = results[0]
+        return {
+            "code": best.get("code") or raw.upper(),
+            "name": best.get("name"),
+            "brans_kodu_id": None,
+            "url": best.get("url"),
+            "source": "search_fuzzy",
+        }
+
+    # -- internal helpers -------------------------------------------------
+
+    def _resolve_brans_id_to_code(self, course_id: int | str) -> str | None:
+        """Best-effort reverse lookup: bransKoduId → course department code."""
+        cid = str(course_id)
+        index = self._build_course_index()
+        for key, value in index.items():
+            if str(value) == cid:
+                return key
+        return None
+
+    @staticmethod
+    def _looks_like_prereq_page(html: str) -> bool:
+        """Heuristic: does the HTML contain prerequisite-related content?"""
+        if not html or len(html) < 200:
+            return False
+        lower = html[:8000].casefold()
+        return any(
+            token in lower
+            for token in ("onsart", "önşart", "on sart", "ön sart", "dersonsart")
+        )
 
 
 def redact_obs_profile(payload: dict[str, Any]) -> dict[str, Any]:

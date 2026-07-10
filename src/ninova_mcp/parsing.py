@@ -1248,6 +1248,174 @@ def extract_remote_learning(html: str, page_url: str, base_url: str) -> dict[str
     }
 
 
+# ---------------------------------------------------------------------------
+# OBS public page parsers (no auth needed)
+# ---------------------------------------------------------------------------
+
+
+def extract_course_select_options(html: str, page_url: str) -> list[dict[str, Any]]:
+    """Parse the ``<select id="DersBransKoduId">`` dropdown on OBS prerequisite pages.
+
+    Returns a list of ``{"value": "304", "text": "BBF - Bilgisayar Bilimleri ..."}``.
+    """
+    soup = make_soup(html)
+    select = soup.find("select", id="DersBransKoduId")
+    if select is None:
+        return []
+    options: list[dict[str, Any]] = []
+    for option in select.find_all("option"):
+        value = (option.get("value") or "").strip()
+        text = clean_text(option.get_text(" ", strip=True))
+        if value:
+            options.append({"value": value, "text": text})
+    return options
+
+
+def extract_course_search_results(html: str, page_url: str) -> list[dict[str, Any]]:
+    """Parse OBS ``/public/DersBilgi/Search`` results into course dicts.
+
+    Tries table-based extraction first (headers like "Ders Kodu", "Ders Adı"),
+    then falls back to link-list scanning.
+    """
+    soup = make_soup(html)
+    results: list[dict[str, Any]] = []
+
+    # Strategy 1: look for a table with "Ders Kodu" header
+    target_headers = {"ders kodu", "ders adı", "ders adi", "course code", "course name"}
+    for table in soup.find_all("table"):
+        th_texts = {normalize_lookup_text(th.get_text(" ", strip=True)) for th in table.find_all("th")}
+        if not th_texts & target_headers:
+            continue
+        headers = [clean_text(th.get_text(" ", strip=True)) for th in table.find_all("th")]
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            item: dict[str, Any] = {}
+            for idx, cell in enumerate(cells):
+                key = headers[idx] if idx < len(headers) else f"col_{idx}"
+                anchor = cell.find("a", href=True)
+                item[key] = clean_text(cell.get_text(" ", strip=True))
+                if anchor:
+                    item[f"{key}_url"] = urljoin(page_url, anchor["href"])
+            # Normalise common keys
+            code = (
+                item.get("Ders Kodu")
+                or item.get("Ders Kodu_EN")
+                or item.get("Course Code")
+                or ""
+            )
+            name = (
+                item.get("Ders Adı")
+                or item.get("Ders Adi")
+                or item.get("Course Name")
+                or ""
+            )
+            if code or name:
+                item["code"] = code
+                item["name"] = name
+            results.append(item)
+        if results:
+            return results
+
+    # Strategy 2: look for links containing /public/DersBilgi/ or similar patterns
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href", "")
+        if "/DersBilgi/" not in href and "/DersOnsart" not in href:
+            continue
+        text = clean_text(anchor.get_text(" ", strip=True))
+        if not text:
+            continue
+        context = clean_text(anchor.parent.get_text(" ", strip=True)) if anchor.parent else text
+        code_match = COURSE_CODE_RE.search(context)
+        results.append({
+            "code": code_match.group(0) if code_match else None,
+            "name": text if text != (code_match.group(0) if code_match else "") else context,
+            "url": urljoin(page_url, href),
+        })
+
+    return results
+
+
+def extract_prerequisite_list(
+    html: str,
+    page_url: str,
+    base_url: str,
+) -> dict[str, Any]:
+    """Parse the OBS prerequisite detail/chain page.
+
+    Returns structured prerequisite data with a ``raw_tables`` fallback.
+    """
+    soup = make_soup(html)
+    page = parse_html_page(page_url, html, base_url=base_url)
+    tables_data = page.get("tables") or []
+
+    prerequisites: list[dict[str, Any]] = []
+    parse_warnings: list[str] = []
+
+    # Look for a table whose headers suggest prerequisite content.
+    prereq_headers = {"on sart", "onsart", "ders kodu", "ders adi", "grup no", "grup", "tip", "tur"}
+    for table_data in tables_data:
+        headers_lower = {normalize_lookup_text(h) for h in (table_data.get("headers") or [])}
+        if not headers_lower & prereq_headers:
+            continue
+
+        headers = table_data.get("headers") or []
+        rows = table_data.get("rows") or []
+        for row in rows:
+            if isinstance(row, list):
+                # Try to map to headers
+                if len(headers) == len(row) and headers:
+                    entry = dict(zip(headers, row, strict=False))
+                else:
+                    entry = {"_cells": row}
+            elif isinstance(row, dict):
+                entry = dict(row)
+            else:
+                continue
+
+            # Normalise common field names
+            code = (
+                entry.get("Ders Kodu")
+                or entry.get("On Sart Ders Kodu")
+                or entry.get("DersKodu")
+                or ""
+            )
+            name = (
+                entry.get("Ders Adı")
+                or entry.get("Ders Adi")
+                or entry.get("On Sart Ders Adı")
+                or ""
+            )
+            group = entry.get("Grup No") or entry.get("Grup") or None
+            prereq_type = entry.get("Tip") or entry.get("Tür") or entry.get("Tur") or None
+            prerequisites.append({
+                "code": clean_text(code) if code else None,
+                "name": clean_text(name) if name else None,
+                "group": clean_text(group) if group else None,
+                "type": clean_text(prereq_type) if prereq_type else None,
+                "_raw": entry,
+            })
+
+    if not prerequisites:
+        # Check for inline text mentioning prerequisites
+        body_text = page.get("text") or ""
+        if any(token in normalize_lookup_text(body_text) for token in ("on sart", "onsart", "on kosul")):
+            parse_warnings.append(
+                "Sayfada önşart metni bulundu ancak yapılandırılmış tablo çıkarılamadı. "
+                "Ham tablo verisine bakın."
+            )
+
+    return {
+        "url": page["url"],
+        "title": page["title"],
+        "prerequisites": prerequisites,
+        "parse_warnings": parse_warnings or None,
+        "raw_tables": tables_data,
+        "text_excerpt": page.get("text_excerpt", "")[:3000],
+    }
+
+
 def make_snapshot_payload(page_data: dict[str, Any], label: str | None = None) -> dict[str, Any]:
     return {
         "label": label,

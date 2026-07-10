@@ -15,7 +15,7 @@ from .cache import TtlCache, parse_ttl_seconds
 from .client import NinovaAuthError, NinovaClient, NinovaError
 from .compact import maybe_compact
 from .env import load_ninova_env
-from .obs_client import ObsClient, ObsError, redact_obs_profile
+from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
 from .parsing import (
     SnapshotReference,
     compare_snapshot_payloads,
@@ -46,6 +46,7 @@ from .parsing import (
     slugify,
     summarize_dashboard,
 )
+from .attendance_summary import summarize_obs_attendance
 from .text_extract import (
     DEFAULT_MAX_CHARS as TEXT_EXTRACT_DEFAULT_MAX_CHARS,
     extract_text_from_bytes,
@@ -92,6 +93,7 @@ class NinovaMcpApp:
         load_ninova_env()
         self._client: NinovaClient | None = None
         self._obs: ObsClient | None = None
+        self._obs_public: ObsPublicClient | None = None
         state_root = os.getenv("NINOVA_STATE_DIR") or str(Path.home() / ".ninova_state")
         self.state_dir = Path(state_root)
         self.snapshot_dir = self.state_dir / "snapshots"
@@ -116,8 +118,16 @@ class NinovaMcpApp:
             self._obs = ObsClient(ninova_client=self.client)
         return self._obs
 
+    @property
+    def obs_public(self) -> ObsPublicClient:
+        if self._obs_public is None:
+            self._obs_public = ObsPublicClient(session=self.client.session)
+        return self._obs_public
+
     def invalidate_caches(self) -> None:
         self._course_cache.clear()
+        if self._obs_public is not None:
+            self._obs_public._cache.clear()
 
     def _out(self, payload: dict[str, Any], compact: bool = False) -> dict[str, Any]:
         # Per-call compact=True wins; otherwise honor NINOVA_COMPACT_DEFAULT.
@@ -790,6 +800,8 @@ class NinovaMcpApp:
         class_id: int | None = None,
         semester: str | None = None,
         course: str | None = None,
+        include_summary: bool = True,
+        max_absence_ratio: float = 0.30,
     ) -> dict[str, Any]:
         resolved_class = self._resolve_obs_class(
             class_id=class_id,
@@ -802,11 +814,18 @@ class NinovaMcpApp:
         except ObsError as exc:
             attendance = None
             error = str(exc)
-        return {
+        result: dict[str, Any] = {
             "class": resolved_class,
             "attendance": attendance,
             "error": error,
         }
+        if include_summary:
+            result["summary"] = summarize_obs_attendance(
+                attendance,
+                max_absence_ratio=max_absence_ratio,
+                course=resolved_class,
+            )
+        return result
 
     def obs_get_schedule(self, semester: str | None = None) -> dict[str, Any]:
         resolved = self.obs.resolve_semester(semester)
@@ -874,6 +893,170 @@ class NinovaMcpApp:
         chosen = matches[0]
         chosen = {**chosen, "source": "course_lookup", "semester": resolved_semester}
         return chosen
+
+    # ------------------------------------------------------------------
+    # OBS public tools (no auth needed — course catalog + prerequisites)
+    # ------------------------------------------------------------------
+
+    def obs_search_courses(self, query: str, limit: int = 15) -> dict[str, Any]:
+        """Search the OBS public course catalog by code or name fragment."""
+        results = self.obs_public.search_courses(query)
+        results = results[: max(1, min(limit, 50))]
+        return {
+            "query": query,
+            "count": len(results),
+            "courses": results,
+        }
+
+    def obs_get_course_prerequisites(
+        self,
+        course_code: str,
+        direction: str = "prerequisites",
+        max_depth: int = 1,
+    ) -> dict[str, Any]:
+        """Query OBS public prerequisite / postrequisite relationships.
+
+        ``direction``: ``"prerequisites"`` (what must be taken before),
+        ``"postrequisites"`` (what this course unlocks), or ``"both"``.
+        ``max_depth`` > 1 builds a recursive chain (adjacency list).
+        """
+        direction = direction.lower()
+        if direction not in ("prerequisites", "postrequisites", "both"):
+            raise ObsError(
+                "direction must be 'prerequisites', 'postrequisites', or 'both'."
+            )
+        max_depth = max(1, min(max_depth, 10))
+
+        resolved = self.obs_public.resolve_course_code(course_code)
+
+        result: dict[str, Any] = {
+            "course": resolved,
+            "direction": direction,
+            "max_depth": max_depth,
+        }
+
+        if direction in ("prerequisites", "both"):
+            raw = self.obs_public.get_prerequisites(
+                resolved.get("brans_kodu_id") or course_code
+            )
+            result["prerequisites"] = raw.get("prerequisites") or []
+            if raw.get("parse_warnings"):
+                result["prereq_parse_warnings"] = raw["parse_warnings"]
+            if raw.get("raw_tables") and not raw.get("prerequisites"):
+                result["prereq_raw_tables"] = raw["raw_tables"]
+            if max_depth > 1 and raw.get("prerequisites"):
+                result["prerequisite_chain"] = self._build_prereq_chain(
+                    resolved, max_depth
+                )
+
+        if direction in ("postrequisites", "both"):
+            post = self.obs_public.get_postrequisites(
+                resolved.get("brans_kodu_id") or course_code
+            )
+            result["postrequisites"] = post.get("postrequisites") or []
+            if post.get("note"):
+                result["postreq_note"] = post["note"]
+            if max_depth > 1 and post.get("postrequisites"):
+                result["postrequisite_chain"] = self._build_postreq_chain(
+                    resolved, post.get("postrequisites") or [], max_depth
+                )
+
+        return result
+
+    def _build_prereq_chain(
+        self,
+        start_course: dict[str, Any],
+        max_depth: int,
+    ) -> dict[str, Any]:
+        """Recursively build a prerequisite adjacency list."""
+        nodes: set[str] = set()
+        edges: list[dict[str, str]] = []
+        visited: set[str] = set()
+
+        start_code = start_course.get("code") or "?"
+        queue: list[tuple[str, int]] = [(start_code, 0)]
+        nodes.add(start_code)
+
+        while queue:
+            current_code, depth = queue.pop(0)
+            if depth >= max_depth or current_code in visited:
+                continue
+            visited.add(current_code)
+
+            try:
+                resolved = self.obs_public.resolve_course_code(current_code)
+                prereq_data = self.obs_public.get_prerequisites(
+                    resolved.get("brans_kodu_id") or current_code
+                )
+            except ObsError:
+                continue
+
+            for prereq in prereq_data.get("prerequisites") or []:
+                prereq_code = prereq.get("code")
+                if not prereq_code:
+                    continue
+                nodes.add(prereq_code)
+                edges.append({
+                    "from": prereq_code,
+                    "to": current_code,
+                    "type": prereq.get("type") or "prerequisite",
+                })
+                if prereq_code not in visited:
+                    queue.append((prereq_code, depth + 1))
+
+        return {
+            "nodes": sorted(nodes),
+            "edges": edges,
+            "source": "prerequisite_chain",
+        }
+
+    def _build_postreq_chain(
+        self,
+        start_course: dict[str, Any],
+        direct_postreqs: list[dict[str, Any]],
+        max_depth: int,
+    ) -> dict[str, Any]:
+        """Recursively build a postrequisite adjacency list."""
+        nodes: set[str] = set()
+        edges: list[dict[str, str]] = []
+        visited: set[str] = set()
+
+        start_code = start_course.get("code") or "?"
+        queue: list[tuple[str, int]] = [(start_code, 0)]
+        nodes.add(start_code)
+
+        while queue:
+            current_code, depth = queue.pop(0)
+            if depth >= max_depth or current_code in visited:
+                continue
+            visited.add(current_code)
+
+            try:
+                resolved = self.obs_public.resolve_course_code(current_code)
+                post_data = self.obs_public.get_postrequisites(
+                    resolved.get("brans_kodu_id") or current_code
+                )
+            except ObsError:
+                continue
+
+            for postreq in post_data.get("postrequisites") or []:
+                postreq_code = postreq.get("code")
+                if not postreq_code:
+                    continue
+                nodes.add(postreq_code)
+                edges.append({
+                    "from": current_code,
+                    "to": postreq_code,
+                    "type": postreq.get("prerequisite_type") or "postrequisite",
+                })
+                if postreq_code not in visited:
+                    queue.append((postreq_code, depth + 1))
+
+        return {
+            "nodes": sorted(nodes),
+            "edges": edges,
+            "source": "postrequisite_chain",
+        }
 
     def download_resource(
         self,
@@ -2490,13 +2673,34 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_attendance",
         "title": "OBS Attendance",
-        "description": "Read attendance for an OBS class.",
+        "description": "Read attendance for an OBS class. Includes computed absence-risk summary by default.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "class_id": {"type": "integer"},
-                "semester": {"type": "string"},
-                "course": {"type": "string"},
+                "class_id": {
+                    "type": "integer",
+                    "description": "OBS sinifId.",
+                },
+                "semester": {
+                    "type": "string",
+                    "description": "Semester when resolving by course name/code.",
+                },
+                "course": {
+                    "type": "string",
+                    "description": "Course code/title/CRN to resolve (e.g. 'EHB 222E').",
+                },
+                "include_summary": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include computed absence-risk summary alongside raw attendance data.",
+                },
+                "max_absence_ratio": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 0.30,
+                    "description": "Assumed maximum allowed absence ratio for risk calculation (default 0.30 = 30%).",
+                },
             },
             "additionalProperties": False,
         },
@@ -2538,6 +2742,65 @@ TOOLS: list[dict[str, Any]] = [
                 "english": {"type": "boolean", "default": False},
                 "output_dir": {"type": "string"},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "obs_search_courses",
+        "title": "OBS Search Courses",
+        "description": "Search the public OBS course catalog by code or name (no auth required).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Course code or name fragment (e.g. 'BBF 201E' or 'veri yapilari').",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 15,
+                    "description": "Maximum number of results to return.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "obs_get_course_prerequisites",
+        "title": "OBS Course Prerequisites",
+        "description": (
+            "Query prerequisite and postrequisite relationships for a course "
+            "from the OBS public catalog. Supports chain queries up to 10 levels deep."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "course_code": {
+                    "type": "string",
+                    "description": "Course code (e.g. 'BBF 201E', 'MAT 261E').",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["prerequisites", "postrequisites", "both"],
+                    "default": "prerequisites",
+                    "description": (
+                        "'prerequisites' = what you must take before; "
+                        "'postrequisites' = what this course unlocks; "
+                        "'both' = both directions."
+                    ),
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": 1,
+                    "description": "Chain depth. 1 = direct only; higher = recursive.",
+                },
+            },
+            "required": ["course_code"],
             "additionalProperties": False,
         },
     },
