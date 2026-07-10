@@ -830,6 +830,25 @@ class ObsPublicClient:
         )
 
 
+    # -- academic calendar (takvim.sis.itu.edu.tr) -----------------------
+
+    def get_academic_calendar(self) -> dict[str, Any]:
+        """Fetch the İTÜ academic calendar (public, no auth)."""
+        import requests as _requests
+        from .parsing import extract_academic_calendar
+
+        url = "https://www.takvim.sis.itu.edu.tr/AkademikTakvim/EN/academic-calendar/index.php"
+        # Use current year's calendar
+        resp = _requests.get(url, timeout=30, headers={
+            "User-Agent": DEFAULT_HEADERS.get("User-Agent", "itu-mcp"),
+            "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.7",
+        })
+        resp.raise_for_status()
+        if not resp.encoding or resp.encoding.lower() == "iso-8859-1":
+            resp.encoding = resp.apparent_encoding or resp.encoding
+        return extract_academic_calendar(resp.text, resp.url)
+
+
 def redact_obs_profile(payload: dict[str, Any]) -> dict[str, Any]:
     """Remove highly sensitive personal fields from OBS profile payloads."""
     import copy

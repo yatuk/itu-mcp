@@ -1123,12 +1123,37 @@ class NinovaMcpApp:
         result["department_code"] = department_code
         return result
 
+    def get_academic_calendar(self) -> dict[str, Any]:
+        """Read the İTÜ academic calendar (public, no login needed)."""
+        return self.obs_public.get_academic_calendar()
+
     def get_cafeteria_menu(self) -> dict[str, Any]:
         """Read today's cafeteria menu from the İTÜ Portal (requires login)."""
         from .parsing import extract_cafeteria_menu
 
         html, url = self.client.get_portal_html("/apps/default/")
         return extract_cafeteria_menu(html, url)
+
+    def obs_get_notifications(self) -> dict[str, Any]:
+        """Read İTÜ Portal notifications (requires login)."""
+        from .parsing import extract_notifications
+
+        html, url = self.client.get_portal_html("/apps/default/")
+        return extract_notifications(html, url)
+
+    def obs_get_help_tickets(self) -> dict[str, Any]:
+        """Read İTÜ Portal help tickets (requires login)."""
+        from .parsing import extract_help_tickets
+
+        html, url = self.client.get_portal_html("/apps/default/")
+        return extract_help_tickets(html, url)
+
+    def obs_get_cloud_quota(self) -> dict[str, Any]:
+        """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""
+        from .parsing import extract_cloud_quota
+
+        html, url = self.client.get_portal_html("/apps/default/")
+        return extract_cloud_quota(html, url)
 
     def get_public_course_schedule(
         self,
@@ -2974,6 +2999,30 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["crns"],
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "obs_get_notifications",
+        "title": "Portal Notifications",
+        "description": "Read İTÜ Portal notifications (requires login).",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_help_tickets",
+        "title": "Portal Help Tickets",
+        "description": "Read İTÜ Portal help desk tickets (requires login).",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_cloud_quota",
+        "title": "Cloud & Mail Quota",
+        "description": "Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login).",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "get_academic_calendar",
+        "title": "Academic Calendar",
+        "description": "Read the İTÜ academic calendar — semester dates, exams, holidays, registration periods (public, no login).",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "get_cafeteria_menu",

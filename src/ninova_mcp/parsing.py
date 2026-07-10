@@ -1580,6 +1580,96 @@ def extract_course_schedule_table(
     }
 
 
+def extract_academic_calendar(
+    html: str,
+    page_url: str,
+) -> dict[str, Any]:
+    """Parse the İTÜ academic calendar page (takvim.sis.itu.edu.tr).
+
+    Extracts key date events from the calendar grid.
+    """
+    import re as _re
+    soup = make_soup(html)
+
+    events: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # Calendar events are in <td> cells with <b>date : description</b> format
+    for td in soup.find_all("td"):
+        # Look for bold date:description patterns
+        for b_tag in td.find_all("b"):
+            text = clean_text(b_tag.get_text(" ", strip=True))
+            if not text or len(text) < 10:
+                continue
+            # Pattern: "31 July 2026 : End of Summer Term..."
+            m = _re.match(
+                r"(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*:\s*(.+)",
+                text,
+            )
+            if not m:
+                # Pattern: "09 - 14 July 2026 : Description"
+                m = _re.match(
+                    r"(\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*:\s*(.+)",
+                    text,
+                )
+            if m:
+                date_str = m.group(1)
+                desc = m.group(2)
+                dedup = f"{date_str}:{desc[:60]}"
+                if dedup not in seen:
+                    seen.add(dedup)
+                    events.append({"date": date_str, "description": desc})
+
+    # Also extract list-based events from <li> items
+    for li in soup.find_all("li"):
+        text = clean_text(li.get_text(" ", strip=True))
+        if not text or len(text) < 15:
+            continue
+        m = _re.match(
+            r"(\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*(.+)",
+            text,
+        )
+        if not m:
+            m = _re.match(
+                r"(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*(.+)",
+                text,
+            )
+        if m:
+            date_str = m.group(1)
+            desc = m.group(2).strip()
+            dedup = f"{date_str}:{desc[:60]}"
+            if dedup not in seen:
+                seen.add(dedup)
+                events.append({"date": date_str, "description": desc})
+
+    # Extract semester boundaries
+    semesters: list[dict[str, str]] = []
+    current_semester = None
+    for event in events:
+        desc_lower = event["description"].lower()
+        for sem_name, sem_label in [
+            ("fall term", "Fall (Güz)"),
+            ("spring term", "Spring (Bahar)"),
+            ("summer term", "Summer (Yaz)"),
+            ("summer school", "Summer School (Yaz Okulu)"),
+        ]:
+            if sem_name in desc_lower and "beginning of" in desc_lower:
+                current_semester = sem_label
+                semesters.append({"semester": sem_label, "start": event["date"], "type": "start"})
+            elif sem_name in desc_lower and "end of" in desc_lower:
+                semesters.append({"semester": sem_label, "end": event["date"], "type": "end"})
+
+    return {
+        "url": page_url,
+        "event_count": len(events),
+        "events": events[:100],
+        "semesters": semesters,
+        "current_semester": current_semester,
+        "source": "takvim.sis.itu.edu.tr",
+        "note": "Detaylı takvim için https://www.takvim.sis.itu.edu.tr adresini ziyaret edin.",
+    }
+
+
 def extract_campus_card_info(
     html: str,
     page_url: str,
@@ -1636,6 +1726,124 @@ def extract_campus_card_info(
         "balance": balance,
         "transactions": transactions[:20],
         "transaction_count": len(transactions),
+    }
+
+
+def extract_notifications(
+    html: str,
+    page_url: str,
+) -> dict[str, Any]:
+    """Parse the İTÜ Portal notifications widget.
+
+    Selectors (portal ``/apps/default/``):
+    - List: ``ul[data-placement="notification-list"] li.notification__list-item``
+    """
+    soup = make_soup(html)
+    items: list[dict[str, Any]] = []
+
+    container = soup.select_one('ul[data-placement="notification-list"]')
+    if container:
+        for li in container.select("li.notification__list-item"):
+            anchor = li.find("a", href=True)
+            title_span = anchor.find("span", class_="pull-left") if anchor else None
+            time_span = anchor.find("span", class_="pull-right") if anchor else None
+            title = clean_text(title_span.get_text(" ", strip=True)) if title_span else None
+            time_ago = clean_text(time_span.get_text(" ", strip=True)) if time_span else None
+            is_unread = "notification__list-item--unread" in (li.get("class") or [])
+            notif_id = anchor.get("data-notification-id") if anchor else None
+            if title:
+                items.append({
+                    "title": title,
+                    "time_ago": time_ago,
+                    "unread": is_unread,
+                    "notification_id": notif_id,
+                })
+
+    return {
+        "url": page_url,
+        "count": len(items),
+        "notifications": items[:20],
+    }
+
+
+def extract_help_tickets(
+    html: str,
+    page_url: str,
+) -> dict[str, Any]:
+    """Parse the İTÜ Portal help tickets widget.
+
+    Selectors:
+    - List: ``ul[data-placement="yardim-list"] li.help__list-item``
+    """
+    soup = make_soup(html)
+    items: list[dict[str, Any]] = []
+
+    container = soup.select_one('ul[data-placement="yardim-list"]')
+    if container:
+        for li in container.select("li.help__list-item"):
+            anchor = li.find("a", href=True)
+            title_span = anchor.find("span", class_="pull-left") if anchor else None
+            date_span = anchor.find("span", class_="pull-right") if anchor else None
+            title = clean_text(title_span.get_text(" ", strip=True)) if title_span else None
+            date = clean_text(date_span.get_text(" ", strip=True)) if date_span else None
+            url = anchor.get("href") if anchor else None
+            is_archived = bool(title_span and title_span.find("span", class_="panel-red"))
+            if title:
+                items.append({
+                    "title": title,
+                    "date": date,
+                    "archived": is_archived,
+                    "url": url,
+                })
+
+    return {
+        "url": page_url,
+        "count": len(items),
+        "tickets": items[:20],
+    }
+
+
+def extract_cloud_quota(
+    html: str,
+    page_url: str,
+) -> dict[str, Any]:
+    """Parse the İTÜ Portal cloud/mail quota widget.
+
+    Selectors:
+    - Mail: ``p[data-placement="quota"]``
+    - Bulut: ``p[data-placement="quotaEski"]``
+    """
+    soup = make_soup(html)
+
+    mail_pct = None
+    mail_desc = None
+    cloud_pct = None
+    cloud_desc = None
+
+    # Mail quota: scoped under [data-panel="quota"]
+    mail_panel = soup.select_one('div[data-panel="quota"]')
+    if mail_panel:
+        quota_el = mail_panel.select_one('p[data-placement="quota"]')
+        if quota_el:
+            mail_pct = clean_text(quota_el.get_text(" ", strip=True))
+        desc_el = mail_panel.select_one('p[data-placement="description"]')
+        if desc_el:
+            mail_desc = clean_text(desc_el.get_text(" ", strip=True))
+
+    # Cloud quota: scoped under [data-panel="quotaEski"]
+    cloud_panel = soup.select_one('div[data-panel="quotaEski"]')
+    if cloud_panel:
+        cloud_el = cloud_panel.select_one('p[data-placement="quotaEski"]')
+        if cloud_el:
+            cloud_pct = clean_text(cloud_el.get_text(" ", strip=True))
+        desc_el = cloud_panel.select_one('p[data-placement="descriptionEski"]')
+        if desc_el:
+            cloud_desc = clean_text(desc_el.get_text(" ", strip=True))
+
+    return {
+        "url": page_url,
+        "mail": {"usage_percent": mail_pct, "details": mail_desc},
+        "cloud": {"usage_percent": cloud_pct, "details": cloud_desc},
     }
 
 

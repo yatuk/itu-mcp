@@ -440,7 +440,29 @@ class ObsPublicScheduleTests(unittest.TestCase):
         self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_prerequisites"))
 
 
-SAMPLE_PORTAL_HTML = """<html><body><div id="kartBakiyeBilgisi">
+SAMPLE_PORTAL_HTML = """<html><body>
+<div id="bildirimBilgisi">
+<div class="panel" data-panel="notification">
+  <ul data-placement="notification-list">
+    <li class="notification__list-item notification__list-item--unread"><a href="javascript:void(0);" data-notification-id="91871033"><span class="pull-left">Ağ Altyapı Çalışması</span><span class="pull-right">2 s </span></a></li>
+    <li class="notification__list-item"><a href="javascript:void(0);" data-notification-id="91728156"><span class="pull-left">Yardım Biletiniz Cevaplandı</span><span class="pull-right">4 g </span></a></li>
+  </ul>
+</div>
+</div>
+<div id="yardimBilgisi">
+<div class="panel" data-panel="yardim">
+  <ul data-placement="yardim-list">
+    <li class="help__list-item"><a href="http://yardim.itu.edu.tr/itubilet.aspx?id=1005121" target="_blank"><span class="pull-left">Fizik II Eşdeğerlik Onayı Talebi<span class="panel-red">Arşiv</span></span><span class="pull-right">4 g </span></a></li>
+  </ul>
+</div>
+</div>
+<div id="cloudBilgisi">
+<div class="panel" data-panel="quota1">
+  <div data-panel="quota"><p data-placement="quota">%1.1</p><p data-placement="description">Kota Kullanımınız<br>0,17/16</p></div>
+  <div data-panel="quotaEski"><p data-placement="quotaEski">%0.2</p><p data-placement="descriptionEski">Kota Kullanımınız<br>12 MB/8 GB</p></div>
+</div>
+</div>
+<div id="kartBakiyeBilgisi">
 <div class="panel" data-panel="card-balance">
   <div class="panel-heading">Kart Bakiyeniz</div>
   <div class="panel-body">
@@ -508,6 +530,33 @@ class PortalParsingTests(unittest.TestCase):
         bulgur = next((i for i in result["items"] if i["name"] == "Bulgur Pilavı"), None)
         self.assertIsNotNone(bulgur)
         self.assertFalse(bulgur["has_allergen_info"])
+
+
+class PortalWidgetTests(unittest.TestCase):
+    def test_extract_notifications(self) -> None:
+        from ninova_mcp.parsing import extract_notifications
+
+        result = extract_notifications(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
+        self.assertGreaterEqual(result["count"], 1)
+        notif = result["notifications"][0]
+        self.assertIn("title", notif)
+        self.assertIn("unread", notif)
+
+    def test_extract_help_tickets(self) -> None:
+        from ninova_mcp.parsing import extract_help_tickets
+
+        result = extract_help_tickets(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
+        self.assertGreaterEqual(result["count"], 1)
+        ticket = result["tickets"][0]
+        self.assertIn("title", ticket)
+        self.assertIn("url", ticket)
+
+    def test_extract_cloud_quota(self) -> None:
+        from ninova_mcp.parsing import extract_cloud_quota
+
+        result = extract_cloud_quota(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
+        self.assertIsNotNone(result["mail"]["usage_percent"])
+        self.assertIsNotNone(result["cloud"]["usage_percent"])
 
 
 if __name__ == "__main__":
