@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "itu": {
+      "command": "itu-mcp",
+      "env": {
+        "NINOVA_USERNAME": "your.name@itu.edu.tr",
+        "NINOVA_PASSWORD": "your_itu_password"
+      }
+    }
+  }
+}

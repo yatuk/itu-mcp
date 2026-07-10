@@ -1,0 +1,173 @@
+{
+  "manifest_version": "0.3",
+  "name": "itu-mcp",
+  "display_name": "ITU MCP",
+  "version": "0.2.0",
+  "description": "ITU Ninova + OBS for Claude: LMS courses/homework/grades and OBS registration/transcript/advisor/internships.",
+  "long_description": "ITU MCP connects your ITU Ninova (LMS) and OBS (student portal) accounts using your own username and password. Credentials stay on your device and are only sent to ITU systems.",
+  "author": {
+    "name": "yatuk",
+    "url": "https://github.com/yatuk"
+  },
+  "homepage": "https://github.com/yatuk/itu-mcp",
+  "documentation": "https://github.com/yatuk/itu-mcp#readme",
+  "support": "https://github.com/yatuk/itu-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "ninova",
+    "itu",
+    "education",
+    "university",
+    "claude",
+    "mcp",
+    "obs"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "${__dirname}/server/runtime/bin/python3",
+      "args": [
+        "${__dirname}/server/main.py"
+      ],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server/lib",
+        "NINOVA_USERNAME": "${user_config.ninova_username}",
+        "NINOVA_PASSWORD": "${user_config.ninova_password}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/runtime/python.exe"
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "auth_status",
+      "description": "Check whether Ninova credentials are configured and whether a fresh session can be created."
+    },
+    {
+      "name": "refresh_session",
+      "description": "Force a new login with NINOVA_USERNAME and NINOVA_PASSWORD."
+    },
+    {
+      "name": "get_dashboard",
+      "description": "Read the Ninova dashboard and summarize courses, recent announcements, assignments, and messages."
+    },
+    {
+      "name": "list_courses",
+      "description": "List all discovered Ninova courses from the dashboard."
+    },
+    {
+      "name": "get_courses",
+      "description": "Return all courses visible in the Ninova dashboard."
+    },
+    {
+      "name": "get_course_announcements",
+      "description": "Return announcements for a specific Ninova course."
+    },
+    {
+      "name": "get_course_class_files",
+      "description": "List files and folders under the Ninova 'Sınıf Dosyaları' section for a course."
+    },
+    {
+      "name": "get_course_lesson_files",
+      "description": "List files and folders under the Ninova 'Ders Dosyaları' section for a course."
+    },
+    {
+      "name": "get_course_assignments",
+      "description": "Return a course's assignment list together with each assignment's full detail page."
+    },
+    {
+      "name": "get_course_info",
+      "description": "Return structured information from a course's 'Sınıf Bilgileri' page."
+    },
+    {
+      "name": "get_course_sections",
+      "description": "List the direct course routes exposed on the Ninova course home page."
+    },
+    {
+      "name": "get_course_grades",
+      "description": "Read the Ninova 'Notlar' page for a course."
+    },
+    {
+      "name": "get_course_message_board",
+      "description": "Read the Ninova 'Mesaj Panosu' page for a course."
+    },
+    {
+      "name": "get_course_attendance",
+      "description": "Read the Ninova 'Yoklama' page for a course."
+    },
+    {
+      "name": "get_course_remote_learning",
+      "description": "Read the Ninova 'Uzaktan Eğitim' page for a course."
+    },
+    {
+      "name": "get_course_overview",
+      "description": "Return a combined view of a course's sections, announcements, assignments, files, grades, message board, attendance, and remote learning routes."
+    },
+    {
+      "name": "get_dashboard_announcements",
+      "description": "Return the announcements listed under the Ninova dashboard's aggregated announcements page."
+    },
+    {
+      "name": "get_dashboard_assignments",
+      "description": "Return the assignments listed under the Ninova dashboard's aggregated assignments page, including full details."
+    },
+    {
+      "name": "sync_all_courses",
+      "description": "Fetch all visible courses, store a tracking snapshot, and return newly detected changes since the previous sync."
+    },
+    {
+      "name": "get_updates",
+      "description": "Read the stored Ninova tracking history and return recent detected changes."
+    },
+    {
+      "name": "get_upcoming_deadlines",
+      "description": "Return assignments whose submission deadline is approaching based on the stored tracking snapshot."
+    },
+    {
+      "name": "read_page",
+      "description": "Fetch any Ninova page and return a structured summary of text, headings, links, tables, and attachments."
+    },
+    {
+      "name": "crawl_course",
+      "description": "Inventory pages and downloadable resources inside a Ninova course tree."
+    },
+    {
+      "name": "download_resource",
+      "description": "Download a Ninova file or other authenticated resource to disk."
+    },
+    {
+      "name": "snapshot_page",
+      "description": "Save a structured snapshot of a Ninova page for later comparison."
+    },
+    {
+      "name": "diff_snapshot",
+      "description": "Compare the current state of a Ninova page against a previously stored snapshot."
+    }
+  ],
+  "user_config": {
+    "ninova_username": {
+      "type": "string",
+      "title": "İTÜ Kullanıcı Adı",
+      "description": "Ninova / İTÜ giriş kullanıcı adın (örn. gultekinh22).",
+      "required": true
+    },
+    "ninova_password": {
+      "type": "string",
+      "title": "İTÜ Şifresi",
+      "description": "İTÜ şifren. Cihazının güvenli anahtarlığında saklanır ve yalnızca ninova.itu.edu.tr'ye gönderilir.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

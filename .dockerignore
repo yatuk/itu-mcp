@@ -1,0 +1,10 @@
+.git
+.gitignore
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+.ninova_state
+downloads
+downloads-live-check
+tests

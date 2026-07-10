@@ -1,0 +1,13 @@
+{
+  mcp: {
+    servers: {
+      ninova: {
+        command: "ninova-mcp",
+        env: {
+          NINOVA_USERNAME: "your_itu_username",
+          NINOVA_PASSWORD: "your_itu_password",
+        },
+      },
+    },
+  },
+}

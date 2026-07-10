@@ -1,0 +1,70 @@
+name: Build .mcpb bundles
+
+# Builds the one-click Claude Desktop extension (.mcpb) for every platform.
+# Compiled dependencies (lxml, pydantic-core) are platform-specific, so we
+# build one bundle per OS/arch. Triggers on a version tag (v*) and attaches
+# the bundles to the matching GitHub Release; also runnable on demand.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS Apple Silicon
+          - os: windows-latest
+            label: Windows x64
+          - os: ubuntu-latest
+            label: Linux x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node (for the mcpb packer)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build .mcpb
+        run: python scripts/build_mcpb.py
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-${{ matrix.os }}
+          path: dist/*.mcpb
+          if-no-files-found: error
+
+  release:
+    name: Attach bundles to release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bundles/*.mcpb
+          fail_on_unmatched_files: true
