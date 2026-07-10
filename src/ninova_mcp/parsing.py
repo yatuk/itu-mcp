@@ -1416,6 +1416,170 @@ def extract_prerequisite_list(
     }
 
 
+def extract_course_schedule_table(
+    html: str,
+    page_url: str,
+    base_url: str,
+) -> dict[str, Any]:
+    """Parse the OBS ``DersProgramSearch`` result HTML table.
+
+    Returns a dict with ``courses`` list, where each course has structured
+    ``sessions`` (split on ``<br/>`` separators).
+    """
+    soup = make_soup(html)
+    table = soup.find("table", id="dersProgramContainer")
+    if table is None:
+        # Fallback: look for any table with CRN header
+        for t in soup.find_all("table"):
+            headers = [clean_text(td.get_text(" ", strip=True)) for td in (t.find("thead") or t).find_all("td")]
+            if headers and normalize_lookup_text(headers[0]) == "crn":
+                table = t
+                break
+    if table is None:
+        # Check for empty result: the page injected a "no data" message
+        body_text = clean_text(soup.get_text(" ", strip=True))
+        if "bulunamad" in body_text or "kayit" in body_text:
+            return {
+                "url": page_url,
+                "count": 0,
+                "courses": [],
+                "message": "Bu dönem için henüz program açıklanmamış veya bölüm kodu geçersiz.",
+            }
+        return {
+            "url": page_url,
+            "count": 0,
+            "courses": [],
+            "parse_warning": "Ders programı tablosu bulunamadı; OBS sayfa yapısı değişmiş olabilir.",
+        }
+
+    # Headers are in <td> inside <thead>, not <th> (unusual)
+    thead = table.find("thead")
+    header_cells = thead.find_all("td") if thead else []
+    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in header_cells]
+
+    tbody = table.find("tbody")
+    if tbody is None:
+        return {"url": page_url, "count": 0, "courses": [], "headers": headers}
+
+    courses: list[dict[str, Any]] = []
+    for row in tbody.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 10:
+            continue
+
+        cell_texts = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+
+        crn = cell_texts[0] if len(cell_texts) > 0 else None
+
+        # Ders Kodu: extract from link
+        code_anchor = cells[1].find("a", href=True) if len(cells) > 1 else None
+        code_text = clean_text(code_anchor.get_text(" ", strip=True)) if code_anchor else (cell_texts[1] if len(cell_texts) > 1 else None)
+        code_href = code_anchor["href"] if code_anchor else None
+
+        # Parse bransKodu and dersNo from href
+        brans_kodu = None
+        ders_no = None
+        if code_href:
+            from urllib.parse import parse_qs, urlparse as _urlparse
+            qs = parse_qs(_urlparse(code_href).query)
+            brans_kodu = (qs.get("bransKodu") or [None])[0]
+            ders_no = (qs.get("dersNo") or [None])[0]
+
+        name = cell_texts[2] if len(cell_texts) > 2 else None
+        method = cell_texts[3] if len(cell_texts) > 3 else None
+        instructor = cell_texts[4] if len(cell_texts) > 4 else None
+
+        # Bina / Gün / Saat / Derslik: split on <br/>
+        def _split_br(cell_idx: int) -> list[str]:
+            if len(cells) <= cell_idx:
+                return []
+            # Get inner HTML content split by <br/> or <br>
+            inner = cells[cell_idx].decode_contents() if hasattr(cells[cell_idx], "decode_contents") else str(cells[cell_idx])
+            parts = [clean_text(p) for p in re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)]
+            return [p for p in parts if p]
+
+        bldgs = _split_br(5)  # Bina: may contain <a> links
+        days = _split_br(6)   # Gün
+        times = _split_br(7)  # Saat
+        rooms = _split_br(8)  # Derslik
+
+        # Build sessions list
+        max_sessions = max(len(bldgs), len(days), len(times), len(rooms))
+        sessions: list[dict[str, str | None]] = []
+        for i in range(max_sessions):
+            sessions.append({
+                "building": bldgs[i] if i < len(bldgs) else None,
+                "day": days[i] if i < len(days) else None,
+                "time": times[i] if i < len(times) else None,
+                "room": rooms[i] if i < len(rooms) else None,
+            })
+
+        capacity = None
+        enrolled = None
+        try:
+            capacity = int(cell_texts[9]) if len(cell_texts) > 9 and cell_texts[9].lstrip("-").isdigit() else None
+        except ValueError:
+            pass
+        try:
+            enrolled = int(cell_texts[10]) if len(cell_texts) > 10 and cell_texts[10].lstrip("-").isdigit() else None
+        except ValueError:
+            pass
+
+        reservation = cell_texts[11] if len(cell_texts) > 11 else None
+
+        # Dersi Alabilen Programlar
+        eligible_programs: list[str] = []
+        eligible_text = cell_texts[12] if len(cell_texts) > 12 else None
+        if len(cells) > 12:
+            eligible_anchor = cells[12].find("a", href=True)
+            if eligible_anchor:
+                eligible_programs = [
+                    p.strip() for p in clean_text(eligible_anchor.get_text(" ", strip=True)).split(",") if p.strip()
+                ]
+            elif eligible_text and eligible_text != "-":
+                eligible_programs = [p.strip() for p in eligible_text.split(",") if p.strip()]
+
+        # Ders Önşartları: "Detay" link or "-"
+        detay_url = None
+        has_prerequisites = False
+        if len(cells) > 13:
+            detay_anchor = cells[13].find("a", href=True)
+            if detay_anchor:
+                detay_url = detay_anchor["href"]
+                has_prerequisites = True
+            else:
+                prereq_text = cell_texts[13] if len(cell_texts) > 13 else None
+                has_prerequisites = bool(prereq_text and prereq_text not in ("-", ""))
+
+        # Başarılan Kredi/Sınıf Önşartı
+        credit_prereq = cell_texts[14] if len(cell_texts) > 14 else None
+
+        courses.append({
+            "crn": crn,
+            "code": code_text,
+            "brans_kodu": brans_kodu,
+            "ders_no": ders_no,
+            "name": name,
+            "method": method,
+            "instructor": instructor,
+            "sessions": sessions,
+            "capacity": capacity,
+            "enrolled": enrolled,
+            "reservation": reservation,
+            "eligible_programs": eligible_programs,
+            "has_prerequisites": has_prerequisites,
+            "prerequisite_detail_url": detay_url,
+            "credit_prerequisite": credit_prereq if credit_prereq and credit_prereq != "-" else None,
+        })
+
+    return {
+        "url": page_url,
+        "headers": headers,
+        "count": len(courses),
+        "courses": courses,
+    }
+
+
 def make_snapshot_payload(page_data: dict[str, Any], label: str | None = None) -> dict[str, Any]:
     return {
         "label": label,

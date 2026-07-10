@@ -1058,6 +1058,43 @@ class NinovaMcpApp:
             "source": "postrequisite_chain",
         }
 
+    # ------------------------------------------------------------------
+    # OBS public schedule tools (no auth)
+    # ------------------------------------------------------------------
+
+    def get_public_course_schedule(
+        self,
+        program_type: str,
+        department_code: str,
+        crn: str | None = None,
+    ) -> dict[str, Any]:
+        """Read the public OBS course schedule for a department (no login needed).
+
+        ``program_type``: ``"LS"`` / ``"Lisans"``, ``"LU"`` / ``"Lisansüstü"``,
+        ``"ÖL"`` / ``"Önlisans"``, ``"LUİ"``.
+        ``department_code``: e.g. ``"BLG"``, ``"BBF"``, ``"EHB"``.
+        ``crn``: optional CRN to filter a single course.
+        """
+        if crn:
+            return self.obs_public.get_course_schedule_by_crn(
+                program_type, department_code, crn
+            )
+        return self.obs_public.get_course_schedule(program_type, department_code)
+
+    def get_public_course_prerequisites(
+        self,
+        brans_kodu: str,
+        ders_no: str,
+    ) -> dict[str, Any]:
+        """Read prerequisite details from a course's public OBS info page.
+
+        ``brans_kodu``: department code, e.g. ``"BLG"``.
+        ``ders_no``: course number, e.g. ``"223E"``.
+
+        No login required — reads the public ``/public/DersBilgi`` page.
+        """
+        return self.obs_public.get_prerequisite_detail(brans_kodu, ders_no)
+
     def download_resource(
         self,
         url: str,
@@ -2801,6 +2838,62 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["course_code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_public_course_schedule",
+        "title": "Public Course Schedule",
+        "description": (
+            "Read the public OBS course schedule for a department. "
+            "No login required — reads the open DersProgram page. "
+            "Returns structured course list with CRN, instructor, sessions "
+            "(day/time/room), capacity, enrolled count, and prerequisite links."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "program_type": {
+                    "type": "string",
+                    "description": (
+                        "Program level: 'LS'/'Lisans', 'LU'/'Lisansüstü', "
+                        "'ÖL'/'Önlisans', or 'LUİ'."
+                    ),
+                },
+                "department_code": {
+                    "type": "string",
+                    "description": "Department code, e.g. 'BLG', 'BBF', 'EHB'.",
+                },
+                "crn": {
+                    "type": "string",
+                    "description": "Optional CRN to filter a single course.",
+                },
+            },
+            "required": ["program_type", "department_code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_public_course_prerequisites",
+        "title": "Public Course Prerequisites",
+        "description": (
+            "Read prerequisite details from a course's public OBS DersBilgi page. "
+            "No login required. Returns structured prerequisite list with codes, "
+            "names, groups, and types."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brans_kodu": {
+                    "type": "string",
+                    "description": "Department code, e.g. 'BLG'.",
+                },
+                "ders_no": {
+                    "type": "string",
+                    "description": "Course number, e.g. '223E'.",
+                },
+            },
+            "required": ["brans_kodu", "ders_no"],
             "additionalProperties": False,
         },
     },

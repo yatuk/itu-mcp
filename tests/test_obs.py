@@ -293,5 +293,152 @@ class ObsPublicToolsTests(unittest.TestCase):
             self.app.obs_get_course_prerequisites("BBF 201E", direction="invalid")
 
 
+SAMPLE_SCHEDULE_DEPT_JSON = (
+    '[{"bransKoduId": 3, "dersBransKodu": "BLG"},'
+    '{"bransKoduId": 310, "dersBransKodu": "BBF"}]'
+)
+
+
+class ObsPublicScheduleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.app = NinovaMcpApp()
+
+    def _load_fixture(self, name: str) -> str:
+        from pathlib import Path
+
+        fixture_path = Path(__file__).parent / "fixtures" / name
+        return fixture_path.read_text(encoding="utf-8")
+
+    def test_extract_schedule_table_from_fixture(self) -> None:
+        from ninova_mcp.parsing import extract_course_schedule_table
+
+        html = self._load_fixture("ders_program_result.html")
+        result = extract_course_schedule_table(html, "https://obs.itu.edu.tr/test", "https://obs.itu.edu.tr")
+        self.assertGreaterEqual(result["count"], 1)
+        self.assertIn("courses", result)
+        course = result["courses"][0]
+        self.assertIn("crn", course)
+        self.assertIn("code", course)
+        self.assertIn("sessions", course)
+        self.assertIsInstance(course["sessions"], list)
+        self.assertIn("capacity", course)
+        self.assertIn("enrolled", course)
+
+    def test_extract_schedule_parses_multi_session(self) -> None:
+        from ninova_mcp.parsing import extract_course_schedule_table
+
+        html = self._load_fixture("ders_program_result.html")
+        result = extract_course_schedule_table(html, "https://obs.itu.edu.tr/test", "https://obs.itu.edu.tr")
+        blg223 = next((c for c in result["courses"] if c.get("code") == "BLG 223E"), None)
+        self.assertIsNotNone(blg223)
+        # BLG 223E has 4 sessions (4x <br> in each of Bina/Gün/Saat/Derslik)
+        self.assertEqual(len(blg223["sessions"]), 4)
+        self.assertEqual(blg223["sessions"][0]["day"], "Çarşamba")
+        self.assertEqual(blg223["sessions"][0]["time"], "09:30/12:29")
+        self.assertEqual(blg223["capacity"], 60)
+        self.assertEqual(blg223["enrolled"], 60)
+
+    def test_extract_schedule_detects_prerequisites(self) -> None:
+        from ninova_mcp.parsing import extract_course_schedule_table
+
+        html = self._load_fixture("ders_program_result.html")
+        result = extract_course_schedule_table(html, "https://obs.itu.edu.tr/test", "https://obs.itu.edu.tr")
+        blg223 = next((c for c in result["courses"] if c.get("code") == "BLG 223E"), None)
+        self.assertTrue(blg223["has_prerequisites"])
+        self.assertIsNotNone(blg223["prerequisite_detail_url"])
+
+        blg470 = next((c for c in result["courses"] if c.get("code") == "BLG 470E"), None)
+        self.assertFalse(blg470["has_prerequisites"])
+
+    def test_list_departments(self) -> None:
+        from ninova_mcp.obs_client import ObsPublicClient
+
+        client = ObsPublicClient()
+        with patch.object(client, "_get_html", return_value=(SAMPLE_SCHEDULE_DEPT_JSON, "https://obs.itu.edu.tr/test")):
+            depts = client.list_departments("LS")
+        self.assertEqual(len(depts), 2)
+        self.assertEqual(depts[0]["code"], "BLG")
+        self.assertEqual(depts[1]["code"], "BBF")
+
+    def test_normalize_program_type(self) -> None:
+        from ninova_mcp.obs_client import ObsPublicClient
+
+        self.assertEqual(ObsPublicClient._normalize_program_type("Lisans"), "LS")
+        self.assertEqual(ObsPublicClient._normalize_program_type("LS"), "LS")
+        self.assertEqual(ObsPublicClient._normalize_program_type("lisansüstü"), "LU")
+        self.assertEqual(ObsPublicClient._normalize_program_type("Önlisans"), "ÖL")
+
+        with self.assertRaises(ObsError):
+            ObsPublicClient._normalize_program_type("Doktora")
+
+    def test_get_course_schedule_mocked(self) -> None:
+        from ninova_mcp.obs_client import ObsPublicClient
+
+        client = ObsPublicClient()
+        schedule_html = self._load_fixture("ders_program_result.html")
+
+        def fake_get_html(path, params=None):
+            if "SearchBransKodu" in path:
+                return (SAMPLE_SCHEDULE_DEPT_JSON, "https://obs.itu.edu.tr/test")
+            if "GetAktifDonem" in path:
+                return ('{"aktifDonem": "2025-2026 Yaz"}', "https://obs.itu.edu.tr/test")
+            if "DersProgramSearch" in path:
+                return (schedule_html, "https://obs.itu.edu.tr/test")
+            return ("{}", "https://obs.itu.edu.tr/test")
+
+        with patch.object(client, "_get_html", side_effect=fake_get_html):
+            result = client.get_course_schedule("LS", "BLG")
+        self.assertEqual(result["program_type"], "LS")
+        self.assertEqual(result["department_code"], "BLG")
+        self.assertEqual(result["semester"], "2025-2026 Yaz")
+        self.assertGreaterEqual(result["count"], 1)
+
+    def test_get_schedule_by_crn(self) -> None:
+        from ninova_mcp.obs_client import ObsPublicClient
+
+        client = ObsPublicClient()
+        schedule_html = self._load_fixture("ders_program_result.html")
+
+        def fake_get_html(path, params=None):
+            if "SearchBransKodu" in path:
+                return (SAMPLE_SCHEDULE_DEPT_JSON, "https://obs.itu.edu.tr/test")
+            if "GetAktifDonem" in path:
+                return ('{"aktifDonem": "2025-2026 Yaz"}', "https://obs.itu.edu.tr/test")
+            if "DersProgramSearch" in path:
+                return (schedule_html, "https://obs.itu.edu.tr/test")
+            return ("{}", "https://obs.itu.edu.tr/test")
+
+        with patch.object(client, "_get_html", side_effect=fake_get_html):
+            result = client.get_course_schedule_by_crn("LS", "BLG", "30334")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["courses"][0]["crn"], "30334")
+        self.assertEqual(result["courses"][0]["code"], "BLG 223E")
+
+    def test_schedule_crn_not_found(self) -> None:
+        from ninova_mcp.obs_client import ObsPublicClient
+
+        client = ObsPublicClient()
+        schedule_html = self._load_fixture("ders_program_result.html")
+
+        def fake_get_html(path, params=None):
+            if "SearchBransKodu" in path:
+                return (SAMPLE_SCHEDULE_DEPT_JSON, "https://obs.itu.edu.tr/test")
+            if "GetAktifDonem" in path:
+                return ('{"aktifDonem": "2025-2026 Yaz"}', "https://obs.itu.edu.tr/test")
+            if "DersProgramSearch" in path:
+                return (schedule_html, "https://obs.itu.edu.tr/test")
+            return ("{}", "https://obs.itu.edu.tr/test")
+
+        with patch.object(client, "_get_html", side_effect=fake_get_html):
+            with self.assertRaises(ObsError):
+                client.get_course_schedule_by_crn("LS", "BLG", "99999")
+
+    def test_schedule_tools_registered(self) -> None:
+        self.assertIn("get_public_course_schedule", LOCAL_TOOL_NAMES)
+        self.assertIn("get_public_course_prerequisites", LOCAL_TOOL_NAMES)
+        self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_schedule"))
+        self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_prerequisites"))
+
+
 if __name__ == "__main__":
     unittest.main()
