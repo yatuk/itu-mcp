@@ -385,6 +385,27 @@ class NinovaClient:
         html = self._decode_response(response)
         return html, response
 
+    # -- portal.itu.edu.tr -------------------------------------------------
+
+    PORTAL_BASE_URL = "https://portal.itu.edu.tr"
+
+    def get_portal_html(self, path: str = "/apps/default/") -> tuple[str, str]:
+        """Fetch an İTÜ Portal page (uses the same SSO session as Ninova).
+
+        Returns ``(html, final_url)``.
+        """
+        self.ensure_logged_in()
+        url = f"{self.PORTAL_BASE_URL}{path}" if path.startswith("/") else path
+        self._throttle()
+        response = self.session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        if self._looks_like_login_page(response):
+            self.login(force=True)
+            self._throttle()
+            response = self.session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        response.raise_for_status()
+        html = self._decode_response(response)
+        return html, response.url
+
     def post_multipart(
         self,
         url_or_path: str,

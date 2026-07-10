@@ -440,5 +440,75 @@ class ObsPublicScheduleTests(unittest.TestCase):
         self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_prerequisites"))
 
 
+SAMPLE_PORTAL_HTML = """<html><body><div id="kartBakiyeBilgisi">
+<div class="panel" data-panel="card-balance">
+  <div class="panel-heading">Kart Bakiyeniz</div>
+  <div class="panel-body">
+    <div class="card-deposit__number" data-placement="balance">₺ 42</div>
+    <ul data-placement="transitions">
+      <li class="card-deposit__list-item"><span class="amount pull-right">Bakiye</span><span class="amount pull-right">Tutar</span></li>
+      <li class="card-deposit__list-item"><span class="icon-itu-card-spending text-danger"></span><span>Harcama</span><span class="amount pull-right">₺ 42</span><span class="amount pull-right text-danger"> ₺ -47,5</span></li>
+      <li class="card-deposit__list-item"><span class="icon-itu-card-charge text-success"></span><span>Yükleme</span><span class="amount pull-right">₺ 89,5</span><span class="amount pull-right text-success"> ₺ 50</span></li>
+    </ul>
+  </div>
+</div>
+</div>
+<div id="yemekMenuBilgisi">
+<div class="panel" data-panel="food">
+  <div class="panel-heading"><span data-placement="food-title">Akşam Yemeği Menüsü</span></div>
+  <div class="panel-body">
+    <div data-placement="food-form">
+      <input type="text" id="food-date" value="10.07.2026">
+      <input type="radio" id="radio-ogle" value="itu-ogle-yemegi-genel">
+      <input type="radio" id="radio-aksam" value="itu-aksam-yemegi-genel" checked>
+      <input type="checkbox" id="checkbox-vejeteryan-vegan">
+    </div>
+    <ul data-placement="food-list">
+      <li class="lunch-menu__list-item">Alaca Çorbası&nbsp;<i class="icon-warning" data-food-id="24"></i></li>
+      <li class="lunch-menu__list-item">Etli Türlü&nbsp;<i class="icon-warning" data-food-id="414"></i></li>
+      <li class="lunch-menu__list-item">Bulgur Pilavı</li>
+      <li><b>Seçmeli 4. Çeşit</b><ul class="secmeli-yemek" style="list-style:none"><li class="lunch-menu__list-item">Sütlü İrmik Tatlısı&nbsp;<i class="icon-warning" data-food-id="2304"></i></li><li class="lunch-menu__list-item">Kuru Börülce Salatası</li></ul></li>
+    </ul>
+  </div>
+</div>
+</div></body></html>"""
+
+
+class PortalParsingTests(unittest.TestCase):
+    def test_extract_campus_card_from_portal(self) -> None:
+        from ninova_mcp.parsing import extract_campus_card_info
+
+        result = extract_campus_card_info(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/", "https://portal.itu.edu.tr")
+        self.assertEqual(result["balance"], "₺ 42")
+        self.assertEqual(result["transaction_count"], 2)
+        self.assertEqual(result["transactions"][0]["type"], "Harcama")
+        self.assertEqual(result["transactions"][1]["type"], "Yükleme")
+
+    def test_extract_cafeteria_menu_from_portal(self) -> None:
+        from ninova_mcp.parsing import extract_cafeteria_menu
+
+        result = extract_cafeteria_menu(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
+        self.assertEqual(result["title"], "Akşam Yemeği Menüsü")
+        self.assertGreaterEqual(result["item_count"], 4)
+        self.assertEqual(result["items"][0]["name"], "Alaca Çorbası")
+        self.assertTrue(result["items"][0]["has_allergen_info"])
+        self.assertEqual(result["items"][0]["food_id"], "24")
+        # Check optional 4th dish
+        selectable = [i for i in result["items"] if i.get("is_selectable_group")]
+        self.assertEqual(len(selectable), 1)
+        self.assertEqual(selectable[0]["name"], "Seçmeli 4. Çeşit")
+        self.assertEqual(len(selectable[0]["options"]), 2)
+        # Vegetarian
+        self.assertTrue(result["vegetarian_available"])
+
+    def test_menu_item_without_allergen(self) -> None:
+        from ninova_mcp.parsing import extract_cafeteria_menu
+
+        result = extract_cafeteria_menu(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
+        bulgur = next((i for i in result["items"] if i["name"] == "Bulgur Pilavı"), None)
+        self.assertIsNotNone(bulgur)
+        self.assertFalse(bulgur["has_allergen_info"])
+
+
 if __name__ == "__main__":
     unittest.main()

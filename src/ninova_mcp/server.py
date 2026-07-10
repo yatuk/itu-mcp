@@ -1062,6 +1062,74 @@ class NinovaMcpApp:
     # OBS public schedule tools (no auth)
     # ------------------------------------------------------------------
 
+    def obs_get_campus_card(self) -> dict[str, Any]:
+        """Read campus card balance and recent transactions from OBS."""
+        return self.obs.get_card_info()
+
+    def obs_calculate_gpa(
+        self,
+        semester: str | None = None,
+        projected_grades: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Calculate GPA/GANO from OBS registered courses and grades.
+
+        If ``projected_grades`` is given (e.g. ``{"BLG 223E": "AA", ...}``),
+        those override the actual grade — useful for "what-if" scenarios.
+        """
+        from .gpa import calculate_gpa
+
+        resolved = self.obs.resolve_semester(semester)
+        payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
+        registered = payload.get("kayitSinifResultList") or []
+
+        # Map each registered course to a GPA input dict
+        courses: list[dict[str, Any]] = []
+        for item in registered:
+            code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
+            courses.append({
+                "code": code,
+                "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
+                "credit": item.get("kredi"),
+                "grade": item.get("harfNotu"),
+                "crn": item.get("crn"),
+            })
+        return calculate_gpa(courses, projected_grades=projected_grades)
+
+    def check_course_conflicts(
+        self,
+        crns: list[str],
+        program_type: str = "LS",
+        department_code: str = "BLG",
+    ) -> dict[str, Any]:
+        """Check for time conflicts between courses by their CRNs.
+
+        Uses the public course schedule to look up session times.
+        """
+        from .schedule_utils import check_conflicts
+
+        schedule = self.obs_public.get_course_schedule(program_type, department_code)
+        all_courses = schedule.get("courses") or []
+        target_crns = {str(c).strip() for c in crns}
+        matched = [c for c in all_courses if str(c.get("crn")) in target_crns]
+
+        if not matched:
+            return {
+                "error": f"Hiçbir CRN bulunamadı. Aranan: {crns}. "
+                         f"Mevcut: {', '.join(str(c.get('crn')) for c in all_courses[:20])}"
+            }
+
+        result = check_conflicts(matched)
+        result["program_type"] = program_type
+        result["department_code"] = department_code
+        return result
+
+    def get_cafeteria_menu(self) -> dict[str, Any]:
+        """Read today's cafeteria menu from the İTÜ Portal (requires login)."""
+        from .parsing import extract_cafeteria_menu
+
+        html, url = self.client.get_portal_html("/apps/default/")
+        return extract_cafeteria_menu(html, url)
+
     def get_public_course_schedule(
         self,
         program_type: str,
@@ -2770,6 +2838,16 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "obs_get_campus_card",
+        "title": "OBS Campus Card",
+        "description": "Read campus card balance and recent transactions from OBS (requires login).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "obs_download_transcript",
         "title": "OBS Transcript PDF",
         "description": "Download OBS transcript preview PDF to the local state downloads folder.",
@@ -2838,6 +2916,72 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["course_code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "obs_calculate_gpa",
+        "title": "Calculate GPA",
+        "description": (
+            "Calculate GPA/GANO from OBS registered courses. "
+            "Supports projected grades for what-if scenarios. "
+            "Uses İTÜ 4.00-scale letter grade conversion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "semester": {
+                    "type": "string",
+                    "description": "Semester id, code, or name (default: latest).",
+                },
+                "projected_grades": {
+                    "type": "object",
+                    "description": (
+                        "Optional dict of course code → expected letter grade "
+                        'for what-if scenarios, e.g. {"BLG 223E": "AA"}.'
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "check_course_conflicts",
+        "title": "Check Course Conflicts",
+        "description": (
+            "Check for schedule time conflicts between courses by CRN. "
+            "Uses the public course schedule to look up session day/time/room."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "crns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of CRNs to check (e.g. ['30334', '30473']).",
+                },
+                "program_type": {
+                    "type": "string",
+                    "default": "LS",
+                    "description": "Program type (default: 'LS' / Lisans).",
+                },
+                "department_code": {
+                    "type": "string",
+                    "default": "BLG",
+                    "description": "Department code (default: 'BLG').",
+                },
+            },
+            "required": ["crns"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_cafeteria_menu",
+        "title": "Cafeteria Menu",
+        "description": "Read today's cafeteria menu from the İTÜ Portal (requires login). Shows daily lunch/dinner meals.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },

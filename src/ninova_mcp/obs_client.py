@@ -205,6 +205,15 @@ class ObsClient:
         )
         return self.api_get(path)
 
+    # -- campus card (portal) ---------------------------------------------
+
+    def get_card_info(self) -> dict[str, Any]:
+        """Return structured campus card balance and info from the İTÜ Portal."""
+        html, url = self.ninova.get_portal_html("/apps/default/")
+        from .parsing import extract_campus_card_info
+
+        return extract_campus_card_info(html, url)
+
     def save_transcript_pdf(
         self,
         output_dir: str | Path,

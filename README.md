@@ -1,5 +1,9 @@
 <div align="center">
 
+  <p>
+    <img src="docs/logo.png" alt="İTÜ MCP" width="120" />
+  </p>
+
   <h1>İTÜ MCP</h1>
 
   <p><em>İTÜ Ninova ve OBS hesabını Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
