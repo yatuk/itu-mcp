@@ -69,24 +69,51 @@ Claude Desktop üzerinden doğal dilde soru sorma örnekleri:
 
 ## Mimari
 
+```mermaid
+flowchart LR
+    subgraph istemciler["MCP İstemcileri"]
+        claude["Claude Desktop"]
+        claude_code["Claude Code"]
+        cursor["Cursor"]
+        codex["Codex"]
+    end
+
+    subgraph sunucu["itu-mcp (Python 3.11+)"]
+        mcp["MCP Sunucu<br/>(FastMCP · stdio / HTTP)"]
+        ninova_client["NinovaClient<br/>SSO · HTML parse"]
+        obs_client["ObsClient<br/>JWT · JSON API"]
+        obs_public["ObsPublicClient<br/>kimliksiz · HTML/JSON"]
+        state["Durum<br/>çerez · anlık görüntü · indirme"]
+    end
+
+    subgraph itu["İTÜ Sunucuları"]
+        ninova["ninova.itu.edu.tr<br/>(LMS · HTML)"]
+        giris["girisv3.itu.edu.tr<br/>(İTÜ SSO giriş)"]
+        obs["obs.itu.edu.tr<br/>(öğrenci JSON API)"]
+        obs_pub["obs.itu.edu.tr/public<br/>(açık katalog · program)"]
+    end
+
+    istemciler -->|"MCP araçları"| mcp
+    mcp --> ninova_client
+    mcp --> obs_client
+    mcp --> obs_public
+    ninova_client --> giris
+    ninova_client --> ninova
+    obs_client --> giris
+    obs_client --> obs
+    obs_public --> obs_pub
+    ninova_client --> state
+    obs_client --> state
+    obs_public --> state
 ```
-┌──────────────┐     stdio / HTTP      ┌─────────────────────┐
-│ Claude       │ ◄──────────────────► │  itu-mcp            │
-│ Cursor       │      MCP araçları    │  (Python 3.11+)     │
-│ Codex · …    │                      └──────────┬──────────┘
-└──────────────┘                                 │
-                                                 │ SSO + JWT
-                     ┌───────────────────────────┼───────────────────────────┐
-                     ▼                           ▼                           ▼
-              ninova.itu.edu.tr           girisv3.itu.edu.tr          obs.itu.edu.tr
-                 (LMS HTML)                   (İTÜ giriş)              (JSON API)
-```
+
 
 | Katman | Rol |
 |---|---|
 | **MCP sunucu** | Araç listesi, sade yanıtlar, CLI (`--check-auth`, `--list-tools`) |
 | **Ninova istemcisi** | Oturum + HTML ayrıştırma (duyuru, dosya, ödev, yükleme formu) |
 | **OBS istemcisi** | SSO → `/ogrenci/auth/jwt` → `/api/ogrenci/...` |
+| **OBS public istemcisi** | Kimliksiz → `/public/DersProgram`, `/public/DersBilgi`, `/public/GenelTanimlamalar/...` |
 | **Durum** | İsteğe bağlı çerez önbelleği, izleme anlık görüntüleri, indirmeler (`~/.ninova_state`) |
 
 ---
@@ -154,6 +181,10 @@ codex mcp add itu \
 - *"CEN 354E ara notlarım?"*
 - *"Danışmanım kim? Staj bilgilerimi göster."*
 - *"Transkript PDF indir."*
+- *"BLG bölümünde bu dönem hangi dersler açılmış, kontenjan durumu ne?"*<sup>✨</sup>
+- *"BLG 223E'yi almak için önce hangi dersleri almam lazım?"*<sup>✨</sup>
+
+<sup>✨</sup> <sub>Kimlik gerektirmez — `.env` olmadan da çalışır.</sub>
 
 ---
 
@@ -161,8 +192,9 @@ codex mcp add itu \
 
 <table>
   <tr>
-    <td align="center" width="50%"><strong>Ninova (LMS)</strong></td>
-    <td align="center" width="50%"><strong>OBS (portal)</strong></td>
+    <td align="center" width="33%"><strong>Ninova (LMS)</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="33%"><strong>OBS (portal)</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="33%"><strong>OBS Public</strong><br/><sub>kimlik gerekmez ✨</sub></td>
   </tr>
   <tr>
     <td>
@@ -175,7 +207,14 @@ codex mcp add itu \
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
       <code>obs_list_registered_courses</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
-      <code>obs_get_advisor</code> · <code>obs_download_transcript</code>
+      <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
+      <code>obs_get_schedule</code> · <code>obs_get_internships</code>
+    </td>
+    <td>
+      <code>obs_search_courses</code><br/>
+      <code>obs_get_course_prerequisites</code><br/>
+      <code>get_public_course_schedule</code><br/>
+      <code>get_public_course_prerequisites</code>
     </td>
   </tr>
 </table>
@@ -208,6 +247,8 @@ export NINOVA_SESSION_PERSIST=1
 export NINOVA_COMPACT_DEFAULT=0
 export NINOVA_ALLOW_UPLOADS=1
 export NINOVA_OBS_BASE_URL=https://obs.itu.edu.tr
+export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS=3600
+export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS=60
 ```
 
 `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
