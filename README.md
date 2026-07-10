@@ -49,6 +49,24 @@
 
 ---
 
+## Örnekler
+
+Claude Desktop üzerinden doğal dilde soru sorma örnekleri:
+
+<p align="center">
+  <img src="docs/bu_dönem_hangi_dersler.png" alt="Bu dönem hangi dersleri aldım" width="720" />
+  <br />
+  <em>OBS: dönem kayıtlı dersler ve program</em>
+</p>
+
+<p align="center">
+  <img src="docs/son_duyurular.png" alt="Son duyurular ve mesajlar" width="720" />
+  <br />
+  <em>Ninova: son duyurular ve mesaj panosu özeti</em>
+</p>
+
+---
+
 ## Mimari
 
 ```
