@@ -1,7 +1,9 @@
+<!-- mcp-name: io.github.yatuk/itu-mcp -->
+
 <div align="center">
 
   <p>
-    <img src="docs/logo.png" alt="İTÜ MCP" width="120" />
+    <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/logo.png" alt="İTÜ MCP" width="120" />
   </p>
 
   <h1>İTÜ MCP</h1>
@@ -9,7 +11,7 @@
   <p><em>İTÜ Ninova ve OBS hesabını Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.2.0-blue?style=flat-square" alt="Sürüm: v0.2.0" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.2.3-blue?style=flat-square" alt="Sürüm: v0.2.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
     <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
@@ -58,13 +60,13 @@
 Claude Desktop üzerinden doğal dilde soru sorma örnekleri:
 
 <p align="center">
-  <img src="docs/bu_dönem_hangi_dersler.png" alt="Bu dönem hangi dersleri aldım" width="720" />
+  <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/bu_d%C3%B6nem_hangi_dersler.png" alt="Bu dönem hangi dersleri aldım" width="720" />
   <br />
   <em>OBS: dönem kayıtlı dersler ve program</em>
 </p>
 
 <p align="center">
-  <img src="docs/son_duyurular.png" alt="Son duyurular ve mesajlar" width="720" />
+  <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/son_duyurular.png" alt="Son duyurular ve mesajlar" width="720" />
   <br />
   <em>Ninova: son duyurular ve mesaj panosu özeti</em>
 </p>

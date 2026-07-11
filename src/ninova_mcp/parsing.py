@@ -1493,10 +1493,16 @@ def extract_course_schedule_table(
         def _split_br(cell_idx: int) -> list[str]:
             if len(cells) <= cell_idx:
                 return []
-            # Get inner HTML content split by <br/> or <br>
             inner = cells[cell_idx].decode_contents() if hasattr(cells[cell_idx], "decode_contents") else str(cells[cell_idx])
-            parts = [clean_text(p) for p in re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)]
-            return [p for p in parts if p]
+            parts_html = re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)
+            parts: list[str] = []
+            for p in parts_html:
+                # Strip any HTML tags (e.g. <a href="...">BBB</a> → BBB)
+                text = re.sub(r"<[^>]+>", "", p)
+                text = clean_text(text)
+                if text:
+                    parts.append(text)
+            return parts
 
         bldgs = _split_br(5)  # Bina: may contain <a> links
         days = _split_br(6)   # Gün
@@ -1673,7 +1679,7 @@ def extract_academic_calendar(
 def extract_campus_card_info(
     html: str,
     page_url: str,
-    base_url: str,
+    base_url: str = "",
 ) -> dict[str, Any]:
     """Parse the İTÜ Portal campus card widget.
 

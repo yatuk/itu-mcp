@@ -56,7 +56,7 @@ from .text_extract import (
 from .tracking import diff_course_snapshots, load_tracking_state, merge_updates, save_tracking_state, utc_now_iso
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.2.3"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
@@ -573,7 +573,7 @@ class NinovaMcpApp:
                         "submission_end_iso": submission_end_iso,
                         "requested_file_count": requested_file_count,
                         "uploaded_file_count": uploaded_file_count,
-                        "is_fully_uploaded": bool(requested_file_count) and uploaded_file_count >= requested_file_count,
+                        "is_fully_uploaded": requested_file_count <= uploaded_file_count,
                     }
                 )
 
@@ -1063,8 +1063,11 @@ class NinovaMcpApp:
     # ------------------------------------------------------------------
 
     def obs_get_campus_card(self) -> dict[str, Any]:
-        """Read campus card balance and recent transactions from OBS."""
-        return self.obs.get_card_info()
+        """Read campus card balance and recent transactions from the İTÜ Portal."""
+        html, url = self._get_portal_page()
+        from .parsing import extract_campus_card_info
+
+        return extract_campus_card_info(html, url)
 
     def obs_calculate_gpa(
         self,
@@ -1127,32 +1130,38 @@ class NinovaMcpApp:
         """Read the İTÜ academic calendar (public, no login needed)."""
         return self.obs_public.get_academic_calendar()
 
+    def _get_portal_page(self) -> tuple[str, str]:
+        """Fetch the portal homepage once, cached for the request lifetime."""
+        cache_key = "portal_home"
+        cached = self._course_cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        html, url = self.client.get_portal_html("/apps/default/")
+        self._course_cache.set(cache_key, (html, url))
+        return html, url
+
     def get_cafeteria_menu(self) -> dict[str, Any]:
         """Read today's cafeteria menu from the İTÜ Portal (requires login)."""
+        html, url = self._get_portal_page()
         from .parsing import extract_cafeteria_menu
-
-        html, url = self.client.get_portal_html("/apps/default/")
         return extract_cafeteria_menu(html, url)
 
     def obs_get_notifications(self) -> dict[str, Any]:
         """Read İTÜ Portal notifications (requires login)."""
+        html, url = self._get_portal_page()
         from .parsing import extract_notifications
-
-        html, url = self.client.get_portal_html("/apps/default/")
         return extract_notifications(html, url)
 
     def obs_get_help_tickets(self) -> dict[str, Any]:
         """Read İTÜ Portal help tickets (requires login)."""
+        html, url = self._get_portal_page()
         from .parsing import extract_help_tickets
-
-        html, url = self.client.get_portal_html("/apps/default/")
         return extract_help_tickets(html, url)
 
     def obs_get_cloud_quota(self) -> dict[str, Any]:
         """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""
+        html, url = self._get_portal_page()
         from .parsing import extract_cloud_quota
-
-        html, url = self.client.get_portal_html("/apps/default/")
         return extract_cloud_quota(html, url)
 
     def get_public_course_schedule(
@@ -3100,6 +3109,8 @@ REMOTE_EXCLUDED_TOOLS = {
     "diff_snapshot",
     "submit_assignment",
     "get_assignment_upload_slots",
+    "read_resource_text",
+    "read_page",
 }
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS

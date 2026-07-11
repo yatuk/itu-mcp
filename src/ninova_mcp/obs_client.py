@@ -212,7 +212,7 @@ class ObsClient:
         html, url = self.ninova.get_portal_html("/apps/default/")
         from .parsing import extract_campus_card_info
 
-        return extract_campus_card_info(html, url)
+        return extract_campus_card_info(html, url, base_url=self.base_url)
 
     def save_transcript_pdf(
         self,

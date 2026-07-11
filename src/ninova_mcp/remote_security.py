@@ -46,8 +46,11 @@ def extract_api_key(request: Request) -> str | None:
     header_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     if header_key:
         return header_key.strip()
-    # Query param fallback for tools that cannot set headers (discouraged).
-    return (request.query_params.get("api_key") or "").strip() or None
+    # Bearer token (Authorization header)
+    auth = request.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
 
 
 def api_key_matches(provided: str | None, expected: str | None) -> bool:

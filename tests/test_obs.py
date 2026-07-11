@@ -414,6 +414,18 @@ class ObsPublicScheduleTests(unittest.TestCase):
         self.assertEqual(result["courses"][0]["crn"], "30334")
         self.assertEqual(result["courses"][0]["code"], "BLG 223E")
 
+    def test_extract_schedule_building_no_html(self) -> None:
+        from ninova_mcp.parsing import extract_course_schedule_table
+
+        html = self._load_fixture("ders_program_result.html")
+        result = extract_course_schedule_table(html, "https://obs.itu.edu.tr/test", "https://obs.itu.edu.tr")
+        for course in result["courses"]:
+            for session in course.get("sessions") or []:
+                bldg = session.get("building") or ""
+                # Must not contain HTML tags
+                self.assertNotIn("<", bldg)
+                self.assertNotIn("href", bldg)
+
     def test_schedule_crn_not_found(self) -> None:
         from ninova_mcp.obs_client import ObsPublicClient
 

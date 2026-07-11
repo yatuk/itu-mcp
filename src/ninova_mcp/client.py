@@ -353,9 +353,37 @@ class NinovaClient:
             "session_path": str(self.session_path) if session_persist_enabled() else None,
         }
 
+    # ITU domain suffixes allowed for outbound requests
+    _ALLOWED_DOMAINS = (
+        "ninova.itu.edu.tr",
+        "obs.itu.edu.tr",
+        "portal.itu.edu.tr",
+        "girisv3.itu.edu.tr",
+        "sis.itu.edu.tr",
+        "takvim.sis.itu.edu.tr",
+        "uicc.itu.edu.tr",
+        "itu.edu.tr",
+    )
+
+    def _check_domain(self, url: str) -> None:
+        """Raise NinovaError if the URL is not an allowed ITU domain."""
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return  # relative path, OK
+        if not any(
+            hostname == allowed or hostname.endswith("." + allowed)
+            for allowed in self._ALLOWED_DOMAINS
+        ):
+            raise NinovaError(
+                f"Domain not allowed: {hostname}. "
+                "Only ITU domains (*.itu.edu.tr) are permitted."
+            )
+
     def get(self, url_or_path: str, *, stream: bool = False) -> requests.Response:
         self.ensure_logged_in()
         url = normalize_url(url_or_path, self.base_url)
+        self._check_domain(url)
         self._throttle()
         response = self.session.get(
             url,
@@ -418,6 +446,7 @@ class NinovaClient:
         """POST a multipart ASP.NET WebForms submission (assignment upload)."""
         self.ensure_logged_in()
         url = normalize_url(url_or_path, self.base_url)
+        self._check_domain(url)
         headers = {"Referer": referer or url}
         self._throttle()
         response = self.session.post(

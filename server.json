@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.yatuk/itu-mcp",
+  "title": "İTÜ MCP",
+  "description": "İTÜ Ninova LMS ve OBS öğrenci portalı — dersler, notlar, yoklama, yemekhane, kampüs kart, GPA",
+  "version": "0.2.3",
+  "websiteUrl": "https://github.com/yatuk/itu-mcp",
+  "repository": {
+    "url": "https://github.com/yatuk/itu-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "itu-mcp",
+      "version": "0.2.3",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NINOVA_USERNAME",
+          "description": "İTÜ e-posta adresi (ad.soyad@itu.edu.tr)",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "NINOVA_PASSWORD",
+          "description": "İTÜ şifresi",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

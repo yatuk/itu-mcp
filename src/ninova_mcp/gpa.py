@@ -64,8 +64,10 @@ def calculate_gpa(
         code = course.get("code") or course.get("dersKodu") or "?"
         name = course.get("name") or course.get("dersAdiTR") or ""
 
-        # Kredi
-        credit_raw = course.get("credit") or course.get("kredi")
+        # Kredi (None check — 0 is a valid credit value)
+        credit_raw = course.get("credit")
+        if credit_raw is None:
+            credit_raw = course.get("kredi")
         try:
             credit = float(str(credit_raw).replace(",", "."))
         except (ValueError, TypeError):
