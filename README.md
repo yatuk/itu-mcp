@@ -14,6 +14,7 @@
     <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.2.3-blue?style=flat-square" alt="Sürüm: v0.2.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
+    [![MCPRadar Security](https://yatuk.github.io/mcpradar/badges/itu-mcp.svg)](https://yatuk.github.io/mcpradar/)
     <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
   </p>
 
