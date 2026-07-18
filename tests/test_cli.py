@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import patch
 
 from ninova_mcp.server import SERVER_NAME, SERVER_VERSION, main
 

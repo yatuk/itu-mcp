@@ -11,20 +11,20 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 from .cache import TtlCache
-from .client import DEFAULT_HEADERS, NinovaAuthError, NinovaClient, NinovaError
+from .client import DEFAULT_HEADERS, NinovaAuthError, NinovaClient, NinovaError, _request_delay_seconds
+from .http_security import request_with_safe_redirects
 from .parsing import (
-    COURSE_CODE_RE,
     clean_text,
     extract_course_search_results,
     extract_course_select_options,
     extract_prerequisite_list,
     make_soup,
     normalize_lookup_text,
-    parse_html_page,
 )
 
 DEFAULT_OBS_BASE_URL = "https://obs.itu.edu.tr"
@@ -45,6 +45,9 @@ class ObsClient:
         self.base_url = (
             base_url or os.getenv("NINOVA_OBS_BASE_URL") or DEFAULT_OBS_BASE_URL
         ).rstrip("/")
+        parsed_base = urlparse(self.base_url)
+        if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "obs.itu.edu.tr":
+            raise ObsError("NINOVA_OBS_BASE_URL must be https://obs.itu.edu.tr")
         self._ninova = ninova_client
         self._jwt: str | None = None
         self._jwt_obtained_at: float | None = None
@@ -60,10 +63,13 @@ class ObsClient:
     def session(self) -> requests.Session:
         return self.ninova.session
 
+    def _safe_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        return self.ninova._safe_request(method, url, **kwargs)
+
     def ensure_ready(self) -> dict[str, Any]:
         """Ensure Ninova/SSO session exists and OBS JWT is available."""
         self.ninova.ensure_logged_in()
-        self.session.get(self.base_url + STUDENT_HOME, timeout=30, allow_redirects=True)
+        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
         token = self._get_jwt(force=False)
         return {
             "obs_base_url": self.base_url,
@@ -82,8 +88,8 @@ class ObsClient:
             return self._jwt
 
         self.ninova.ensure_logged_in()
-        self.session.get(self.base_url + STUDENT_HOME, timeout=30, allow_redirects=True)
-        response = self.session.get(self.base_url + JWT_PATH, timeout=30, allow_redirects=True)
+        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
+        response = self._safe_request("GET", self.base_url + JWT_PATH, timeout=30)
         if response.status_code != 200 or not response.text.strip():
             raise NinovaAuthError(
                 "Could not obtain OBS JWT. Log in via Ninova credentials and open "
@@ -110,30 +116,27 @@ class ObsClient:
             path = "/" + path
         url = self.base_url + path
         self.ninova._throttle()
-        response = self.session.get(
+        response = self._safe_request(
+            "GET",
             url,
             headers=self._headers(),
             params=params,
             timeout=45,
-            allow_redirects=True,
         )
         if response.status_code in {401, 403}:
             # Refresh JWT once.
             self._get_jwt(force=True)
             self.ninova._throttle()
-            response = self.session.get(
+            response = self._safe_request(
+                "GET",
                 url,
                 headers=self._headers(),
                 params=params,
                 timeout=45,
-                allow_redirects=True,
             )
         if response.status_code >= 400:
-            detail = response.text[:300]
             # Some OBS endpoints return 500 when data is not yet published.
-            raise ObsError(
-                f"OBS API {path} failed with HTTP {response.status_code}: {detail}"
-            )
+            raise ObsError(f"OBS API {path} failed with HTTP {response.status_code}")
         if not response.content:
             return None
         content_type = (response.headers.get("Content-Type") or "").lower()
@@ -293,6 +296,7 @@ class ObsPublicClient:
     DEFAULT_BASE_URL = "https://obs.itu.edu.tr"
     DEFAULT_CACHE_TTL = 3600.0  # 1 hour — course catalog rarely changes
     DEFAULT_REQUEST_DELAY_SECONDS = 0.12
+    ALLOWED_PUBLIC_HOSTS = frozenset({"obs.itu.edu.tr", "www.takvim.sis.itu.edu.tr"})
 
     def __init__(
         self,
@@ -301,13 +305,20 @@ class ObsPublicClient:
         cache_ttl: float | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("NINOVA_OBS_BASE_URL") or self.DEFAULT_BASE_URL).rstrip("/")
+        parsed_base = urlparse(self.base_url)
+        if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "obs.itu.edu.tr":
+            raise ObsError("NINOVA_OBS_BASE_URL must be https://obs.itu.edu.tr")
         self._session = session
         cttl = cache_ttl if cache_ttl is not None else float(
             os.getenv("NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS") or self.DEFAULT_CACHE_TTL
         )
         self._cache: TtlCache[Any] = TtlCache(cttl)
+        self._schedule_cache_ttl = float(
+            os.getenv("NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS")
+            or self.DEFAULT_SCHEDULE_CACHE_TTL
+        )
         self._course_index: dict[str, int] | None = None  # normalised code → bransKoduId
-        self._min_request_interval = self.DEFAULT_REQUEST_DELAY_SECONDS
+        self._min_request_interval = _request_delay_seconds()
         self._last_request_at = 0.0
 
     @property
@@ -331,13 +342,33 @@ class ObsPublicClient:
             time.sleep(remaining)
         self._last_request_at = time.monotonic()
 
+    def _validate_url(self, url: str) -> None:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").lower() not in self.ALLOWED_PUBLIC_HOSTS
+        ):
+            raise ObsError("OBS public request destination is not allowlisted")
+
+    def _safe_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        try:
+            return request_with_safe_redirects(
+                self.session,
+                method,
+                url,
+                validate_url=self._validate_url,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise ObsError(f"OBS public request failed safely: {exc}") from exc
+
     def _get_html(self, path: str, *, params: dict[str, Any] | None = None) -> tuple[str, str]:
         """GET a public OBS page and return ``(html, final_url)``."""
         if not path.startswith("/"):
             path = "/" + path
         url = self.base_url + path
         self._throttle()
-        response = self.session.get(url, params=params, timeout=30, allow_redirects=True)
+        response = self._safe_request("GET", url, params=params, timeout=30)
         if response.status_code >= 400:
             raise ObsError(
                 f"OBS public endpoint {path} returned HTTP {response.status_code}"
@@ -345,6 +376,20 @@ class ObsPublicClient:
         if not response.encoding or response.encoding.lower() == "iso-8859-1":
             response.encoding = response.apparent_encoding or response.encoding
         return response.text, response.url
+
+    def _post_json(self, path: str, *, data: dict[str, Any]) -> Any:
+        """POST form data to an exact public OBS route and decode JSON."""
+        if not path.startswith("/"):
+            path = "/" + path
+        url = self.base_url + path
+        self._throttle()
+        response = self._safe_request("POST", url, data=data, timeout=30)
+        if response.status_code >= 400:
+            raise ObsError(f"OBS public endpoint {path} returned HTTP {response.status_code}")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ObsError(f"OBS public endpoint {path} did not return JSON") from exc
 
     # -- course index -----------------------------------------------------
 
@@ -452,7 +497,7 @@ class ObsPublicClient:
         parsed["available"] = bool(parsed.get("prerequisites") or parsed.get("raw_tables"))
         if errors:
             parsed["_fallback_attempts"] = errors
-        self._cache.set(cache_key, parsed)
+        self._cache.set(cache_key, parsed, ttl_seconds=self._schedule_cache_ttl)
         return parsed
 
     def get_postrequisites(self, course_id: int | str) -> dict[str, Any]:
@@ -834,19 +879,127 @@ class ObsPublicClient:
 
     def get_academic_calendar(self) -> dict[str, Any]:
         """Fetch the İTÜ academic calendar (public, no auth)."""
-        import requests as _requests
         from .parsing import extract_academic_calendar
 
+        cached = self._cache.get("academic_calendar")
+        if cached is not None:
+            return cached  # type: ignore[return-value]
         url = "https://www.takvim.sis.itu.edu.tr/AkademikTakvim/EN/academic-calendar/index.php"
-        # Use current year's calendar
-        resp = _requests.get(url, timeout=30, headers={
+        self._throttle()
+        resp = self._safe_request("GET", url, timeout=30, headers={
             "User-Agent": DEFAULT_HEADERS.get("User-Agent", "itu-mcp"),
             "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.7",
         })
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise ObsError(f"Academic calendar returned HTTP {resp.status_code}")
         if not resp.encoding or resp.encoding.lower() == "iso-8859-1":
             resp.encoding = resp.apparent_encoding or resp.encoding
-        return extract_academic_calendar(resp.text, resp.url)
+        result = extract_academic_calendar(resp.text, resp.url)
+        return self._cache.set("academic_calendar", result)
+
+    # -- degree plans ----------------------------------------------------
+
+    VALID_PLAN_TYPES = {
+        "on-lisans",
+        "lisans",
+        "cap",
+        "yandal",
+        "muhendislik-tamamlama",
+        "bilimsel-hazirlik",
+        "yuksek-lisans",
+        "tezsiz-yuksek-lisans",
+        "yuksek-lisans-ikinci-ogretim",
+        "doktora",
+        "uolp",
+    }
+
+    def list_degree_faculties(self) -> list[dict[str, Any]]:
+        """List official faculty/unit ids exposed by the public degree-plan form."""
+        cached = self._cache.get("degree_faculties")
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        html, _ = self._get_html("/public/DersPlan")
+        soup = make_soup(html)
+        select = soup.select_one("select#akademikBirimId")
+        if select is None:
+            raise ObsError("Ders planı akademik birim listesi bulunamadı.")
+        faculties = []
+        for option in select.select("option[value]"):
+            raw = str(option.get("value") or "").strip()
+            if raw.isdigit():
+                faculties.append({"faculty_id": int(raw), "faculty_name": clean_text(option.get_text(" ", strip=True))})
+        if not faculties:
+            raise ObsError("Ders planı akademik birim listesi boş döndü.")
+        return self._cache.set("degree_faculties", faculties)
+
+    def list_degree_programs(self, faculty_id: int, plan_type: str = "lisans") -> list[dict[str, Any]]:
+        """List degree programs for a faculty and official plan type."""
+        plan_type = plan_type.strip().lower()
+        if plan_type not in self.VALID_PLAN_TYPES:
+            raise ObsError(f"Geçersiz ders planı tipi: {plan_type}")
+        cache_key = f"degree_programs:{faculty_id}:{plan_type}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        payload = self._post_json(
+            "/public/DersPlan/GetAkademikProgramByBirimIdAndPlanTipi",
+            data={"birimId": str(faculty_id), "planTipiKodu": plan_type},
+        )
+        programs = [
+            {"program_code": item.get("programKodu"), "program_name": item.get("programAdi")}
+            for item in (payload or [])
+            if isinstance(item, dict)
+        ]
+        return self._cache.set(cache_key, programs)
+
+    def list_degree_plans(
+        self,
+        *,
+        faculty_id: int,
+        program_code: str,
+        plan_type: str = "lisans",
+    ) -> dict[str, Any]:
+        """List historical plan versions for an official degree program."""
+        plan_type = plan_type.strip().lower()
+        if plan_type not in self.VALID_PLAN_TYPES:
+            raise ObsError(f"Geçersiz ders planı tipi: {plan_type}")
+        programs = self.list_degree_programs(faculty_id, plan_type)
+        valid_codes = {str(item.get("program_code") or "").upper() for item in programs}
+        code = program_code.strip().upper()
+        if code not in valid_codes:
+            raise ObsError(
+                f"Program kodu {code!r}, fakülte {faculty_id} / {plan_type} için bulunamadı. "
+                f"Geçerli kodlar: {', '.join(sorted(valid_codes))}"
+            )
+        cache_key = f"degree_plans:{faculty_id}:{plan_type}:{code}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        html, url = self._get_html(
+            "/public/DersPlan/DersPlanlariList",
+            params={"PlanTipiKodu": plan_type, "programKodu": code, "FakulteId": str(faculty_id)},
+        )
+        from .public_parsing import extract_degree_plan_list
+
+        result = extract_degree_plan_list(html, url)
+        result.update({"faculty_id": faculty_id, "program_code": code, "plan_type": plan_type})
+        return self._cache.set(cache_key, result)
+
+    def get_degree_plan(self, plan_id: int | str) -> dict[str, Any]:
+        """Return semester-by-semester courses for one official plan version."""
+        raw = str(plan_id).strip()
+        if not raw.isdigit() or int(raw) <= 0:
+            raise ObsError("plan_id pozitif bir tamsayı olmalı.")
+        cache_key = f"degree_plan:{raw}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        html, url = self._get_html(f"/public/DersPlan/DersPlanDetay/{raw}")
+        from .public_parsing import extract_degree_plan_detail
+
+        result = extract_degree_plan_detail(html, url)
+        result["plan_id"] = int(raw)
+        return self._cache.set(cache_key, result)
 
 
 def redact_obs_profile(payload: dict[str, Any]) -> dict[str, Any]:

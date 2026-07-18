@@ -52,7 +52,11 @@ def calculate_gpa(
     ``projected_grades``: ``{"BLG 223E": "AA", ...}`` — henüz notu belli
     olmayan veya beklenen not için elle girilmiş tahmin.
     """
-    projected = projected_grades or {}
+    projected = {
+        str(code).strip().upper(): str(grade).strip().upper()
+        for code, grade in (projected_grades or {}).items()
+        if str(code).strip() and str(grade).strip()
+    }
 
     total_points = 0.0
     total_credits = 0.0
@@ -74,7 +78,11 @@ def calculate_gpa(
             credit = 0.0
 
         # Not
-        grade_raw = course.get("grade") or course.get("harfNotu") or projected.get(code)
+        # A what-if value is an explicit override, including for a course that
+        # already has an OBS letter grade.  This matches the public tool's
+        # documented behaviour and lets users compare alternative outcomes.
+        projected_grade = projected.get(str(code).strip().upper())
+        grade_raw = projected_grade or course.get("grade") or course.get("harfNotu")
         grade = str(grade_raw).strip().upper() if grade_raw else None
 
         coefficient = LETTER_TO_GRADE.get(grade) if grade else None
@@ -98,6 +106,7 @@ def calculate_gpa(
             "grade": grade,
             "coefficient": coefficient,
             "points": round(points, 2),
+            "projected": projected_grade is not None,
         }
 
         # Risk flags
@@ -140,4 +149,55 @@ def calculate_gpa(
             "Bu hesaplama bilgi amaçlıdır; resmi GANO için OBS transkriptine bakın. "
             "GE/KF/IA/MU gibi notlar hesaba katılmaz."
         ),
+    }
+
+
+def calculate_target_gpa(
+    *,
+    current_gpa: float,
+    current_credits: float,
+    target_gpa: float,
+    future_credits: float,
+) -> dict[str, Any]:
+    """Calculate the average required over future credits to reach a target.
+
+    This is a planning estimate.  It deliberately works from aggregate GPA
+    points so it can be used without exposing a transcript.
+    """
+    values = {
+        "current_gpa": float(current_gpa),
+        "current_credits": float(current_credits),
+        "target_gpa": float(target_gpa),
+        "future_credits": float(future_credits),
+    }
+    if not 0.0 <= values["current_gpa"] <= 4.0:
+        raise ValueError("current_gpa must be between 0.00 and 4.00")
+    if not 0.0 <= values["target_gpa"] <= 4.0:
+        raise ValueError("target_gpa must be between 0.00 and 4.00")
+    if values["current_credits"] < 0:
+        raise ValueError("current_credits cannot be negative")
+    if values["future_credits"] <= 0:
+        raise ValueError("future_credits must be greater than zero")
+
+    current_points = values["current_gpa"] * values["current_credits"]
+    target_points = values["target_gpa"] * (
+        values["current_credits"] + values["future_credits"]
+    )
+    required_points = target_points - current_points
+    required_average = required_points / values["future_credits"]
+    feasible = required_average <= 4.0
+    already_reached = required_average <= 0.0
+
+    return {
+        **values,
+        "required_future_average": round(max(0.0, required_average), 2),
+        "required_future_points": round(max(0.0, required_points), 2),
+        "feasible_on_4_scale": feasible,
+        "already_at_or_above_target": already_reached,
+        "maximum_possible_gpa": round(
+            (current_points + 4.0 * values["future_credits"])
+            / (values["current_credits"] + values["future_credits"]),
+            2,
+        ),
+        "note": "Bilgi amaçlı tahmindir; ders tekrarları ve özel OBS kuralları hesaba katılmaz.",
     }

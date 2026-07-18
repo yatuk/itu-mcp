@@ -85,7 +85,7 @@ def _build_transport_security() -> TransportSecuritySettings | None:
 
 def _build_fastmcp(app_logic: NinovaMcpApp, mount_path: str) -> FastMCP:
     security_settings = _build_transport_security()
-    host = os.getenv("NINOVA_REMOTE_HOST", "0.0.0.0")
+    host = os.getenv("NINOVA_REMOTE_HOST", "127.0.0.1")
     port = int(os.getenv("PORT") or os.getenv("NINOVA_REMOTE_PORT") or "8000")
     mcp = FastMCP(
         SERVER_NAME,
@@ -197,7 +197,7 @@ def main() -> None:
         )
         raise SystemExit(2)
 
-    host = os.getenv("NINOVA_REMOTE_HOST", "0.0.0.0")
+    host = os.getenv("NINOVA_REMOTE_HOST", "127.0.0.1")
     port = int(os.getenv("PORT") or os.getenv("NINOVA_REMOTE_PORT") or "8000")
     uvicorn.run(
         "ninova_mcp.remote:app",

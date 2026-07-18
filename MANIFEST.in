@@ -1,0 +1,6 @@
+include CHANGELOG.md
+include server.json
+recursive-include docs *.md *.png
+recursive-include examples *.json *.json5 *.toml
+recursive-include tests *.py
+recursive-include tests/fixtures *.html

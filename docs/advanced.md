@@ -18,7 +18,8 @@ needs nothing preinstalled.
 
 ## Configuration
 
-Only two variables are required:
+Authenticated Ninova/OBS/Portal tools require two variables. Public OBS, campus,
+announcement and library-catalog tools work without them:
 
 ```dotenv
 NINOVA_USERNAME=your_username
@@ -44,6 +45,20 @@ export NINOVA_SESSION_MAX_AGE_SECONDS="43200"        # 12h default
 export NINOVA_ALLOW_UPLOADS="1"
 export NINOVA_OBS_BASE_URL="https://obs.itu.edu.tr"  # OBS student portal
 export NINOVA_OBS_JWT_TTL_SECONDS="1500"
+export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
+export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS="60" # capacity/schedule reads
+export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS="300"     # directory/SKS/news pages
+export NINOVA_LIBRARY_CACHE_TTL_SECONDS="300"
+```
+
+The separate library patron account does not use the Ninova password:
+
+```dotenv
+NINOVA_LIBRARY_NAME=Surname, Name
+NINOVA_LIBRARY_ID=student-number
+NINOVA_LIBRARY_PIN=separate-library-pin
+# Optional custom corporate CA; TLS verification is never disabled automatically.
+# NINOVA_LIBRARY_CA_BUNDLE=/absolute/path/to/ca-bundle.pem
 ```
 
 Username is usually your **İTÜ email** (e.g. `name@itu.edu.tr`), the same value you type on the central login page.
@@ -73,6 +88,7 @@ infrastructure you control:
 export NINOVA_USERNAME="your_username"
 export NINOVA_PASSWORD="your_password"
 export NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-secret"
+export NINOVA_REMOTE_HOST="127.0.0.1"                # default; expose only behind a trusted proxy
 export NINOVA_REMOTE_API_KEY="$(openssl rand -hex 32)"   # recommended
 export NINOVA_REMOTE_REQUIRE_API_KEY="1"                 # refuse start without key
 export NINOVA_REMOTE_RATE_LIMIT="60"                     # max MCP requests / window
@@ -101,6 +117,7 @@ Rate limiting (default 60 req / 60s per client IP) applies to the MCP path. Disa
 ```bash
 docker build -t itu-mcp .
 docker run --rm -p 8000:8000 \
+  -e NINOVA_REMOTE_HOST="0.0.0.0" \
   -e NINOVA_USERNAME="your_username" \
   -e NINOVA_PASSWORD="your_password" \
   -e NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-secret" \
@@ -188,6 +205,53 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - `obs_get_schedule` — weekly + final calendar
 - `obs_get_graduation_remaining` — remaining courses / debts
 - `obs_download_transcript` — save transcript PDF under state dir
+
+### Portal and derived planning tools
+
+- `obs_get_campus_card` — balance and recent campus-card movements
+- `get_cafeteria_menu(date, meal, vegan)` — dated menu, calories and allergens
+- `obs_get_notifications(notification_id, limit)` — list/detail when Portal API permits;
+  falls back to the server-rendered widget when the Portal WebMethod is unavailable
+- `obs_get_help_tickets(query, limit)` / `obs_get_cloud_quota`
+- `obs_calculate_gpa(projected_grades)` — projected values override existing grades
+- `calculate_target_gpa` — aggregate target-GPA estimate without reading OBS
+- `check_course_conflicts` — scans one or more department codes
+- `get_personal_exam_calendar` — authenticated student's official final calendar
+
+### Public OBS and campus tools (no credentials)
+
+- `obs_search_courses` / `obs_get_course_prerequisites`
+- `get_public_course_schedule` / `get_public_course_prerequisites`
+- `get_public_exam_schedule(department_code)` — official current final timetable
+- `get_academic_calendar(date_from, date_to, category, query)`
+- `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
+- `find_open_course_sections` — capacity minus enrolled, across up to 25 selected departments
+- `find_empty_classrooms` — coverage-limited estimate from selected schedules; does not include reservations
+- `explain_course_eligibility` — structured prerequisite-group estimate; OBS remains authoritative
+- `search_itu_directory` — uses the official CSRF-protected directory form
+- `search_campus_locations` — official OBS building codes/names (not coordinates)
+- `get_shuttle_schedule` / `get_sports_facility_hours`
+- `get_itu_announcements` — İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation
+
+All public HTTP clients use exact HTTPS host allowlists and the shared
+`NINOVA_REQUEST_DELAY_MS` throttle. Public clients do not receive SSO cookies.
+
+### Library tools
+
+- `library_search` / `library_get_item` / `library_check_availability` are public.
+- `library_get_account` / `library_list_loans` use the separate library variables above.
+- `library_renew_loan` and `library_reserve_item` are dry-run by default and submit only
+  with `confirm=true`. They are not exposed by the remote HTTP transport.
+- If the library host presents an expired or otherwise invalid certificate, the client
+  fails closed with a TLS error instead of disabling verification.
+
+### External-content safety
+
+Tool results are marked with `untrusted_external_content` and a `content_notice`.
+Announcements, assignment descriptions, catalog metadata and other fetched text are data;
+an MCP client must not execute instructions embedded in that text. Sanitization strips HTML
+where practical, but provenance marking—not keyword removal—is the primary prompt-injection
+control.
 
 ## Tests
 

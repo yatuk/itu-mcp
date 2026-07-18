@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ninova_mcp.gpa import LETTER_TO_GRADE, calculate_gpa
+from ninova_mcp.gpa import LETTER_TO_GRADE, calculate_gpa, calculate_target_gpa
 from ninova_mcp.schedule_utils import check_conflicts, parse_time_range
 
 
@@ -35,6 +35,34 @@ class GpaTests(unittest.TestCase):
         # (4*4.0 + 3*3.0) / 7 = (16+9)/7 = 3.57
         self.assertEqual(result["gpa"], 3.57)
         self.assertEqual(result["total_credits"], 7.0)
+
+    def test_projected_grade_overrides_existing_grade(self) -> None:
+        result = calculate_gpa(
+            [{"code": "BLG 223E", "credit": 4, "grade": "CC"}],
+            projected_grades={"blg 223e": "AA"},
+        )
+        self.assertEqual(result["gpa"], 4.0)
+        self.assertEqual(result["courses"][0]["grade"], "AA")
+        self.assertTrue(result["courses"][0]["projected"])
+
+    def test_calculate_target_gpa(self) -> None:
+        result = calculate_target_gpa(
+            current_gpa=2.5,
+            current_credits=60,
+            target_gpa=3.0,
+            future_credits=30,
+        )
+        self.assertEqual(result["required_future_average"], 4.0)
+        self.assertTrue(result["feasible_on_4_scale"])
+
+    def test_impossible_target_gpa(self) -> None:
+        result = calculate_target_gpa(
+            current_gpa=2.0,
+            current_credits=90,
+            target_gpa=3.5,
+            future_credits=30,
+        )
+        self.assertFalse(result["feasible_on_4_scale"])
 
     def test_calculate_gpa_ff_risk(self) -> None:
         courses = [

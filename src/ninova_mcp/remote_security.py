@@ -151,8 +151,10 @@ class RemoteSecurityMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if self._needs_rate_limit(path):
-            assert self.rate_limiter is not None
-            allowed, retry_after = self.rate_limiter.allow(self._client_key(request))
+            limiter = self.rate_limiter
+            if limiter is None:  # defensive: settings may change between checks
+                return await call_next(request)
+            allowed, retry_after = limiter.allow(self._client_key(request))
             if not allowed:
                 return JSONResponse(
                     {

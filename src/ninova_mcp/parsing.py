@@ -1346,7 +1346,6 @@ def extract_prerequisite_list(
 
     Returns structured prerequisite data with a ``raw_tables`` fallback.
     """
-    soup = make_soup(html)
     page = parse_html_page(page_url, html, base_url=base_url)
     tables_data = page.get("tables") or []
 
@@ -1647,6 +1646,51 @@ def extract_academic_calendar(
             if dedup not in seen:
                 seen.add(dedup)
                 events.append({"date": date_str, "description": desc})
+
+    # Add machine-friendly dates and categories while preserving the official
+    # display string.  Range events use inclusive start/end dates.
+    month_numbers = {
+        "january": 1, "ocak": 1,
+        "february": 2, "subat": 2, "şubat": 2,
+        "march": 3, "mart": 3,
+        "april": 4, "nisan": 4,
+        "may": 5, "mayis": 5, "mayıs": 5,
+        "june": 6, "haziran": 6,
+        "july": 7, "temmuz": 7,
+        "august": 8, "agustos": 8, "ağustos": 8,
+        "september": 9, "eylul": 9, "eylül": 9,
+        "october": 10, "ekim": 10,
+        "november": 11, "kasim": 11, "kasım": 11,
+        "december": 12, "aralik": 12, "aralık": 12,
+    }
+    for event in events:
+        date_match = _re.match(
+            r"(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?\s+([^\s]+)\s+(\d{4})",
+            event["date"],
+        )
+        if date_match:
+            start_day = int(date_match.group(1))
+            end_day = int(date_match.group(2) or start_day)
+            month = month_numbers.get(normalize_lookup_text(date_match.group(3)))
+            year = int(date_match.group(4))
+            if month:
+                try:
+                    event["start_date"] = datetime(year, month, start_day).date().isoformat()
+                    event["end_date"] = datetime(year, month, end_day).date().isoformat()
+                except ValueError:
+                    pass
+
+        description_key = normalize_lookup_text(event["description"])
+        if any(word in description_key for word in ("exam", "sinav", "final", "midterm", "butunleme")):
+            event["category"] = "exam"
+        elif any(word in description_key for word in ("registration", "kayit", "add drop", "course selection")):
+            event["category"] = "registration"
+        elif any(word in description_key for word in ("holiday", "tatil", "bayram")):
+            event["category"] = "holiday"
+        elif any(word in description_key for word in ("term", "semester", "donem", "classes")):
+            event["category"] = "semester"
+        else:
+            event["category"] = "other"
 
     # Extract semester boundaries
     semesters: list[dict[str, str]] = []

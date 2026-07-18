@@ -64,7 +64,8 @@ def _make_update_id(
                 _stable_json(before),
                 _stable_json(after),
             ]
-        ).encode("utf-8")
+        ).encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()
     return digest[:16]
 

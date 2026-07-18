@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.0
+
+- Public final sınav programı, İTÜ rehberi, bina kodları, mekik saatleri,
+  spor tesisi çalışma saatleri ve resmî duyuru toplama araçları
+- Ders programından açık kontenjan ve kapsamı açıkça belirtilen boş derslik tahmini
+- Fakülte/program/ders planı akışı, önşart uygunluk açıklaması ve kişisel final takvimi
+- Public kütüphane arama/kopya durumu; ayrı hesapla ödünç listesi, yenileme ve
+  ayırtma için `confirm=true` korumalı akış
+- İTÜ Portal yemek menüsünde tarih/öğün/vegan seçimi, besin değerleri ve alerjenler;
+  bildirim ve yardım bileti API/fallback desteği
+- GPA projeksiyon düzeltmeleri, hedef GPA hesabı, çok bölümlü çakışma taraması ve
+  tarih/kategori/sorgu filtreli akademik takvim
+- Public istemcilerde ayrı çerezsiz oturumlar, exact HTTPS host allowlist'leri ve
+  her yönlendirme hedefini istekten önce doğrulayan SSRF koruması
+- Harici içerik sonuçlarında prompt-injection köken işaretleri; kütüphane TLS
+  doğrulamasında güvenli hata verme
+- README Mermaid mimarisi, araç haritası, ileri kullanım ve güvenlik belgeleri güncellendi
+- PyPI kaynak paketi manifesti; Python 3.14, `pip-audit`, Bandit ve Twine kontrollü CI/yayın akışı
+
 ## v0.2.2
 
 - README görselleri için absolute GitHub URL'leri (PyPI uyumluluğu)

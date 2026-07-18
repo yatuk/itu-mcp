@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.yatuk/itu-mcp",
   "title": "İTÜ MCP",
-  "description": "İTÜ Ninova LMS ve OBS öğrenci portalı — dersler, notlar, yoklama, yemekhane, kampüs kart, GPA",
-  "version": "0.2.3",
+  "description": "İTÜ Ninova, OBS, Portal, kampüs servisleri ve kütüphane için MCP sunucusu",
+  "version": "0.3.0",
   "websiteUrl": "https://github.com/yatuk/itu-mcp",
   "repository": {
     "url": "https://github.com/yatuk/itu-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "itu-mcp",
-      "version": "0.2.3",
+      "version": "0.3.0",
       "transport": {
         "type": "stdio"
       },
@@ -21,13 +21,33 @@
         {
           "name": "NINOVA_USERNAME",
           "description": "İTÜ e-posta adresi (ad.soyad@itu.edu.tr)",
-          "isRequired": true,
+          "isRequired": false,
           "format": "string"
         },
         {
           "name": "NINOVA_PASSWORD",
           "description": "İTÜ şifresi",
-          "isRequired": true,
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NINOVA_LIBRARY_NAME",
+          "description": "Kütüphane hesabındaki ad (hesap araçları için isteğe bağlı)",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "NINOVA_LIBRARY_ID",
+          "description": "Kütüphane üniversite numarası (hesap araçları için isteğe bağlı)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NINOVA_LIBRARY_PIN",
+          "description": "Ayrı kütüphane PIN'i (hesap araçları için isteğe bağlı)",
+          "isRequired": false,
           "format": "string",
           "isSecret": true
         }

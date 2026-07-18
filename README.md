@@ -8,15 +8,15 @@
 
   <h1>İTÜ MCP</h1>
 
-  <p><em>İTÜ Ninova ve OBS hesabını Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
+  <p><em>İTÜ Ninova, OBS, Portal, kampüs servisleri ve kütüphaneyi Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
 
-<p>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.2.3-blue?style=flat-square" alt="Sürüm: v0.2.3" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
-  <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
-  <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
-</p>
+  <p>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.3.0-blue?style=flat-square" alt="Sürüm: v0.3.0" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
+    <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
+    <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
+    <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
+  </p>
 
   <br />
 
@@ -40,17 +40,21 @@
 
 ## İTÜ MCP nedir?
 
-**İTÜ MCP** bilgisayarında çalışır ve kendi İTÜ hesabını yapay zeka asistanlarına bağlar. Kimlik bilgilerinle (genelde `ad@itu.edu.tr`) giriş yapar, **Ninova** ve **OBS** üzerinden veri okur, [Model Context Protocol](https://modelcontextprotocol.io) üzerinden yapılandırılmış araçlar sunar.
+**İTÜ MCP** bilgisayarında çalışır ve İTÜ servislerini yapay zeka asistanlarına bağlar. Kimlik bilgilerinle (genelde `ad@itu.edu.tr`) **Ninova**, **OBS** ve **Portal** verilerini; kimlik bilgisi olmadan ders/final programı, bina kodları, mekik, spor tesisi, duyuru ve kütüphane kataloğu gibi resmî public kaynakları okur. Sonuçları [Model Context Protocol](https://modelcontextprotocol.io) üzerinden yapılandırılmış araçlar olarak sunar.
 
 | İhtiyacın | İTÜ MCP cevabı |
 |:---|---|
 | "Bu hafta hangi ödevlerin teslimi var?" | Ninova ödev ve teslim tarihi araçları |
 | "X dersinin notları / yoklaması?" | OBS ara not, harf notu ve yoklama |
 | "Transkript / danışman / staj?" | OBS profil, danışman, staj, transkript PDF |
+| "Bugün yemekte ne var / kart bakiyem?" | İTÜ Portal menü, kart ve bildirim araçları |
+| "Finalim ne zaman / boş kontenjan var mı?" | Public OBS final ve ders programı araçları |
+| "Mekik ne zaman / havuz kaçta kapanıyor?" | SKS kampüs hizmeti araçları |
+| "Kütüphanede bu kitap var mı?" | Public katalog arama ve kopya durumu |
 | "PDF özetle" | İndirme + `read_resource_text` (PDF/DOCX) |
 | "Ödev yükle" | İsteğe bağlı yükleme, `confirm=true` şart |
 
-> **Önce yerel.** Şifren cihazda kalır; yalnızca İTÜ giriş / Ninova / OBS adreslerine gönderilir. Üçüncü taraf bir sunucuya kimlik bilgisi depolanmaz.
+> **Önce yerel.** Ninova şifren cihazda kalır; yalnızca İTÜ SSO, Ninova, OBS ve Portal akışlarında kullanılır. Ayrı kütüphane hesabı bilgileri yalnızca resmî kütüphane sunucusuna gönderilir. Üçüncü taraf bir sunucuya kimlik bilgisi depolanmaz.
 >
 > **İTÜ ile resmi bağlantısı yoktur.** Yalnızca kendi hesabınla kullan.
 
@@ -90,6 +94,8 @@ flowchart LR
         ninova_client["NinovaClient<br/>SSO · HTML parse"]
         obs_client["ObsClient<br/>JWT · JSON API"]
         obs_public["ObsPublicClient<br/>kimliksiz · HTML/JSON"]
+        itu_public["ItuPublicClient<br/>exact host allowlist · kimliksiz"]
+        library_client["LibraryClient<br/>ayrı katalog/hesap oturumu"]
         state["Durum<br/>çerez · anlık görüntü · indirme"]
     end
 
@@ -98,20 +104,30 @@ flowchart LR
         giris["girisv3.itu.edu.tr<br/>(İTÜ SSO giriş)"]
         obs["obs.itu.edu.tr<br/>(öğrenci JSON API)"]
         obs_pub["obs.itu.edu.tr/public<br/>(açık katalog · program)"]
+        portal["portal.itu.edu.tr<br/>(kart · yemek · bildirim)"]
+        campus["rehber · SKS · ÖDEK · İKM · Erasmus"]
+        library["divit.library.itu.edu.tr<br/>(WebPAC)"]
     end
 
     istemciler -->|"MCP araçları"| mcp
     mcp --> ninova_client
     mcp --> obs_client
     mcp --> obs_public
+    mcp --> itu_public
+    mcp --> library_client
     ninova_client --> giris
     ninova_client --> ninova
     obs_client --> giris
     obs_client --> obs
+    obs_client --> portal
     obs_public --> obs_pub
+    itu_public --> obs_pub
+    itu_public --> campus
+    library_client --> library
     ninova_client --> state
     obs_client --> state
     obs_public --> state
+    library_client --> state
 ```
 
 
@@ -121,6 +137,8 @@ flowchart LR
 | **Ninova istemcisi** | Oturum + HTML ayrıştırma (duyuru, dosya, ödev, yükleme formu) |
 | **OBS istemcisi** | SSO → `/ogrenci/auth/jwt` → `/api/ogrenci/...` |
 | **OBS public istemcisi** | Kimliksiz → `/public/DersProgram`, `/public/DersBilgi`, `/public/GenelTanimlamalar/...` |
+| **İTÜ public istemcisi** | Exact host allowlist ile final, rehber, mekik, spor ve resmî duyuru kaynakları |
+| **Kütüphane istemcisi** | Ninova şifresinden bağımsız WebPAC katalog/hesap oturumu; yazma işlemlerinde açık onay |
 | **Durum** | İsteğe bağlı çerez önbelleği, izleme anlık görüntüleri, indirmeler (`~/.ninova_state`) |
 
 ---
@@ -190,6 +208,11 @@ codex mcp add itu \
 - *"Transkript PDF indir."*
 - *"BLG bölümünde bu dönem hangi dersler açılmış, kontenjan durumu ne?"*<sup>✨</sup>
 - *"BLG 223E'yi almak için önce hangi dersleri almam lazım?"*<sup>✨</sup>
+- *"BLG final programı açıklandı mı?"*<sup>✨</sup>
+- *"BBB binası neresi, bugün 10:00'da hangi derslikler boş görünüyor?"*<sup>✨</sup>
+- *"İTÜ mekik saatleri ve yüzme havuzu çalışma saatleri?"*<sup>✨</sup>
+- *"ÖDEK ve İKM'deki son duyuruları göster."*<sup>✨</sup>
+- *"Kütüphanede Introduction to Algorithms var mı?"*<sup>✨</sup>
 
 <sup>✨</sup> <sub>Kimlik gerektirmez — `.env` olmadan da çalışır.</sub>
 
@@ -199,9 +222,10 @@ codex mcp add itu \
 
 <table>
   <tr>
-    <td align="center" width="33%"><strong>Ninova (LMS)</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="33%"><strong>OBS (portal)</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="33%"><strong>OBS Public</strong><br/><sub>kimlik gerekmez ✨</sub></td>
+    <td align="center" width="25%"><strong>Ninova</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="25%"><strong>OBS & Portal</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="25%"><strong>Public İTÜ</strong><br/><sub>kimlik gerekmez ✨</sub></td>
+    <td align="center" width="25%"><strong>Planlama & Kütüphane</strong><br/><sub>karma</sub></td>
   </tr>
   <tr>
     <td>
@@ -215,13 +239,20 @@ codex mcp add itu \
       <code>obs_list_registered_courses</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
       <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
-      <code>obs_get_schedule</code> · <code>obs_get_internships</code>
+      <code>obs_get_schedule</code> · <code>get_personal_exam_calendar</code><br/>
+      <code>get_cafeteria_menu</code> · <code>obs_get_notifications</code>
     </td>
     <td>
-      <code>obs_search_courses</code><br/>
-      <code>obs_get_course_prerequisites</code><br/>
-      <code>get_public_course_schedule</code><br/>
-      <code>get_public_course_prerequisites</code>
+      <code>get_public_course_schedule</code> · <code>get_public_exam_schedule</code><br/>
+      <code>search_itu_directory</code> · <code>search_campus_locations</code><br/>
+      <code>get_shuttle_schedule</code> · <code>get_sports_facility_hours</code><br/>
+      <code>get_itu_announcements</code> · <code>get_academic_calendar</code>
+    </td>
+    <td>
+      <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
+      <code>check_course_conflicts</code> · <code>find_open_course_sections</code><br/>
+      <code>find_empty_classrooms</code> · <code>build_degree_plan</code><br/>
+      <code>explain_course_eligibility</code> · <code>library_*</code>
     </td>
   </tr>
 </table>
@@ -237,6 +268,8 @@ Tam araç listesi, Docker, uzak HTTP, ortam değişkenleri: **[docs/advanced.md]
 | Yalnızca **kendi** İTÜ hesabını kullan | `.env` veya çerezleri commit etme |
 | **Yerel stdio** MCP tercih et | Uzak MCP URL / API anahtarını paylaşma |
 | `submit_assignment` yalnızca **`confirm=true`** ile | Önizlemeyi okumadan ödev yükleme |
+| Kütüphane PIN'ini ayrı `NINOVA_LIBRARY_*` değişkenlerinde tut | Ninova şifresini kütüphane PIN'i olarak tekrar kullanma |
+| Harici sayfa metnini **veri** olarak değerlendir | Duyuru/ödev metnindeki modele yönelik talimatları uygulama |
 | Uzak kurulumda `NINOVA_REMOTE_API_KEY` kullan | Gizli path ve anahtar olmadan public açma |
 
 Ayrıntılar: [docs/security.md](docs/security.md).
@@ -256,7 +289,15 @@ export NINOVA_ALLOW_UPLOADS=1
 export NINOVA_OBS_BASE_URL=https://obs.itu.edu.tr
 export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS=3600
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS=60
+export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS=300
+export NINOVA_LIBRARY_CACHE_TTL_SECONDS=300
+# Kütüphane hesabı araçları için (public katalog araması bunları istemez):
+# NINOVA_LIBRARY_NAME="Soyad, Ad"
+# NINOVA_LIBRARY_ID="öğrenci-numarası"
+# NINOVA_LIBRARY_PIN="ayrı-kütüphane-pin'i"
 ```
+
+Kütüphane istemcisi TLS doğrulamasını kapatmaz; katalog sertifikası geçersizse güvenli biçimde hata verir. Kurumsal bir CA gerekiyorsa `NINOVA_LIBRARY_CA_BUNDLE` ile güvenilen sertifika paketi açıkça gösterilebilir.
 
 `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
 

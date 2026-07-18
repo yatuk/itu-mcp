@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from .env import load_ninova_env
+from .http_security import request_with_safe_redirects
 from .parsing import clean_text, make_soup, normalize_lookup_text, normalize_url
 from .session_store import (
     clear_session,
@@ -71,6 +72,9 @@ class NinovaCredentials:
 class NinovaClient:
     def __init__(self, base_url: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("NINOVA_BASE_URL") or "https://ninova.itu.edu.tr").rstrip("/")
+        parsed_base = urlparse(self.base_url)
+        if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "ninova.itu.edu.tr":
+            raise NinovaError("NINOVA_BASE_URL must be https://ninova.itu.edu.tr")
         self.credentials = NinovaCredentials.from_env()
         self.session = self._build_session()
         self.last_login_at: str | None = None
@@ -207,11 +211,11 @@ class NinovaClient:
             return self.session_info()
 
         self._throttle()
-        response = self.session.get(self._entry_login_url(), timeout=DEFAULT_TIMEOUT)
+        response = self._safe_request("GET", self._entry_login_url(), timeout=DEFAULT_TIMEOUT)
         html = self._decode_response(response)
         if not self._looks_like_login_page(response, html=html):
             self._throttle()
-            dashboard = self.session.get(self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
+            dashboard = self._safe_request("GET", self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
             dashboard_html = self._decode_response(dashboard)
             if self._looks_like_login_page(dashboard, html=dashboard_html):
                 raise NinovaAuthError(
@@ -230,12 +234,12 @@ class NinovaClient:
                 "fallback (do not set NINOVA_DISABLE_PLAYWRIGHT_FALLBACK=1)."
             )
         self._throttle()
-        login_response = self.session.post(
+        login_response = self._safe_request(
+            "POST",
             response.url,
             data=payload,
             headers={"Referer": response.url},
             timeout=DEFAULT_TIMEOUT,
-            allow_redirects=True,
         )
         login_html = self._decode_response(login_response)
         if self._looks_like_login_page(login_response, html=login_html):
@@ -257,7 +261,7 @@ class NinovaClient:
             )
 
         self._throttle()
-        dashboard = self.session.get(self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
+        dashboard = self._safe_request("GET", self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
         dashboard_html = self._decode_response(dashboard)
         if self._looks_like_login_page(dashboard, html=dashboard_html):
             raise NinovaAuthError(
@@ -333,11 +337,12 @@ class NinovaClient:
 
     def is_authenticated(self) -> bool:
         self._throttle()
-        response = self.session.get(
+        response = self._safe_request(
+            "GET",
             self._dashboard_url(),
             timeout=DEFAULT_TIMEOUT,
-            allow_redirects=True,
         )
+        self._check_domain(response.url)
         html = self._decode_response(response)
         return not self._looks_like_login_page(response, html=html)
 
@@ -371,6 +376,8 @@ class NinovaClient:
         hostname = (parsed.hostname or "").lower()
         if not hostname:
             return  # relative path, OK
+        if parsed.scheme != "https":
+            raise NinovaError("Only HTTPS İTÜ URLs are permitted.")
         if not any(
             hostname == allowed or hostname.endswith("." + allowed)
             for allowed in self._ALLOWED_DOMAINS
@@ -380,17 +387,28 @@ class NinovaClient:
                 "Only ITU domains (*.itu.edu.tr) are permitted."
             )
 
+    def _safe_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """Request an allowlisted URL and validate each redirect before use."""
+        try:
+            return request_with_safe_redirects(
+                self.session,
+                method,
+                url,
+                validate_url=self._check_domain,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise NinovaError(f"ITU request failed safely: {exc}") from exc
+
     def get(self, url_or_path: str, *, stream: bool = False) -> requests.Response:
         self.ensure_logged_in()
         url = normalize_url(url_or_path, self.base_url)
         self._check_domain(url)
         self._throttle()
-        response = self.session.get(
-            url,
-            timeout=DEFAULT_TIMEOUT,
-            allow_redirects=True,
-            stream=stream,
+        response = self._safe_request(
+            "GET", url, timeout=DEFAULT_TIMEOUT, stream=stream
         )
+        self._check_domain(response.url)
         is_login_page = (
             self._looks_like_login_page(response, html="")
             if stream
@@ -399,12 +417,10 @@ class NinovaClient:
         if is_login_page:
             self.login(force=True)
             self._throttle()
-            response = self.session.get(
-                url,
-                timeout=DEFAULT_TIMEOUT,
-                allow_redirects=True,
-                stream=stream,
+            response = self._safe_request(
+                "GET", url, timeout=DEFAULT_TIMEOUT, stream=stream
             )
+            self._check_domain(response.url)
         response.raise_for_status()
         return response
 
@@ -424,12 +440,15 @@ class NinovaClient:
         """
         self.ensure_logged_in()
         url = f"{self.PORTAL_BASE_URL}{path}" if path.startswith("/") else path
+        self._check_domain(url)
         self._throttle()
-        response = self.session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        response = self._safe_request("GET", url, timeout=DEFAULT_TIMEOUT)
+        self._check_domain(response.url)
         if self._looks_like_login_page(response):
             self.login(force=True)
             self._throttle()
-            response = self.session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+            response = self._safe_request("GET", url, timeout=DEFAULT_TIMEOUT)
+            self._check_domain(response.url)
         response.raise_for_status()
         html = self._decode_response(response)
         return html, response.url
@@ -449,24 +468,26 @@ class NinovaClient:
         self._check_domain(url)
         headers = {"Referer": referer or url}
         self._throttle()
-        response = self.session.post(
+        response = self._safe_request(
+            "POST",
             url,
             data=data,
             files=files or None,
             headers=headers,
             timeout=timeout,
-            allow_redirects=True,
         )
+        self._check_domain(response.url)
         if self._looks_like_login_page(response):
             self.login(force=True)
             self._throttle()
-            response = self.session.post(
+            response = self._safe_request(
+                "POST",
                 url,
                 data=data,
                 files=files or None,
                 headers=headers,
                 timeout=timeout,
-                allow_redirects=True,
             )
+            self._check_domain(response.url)
         response.raise_for_status()
         return response

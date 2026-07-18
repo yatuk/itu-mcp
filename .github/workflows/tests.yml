@@ -13,9 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -29,3 +29,22 @@ jobs:
           NINOVA_USERNAME: dummy
           NINOVA_PASSWORD: dummy
         run: python -m unittest discover -s tests -v
+
+  security:
+    name: Dependency and static security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install audit tools
+        run: python -m pip install pip-audit bandit
+
+      - name: Audit resolved project dependencies
+        run: python -m pip_audit .
+
+      - name: Scan Python source
+        run: python -m bandit -r src/ninova_mcp -q
