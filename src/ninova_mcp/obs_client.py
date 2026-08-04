@@ -813,6 +813,68 @@ class ObsPublicClient:
         parsed = extract_prerequisite_list(html, url, base_url=self.base_url)
         parsed["brans_kodu"] = brans_kodu.upper()
         parsed["ders_no"] = ders_no
+
+        # The per-course page cannot distinguish "no prerequisite" from "not
+        # published here", so cross-check the authoritative branch table and let
+        # it decide. A course missing from that table provably has no
+        # prerequisite; only a table we failed to parse leaves the answer open.
+        try:
+            branch_rules = self.get_branch_prerequisites(brans_kodu)
+        except ObsError as exc:
+            parsed["prerequisite_status"] = "unknown"
+            parsed["prerequisite_status_note"] = (
+                "Resmî branş önşart tablosu okunamadı, boş sonuç 'ön şart yok' anlamına gelmez: "
+                f"{exc}"
+            )
+        else:
+            code = f"{brans_kodu.upper()} {str(ders_no).upper()}"
+            rule = branch_rules.get("rules", {}).get(code)
+            parsed["prerequisite_source"] = branch_rules.get("url")
+            if rule is not None:
+                parsed["prerequisite_status"] = "has_prerequisites"
+                parsed["official_prerequisite"] = rule
+            elif branch_rules.get("table_parsed"):
+                parsed["prerequisite_status"] = "no_prerequisites"
+                parsed["prerequisite_status_note"] = (
+                    f"{code} resmî {brans_kodu.upper()} önşart tablosunda yok; ön şartı yok."
+                )
+            else:
+                parsed["prerequisite_status"] = "unknown"
+                parsed["prerequisite_status_note"] = (
+                    "Branş önşart tablosu ayrıştırılamadı; boş sonuç kanıt değil."
+                )
+
+        self._cache.set(cache_key, parsed)
+        return parsed
+
+    def get_branch_prerequisites(self, branch: str) -> dict[str, Any]:
+        """Return the official prerequisite rules for every course in a branch.
+
+        Reads ``/public/GenelTanimlamalar/OnsartAra``, the same table the OBS
+        "Önşartlar" page renders. This is the only public source that gives the
+        full Ve/Veya expression with minimum grades and the credit requirement,
+        and it covers 4-digit capstone codes that the per-course page does not.
+        """
+        key = branch.strip().upper()
+        cache_key = f"branch_prereq:{key}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        index = self._build_course_index()
+        branch_id = index.get(normalize_lookup_text(key))
+        if branch_id is None:
+            raise ObsError(f"Branş kodu OBS önşart listesinde bulunamadı: {branch!r}")
+
+        html, url = self._get_html(
+            "/public/GenelTanimlamalar/OnsartAra",
+            params={"DersBransKoduId": branch_id},
+        )
+
+        from .prerequisites import extract_branch_prerequisites
+
+        parsed = extract_branch_prerequisites(html, url, key)
+        parsed["brans_kodu_id"] = branch_id
         self._cache.set(cache_key, parsed)
         return parsed
 

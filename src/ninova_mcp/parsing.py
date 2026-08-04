@@ -29,7 +29,9 @@ def make_soup(html: str) -> BeautifulSoup:
 
 
 COURSE_PATH_RE = re.compile(r"^/Sinif/\d+\.\d+/?$")
-COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,}\s*\d{3}[A-Z]?\b")
+# 4-digit numbers cover capstone/design courses (CEN 4901E); the two-letter tail
+# covers English and lab variants such as FIZ 101EL.
+COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,}\s*\d{3,4}[A-Z]{0,2}\b")
 FILE_EXTENSIONS = {
     ".7z",
     ".csv",

@@ -11,7 +11,7 @@
   <p><em>İTÜ Ninova, OBS, Portal, kampüs servisleri ve kütüphaneyi Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.3.0-blue?style=flat-square" alt="Sürüm: v0.3.0" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.5.0-blue?style=flat-square" alt="Sürüm: v0.5.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
     <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
@@ -96,6 +96,7 @@ flowchart LR
         obs_public["ObsPublicClient<br/>kimliksiz · HTML/JSON"]
         itu_public["ItuPublicClient<br/>exact host allowlist · kimliksiz"]
         library_client["LibraryClient<br/>ayrı katalog/hesap oturumu"]
+        archive_client["ItuArchiveClient<br/>kimliksiz · statik JSON arşiv"]
         state["Durum<br/>çerez · anlık görüntü · indirme"]
     end
 
@@ -109,12 +110,17 @@ flowchart LR
         library["divit.library.itu.edu.tr<br/>(WebPAC)"]
     end
 
+    subgraph arsiv["Ders Arşivi"]
+        archive["yatuk.github.io/itu-archive<br/>(27 dönem · günlük tarama)"]
+    end
+
     istemciler -->|"MCP araçları"| mcp
     mcp --> ninova_client
     mcp --> obs_client
     mcp --> obs_public
     mcp --> itu_public
     mcp --> library_client
+    mcp --> archive_client
     ninova_client --> giris
     ninova_client --> ninova
     obs_client --> giris
@@ -124,6 +130,7 @@ flowchart LR
     itu_public --> obs_pub
     itu_public --> campus
     library_client --> library
+    archive_client --> archive
     ninova_client --> state
     obs_client --> state
     obs_public --> state
@@ -139,6 +146,7 @@ flowchart LR
 | **OBS public istemcisi** | Kimliksiz → `/public/DersProgram`, `/public/DersBilgi`, `/public/GenelTanimlamalar/...` |
 | **İTÜ public istemcisi** | Exact host allowlist ile final, rehber, mekik, spor ve resmî duyuru kaynakları |
 | **Kütüphane istemcisi** | Ninova şifresinden bağımsız WebPAC katalog/hesap oturumu; yazma işlemlerinde açık onay |
+| **Arşiv istemcisi** | Kimliksiz, tek-host allowlist ile [itu-archive](https://github.com/yatuk/itu-archive) statik JSON'u; OBS'nin sildiği geçmiş dönemler |
 | **Durum** | İsteğe bağlı çerez önbelleği, izleme anlık görüntüleri, indirmeler (`~/.ninova_state`) |
 
 ---
@@ -258,6 +266,29 @@ codex mcp add itu \
 </table>
 
 Tam araç listesi, Docker, uzak HTTP, ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
+
+### Arşiv araçları
+
+OBS yalnızca aktif dönemi yayınlar. [İTÜ Ders Arşivi](https://github.com/yatuk/itu-archive)
+2016-2017 Yaz'dan bu yana her dönemi saklar, ve İTÜ MCP onu canlı OBS verisinin
+yanında okur — canlı kayıt durumun geçmiş dönemlerin bağlamıyla birlikte gelir.
+
+| Araç | Ne cevaplar |
+|:---|---|
+| `archive_who_taught` | "BLG 102E'yi son beş yılda kim verdi?" — hoca, kaç dönem, son dönem, ortalama doluluk |
+| `archive_course_history` | "Bu ders hangi mevsimde açılıyor?" — dönem dönem şube, hoca, kontenjan |
+| `archive_fill_rate` | "Bu şube dolar mı?" — CRN kontenjan serisi veya dersin geçmiş doluluk oranları |
+| `archive_instructor_courses` | "Bu hoca hangi dersleri veriyor?" |
+| `archive_term_sections` | "Güz'de hangi dersler açılıyor?" — OBS henüz yayınlamamışken bile |
+| `archive_list_terms` | Arşivin kapsadığı dönemler ve eksikleri |
+| `archive_search_courses` | "Sayısal yöntemler" — isimden koda, tüm dönemler üzerinde |
+| `archive_list_branches` | Bir dönemde hangi branşların dökümü var |
+| `archive_compare_terms` | İki dönem arasında hoca/kontenjan/doluluk değişimi |
+| `plan_remaining_courses` | Kalan zorunlu dersler + mevsim + hoca geçmişi → tek satır planlama önerisi |
+
+> Arşiv sonuçları `coverage` alanı taşır: boş sonuç "ders açılmadı" değil, "o dönem
+> hiç kaydedilmemiş" ya da "o branş dökümde yok" anlamına da gelebilir. Araç bu üçünü
+> ayrı ayrı bildirir.
 
 ---
 

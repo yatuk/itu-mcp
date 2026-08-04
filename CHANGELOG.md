@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.5.0
+
+- `plan_remaining_courses`: `obs_get_graduation_remaining`'in kalan zorunlu derslerini arşivden
+  mevsimsellik ve `who_taught` geçmişiyle birleştirip her ders için tek satır planlama önerisi
+  üretiyor (örn. "CEN 411E yalnızca Güz'de açılıyor, en sık Uyar veriyor, ort. doluluk 0.95").
+  Daha önce ders başına elle `archive_course_history` çağırıp birleştirmek gerekiyordu.
+- `archive_search_courses(query)`: arşivin tam kod/isim indeksinde arama; yalnızca kod bilinmediğinde
+  "sayısal yöntemler" gibi bir isim parçasından doğru kodu buluyor. `obs_search_courses`'tan farklı
+  olarak yalnızca aktif dönemi değil, arşivin gördüğü tüm dönemleri tarıyor.
+- `archive_list_branches(term)`: bir dönemin dökümünde hangi branşların bulunduğunu doğrudan
+  listeliyor; artık `archive_term_sections`'ı branş branş deneyip `coverage` alanına bakmaya gerek yok.
+- `archive_compare_terms(course_code, term_a, term_b)`: iki dönem arasında bir dersin
+  hoca/kontenjan/doluluk değişimini adlandırarak (eklenen/çıkan hocalar, şube sayısı farkı) döndürüyor.
+- `explain_course_eligibility` artık `archive_seasonality` alanı taşıyor: ön şart karşılansa bile
+  dersin arşivde yalnızca tek bir dönemde açıldığı otomatik olarak bildiriliyor.
+
+## v0.4.1
+
+- `explain_course_eligibility` artık bağımsız, üçüncü taraf bir topluluk veri setiyle
+  çapraz doğrulama yapıyor: OBS'ten çıkarılan kural, bağımsız bir ikinci kaynakla
+  karşılaştırılıp `cross_check` alanında raporlanıyor. OBS her zaman yetkili kaynak kalır;
+  anlaşmazlık sessizce çözülmez, bildirilir. Kaynağa erişilemezse veya ders veri setinde
+  yoksa `available: false` ile bildirilir, ana yanıtı etkilemez.
+- `PREREQ_CROSSCHECK_BASE_URL` / `PREREQ_CROSSCHECK_CACHE_TTL_SECONDS` ile yapılandırılabilir.
+
+## v0.4.0
+
+### Arşiv entegrasyonu
+
+- [İTÜ Ders Arşivi](https://github.com/yatuk/itu-archive) araçları: `archive_who_taught`,
+  `archive_course_history`, `archive_fill_rate`, `archive_instructor_courses`,
+  `archive_term_sections`, `archive_list_terms`. OBS'nin sildiği 27 dönemlik geçmiş
+  canlı OBS verisinin yanında sorgulanabiliyor.
+- Arşiv sonuçları `coverage` alanı taşıyor: "dönem hiç kaydedilmemiş", "branş dökümde
+  yok" ve "filtreye uyan şube yok" durumları ayrı ayrı bildiriliyor; boş sonuç artık
+  sessizce "ders açılmadı" gibi okunmuyor.
+- Arşiv istemcisi ayrı çerezsiz oturum, HTTPS zorunluluğu ve tek-host allowlist ile
+  çalışıyor; `ITU_ARCHIVE_BASE_URL` ve `ITU_ARCHIVE_CACHE_TTL_SECONDS` ile ayarlanabilir.
+
+### Ön şart verisi
+
+- Ön şartlar artık resmî branş tablosundan (`/public/GenelTanimlamalar/OnsartAra`)
+  okunuyor: tam Ve/Veya ifadesi, ders bazlı minimum not ve kredi şartı ile.
+- `prerequisite_status` alanı "ön şartı yok" (resmî tabloda kanıtlanmış yokluk) ile
+  "bilinmiyor" (tablo okunamadı) durumlarını ayırıyor. Boş liste artık iki farklı
+  anlama gelmiyor.
+- 4 haneli ders kodları (`CEN 4901E`, bitirme tasarımı) ve iki harfli ekler
+  (`FIZ 101EL`) destekleniyor; `explain_course_eligibility` bu kodlarda artık hata
+  vermiyor.
+- `explain_course_eligibility` minimum not şartlarını değerlendiriyor;
+  `completed_courses` girdisi `KOD:NOT` biçimini kabul ediyor.
+
+### Eksik veri düzeltmeleri
+
+- `obs_get_graduation_remaining` artık `summary` döndürüyor: hangi gerçek dersin hangi
+  seçmeli slotu doldurduğu (`BLG 422E → 7th Sems. Elect. Course I (MT)`), boş slotlar,
+  kalan zorunlu dersler ve kredi dökümü.
+- `obs_calculate_gpa` notu girilmemiş derslerin kredisini ders planından tamamlıyor;
+  hangi derslerin bu yolla çözüldüğü `credit_fallback_courses` ile bildiriliyor.
+
 ## v0.3.0
 
 - Public final sınav programı, İTÜ rehberi, bina kodları, mekik saatleri,

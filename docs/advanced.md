@@ -49,6 +49,10 @@ export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS="60" # capacity/schedule reads
 export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS="300"     # directory/SKS/news pages
 export NINOVA_LIBRARY_CACHE_TTL_SECONDS="300"
+export ITU_ARCHIVE_BASE_URL="https://yatuk.github.io/itu-archive/data"  # course archive
+export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates daily
+export PREREQ_CROSSCHECK_BASE_URL="<community pipe-delimited course feed URL>"
+export PREREQ_CROSSCHECK_CACHE_TTL_SECONDS="21600"    # community prerequisite cross-check
 ```
 
 The separate library patron account does not use the Ninova password:
@@ -227,7 +231,15 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
 - `find_open_course_sections` — capacity minus enrolled, across up to 25 selected departments
 - `find_empty_classrooms` — coverage-limited estimate from selected schedules; does not include reservations
-- `explain_course_eligibility` — structured prerequisite-group estimate; OBS remains authoritative
+- `explain_course_eligibility` — evaluates the official OBS branch prerequisite table
+  (`/public/GenelTanimlamalar/OnsartAra`): full Ve/Veya expression, per-course minimum
+  grades, and credit requirement. Accepts 3- and 4-digit codes (`CEN 4901E`) and
+  two-letter suffixes (`FIZ 101EL`). `prerequisite_status` separates `no_prerequisites`
+  (proven absent from the official table) from `unknown` (table unreadable), so an empty
+  result is never ambiguous. OBS remains authoritative. The result also carries
+  `cross_check`, an independent diff against a third-party community dataset (unofficial);
+  a disagreement is reported, never resolved silently in either direction, and a failed or
+  missing lookup reports `available: false` without affecting the OBS-derived answer.
 - `search_itu_directory` — uses the official CSRF-protected directory form
 - `search_campus_locations` — official OBS building codes/names (not coordinates)
 - `get_shuttle_schedule` / `get_sports_facility_hours`
@@ -235,6 +247,42 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 
 All public HTTP clients use exact HTTPS host allowlists and the shared
 `NINOVA_REQUEST_DELAY_MS` throttle. Public clients do not receive SSO cookies.
+
+### Archive tools (no credentials)
+
+Backed by [itu-archive](https://github.com/yatuk/itu-archive), which preserves every term
+from 2016-2017 onward. OBS publishes only the active term, so these answer what OBS cannot.
+
+- `archive_list_terms` — archived terms, their source, and known gaps
+- `archive_who_taught(course_code)` — instructors per course, ranked by terms taught
+- `archive_course_history(course_code)` — term-by-term sections, instructors, and seasonality
+- `archive_fill_rate(crn | course_code)` — quota time series for a CRN, or historical fill
+  ratios across a course's past sections
+- `archive_instructor_courses(instructor)` — an instructor's course history
+- `archive_term_sections(term, branch | course_code)` — sections for a term, including terms
+  OBS has not published yet
+- `archive_search_courses(query)` — search the full archive course index by code or name
+  fragment, across every term ever seen (`obs_search_courses` only covers the active term)
+- `archive_list_branches(term)` — every branch present in one term's dump, with section/course
+  counts; answers "does this branch even have a döküm for this term?" directly
+- `archive_compare_terms(course_code, term_a, term_b)` — diffs one course's sections between
+  two terms: instructor turnover, section-count delta, capacity/fill movement
+- `plan_remaining_courses(program_id?)` — combines `obs_get_graduation_remaining`'s remaining
+  required courses with archive seasonality and `archive_who_taught` history, producing one
+  scheduling recommendation per course (e.g. "only offered in Güz, usually taught by X,
+  average fill 0.95") instead of requiring a manual `archive_course_history` call per course
+
+Every result carries a `coverage` field. An empty result means one of three different things
+— the term was never captured (`term_missing`), the branch is absent from that term's dump
+(`branch_absent_from_term`), or the filters matched nothing (`covered`) — and the tool always
+says which. Quota data refreshes daily and is not live; check OBS before registering.
+
+`explain_course_eligibility` also carries `archive_seasonality` when the archive has the
+course: a course can be prerequisite-eligible right now and still only ever open in one term
+a year, and this surfaces that without a separate lookup.
+
+The archive client uses its own cookie-free session and a single-host HTTPS allowlist derived
+from `ITU_ARCHIVE_BASE_URL`.
 
 ### Library tools
 
