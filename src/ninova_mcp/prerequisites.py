@@ -116,13 +116,15 @@ def parse_prerequisite_expression(expression: str) -> dict[str, Any]:
         token = peek()
         if token is None:
             return None
-        if token == "(":
+        # Comparing against the grammar's parenthesis tokens, not a credential;
+        # bandit's B105 heuristic flags bare "(" / ")" string literals.
+        if token == "(":  # nosec B105
             position += 1
             inner = parse_or()
-            if peek() == ")":
+            if peek() == ")":  # nosec B105
                 position += 1
             return inner
-        if token == ")":
+        if token == ")":  # nosec B105
             return None
         if _CODE_RE.match(re.sub(r"\s+", " ", token).upper()):
             position += 1
