@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.7.2
+
+Gerçek bir kullanım raporundan bulunan OBS oturum kırıklığı düzeltildi:
+`plan_next_term` gibi OBS'e giren prompt'lar, `obs_auth_status` "ok: true"
+derken bile `obs_get_profile` ham İTÜ giriş sayfası HTML'i döndürüyordu.
+
+Kök neden zinciri:
+
+- `ObsClient.ensure_ready()` (`obs_auth_status`'ın arkasındaki fonksiyon)
+  Ninova oturumunu hiç doğrulamıyordu (`ensure_logged_in()` `verify=True`
+  olmadan çağrılıyordu) ve JWT'yi yalnızca "hafızada var, TTL dolmamış" diye
+  kontrol ediyordu, sunucuya gerçekten geçerli mi diye sormuyordu
+- OBS, oturum ölmüşse 401/403 değil, HTTP 200 ile İTÜ giriş sayfasının
+  HTML'ini döndürüyor; `api_get` yalnızca `{401, 403}`'ü hata sayıyordu, bu
+  yüzden giriş sayfası HTML'i gerçek veriymiş gibi ham metin olarak
+  dönüyordu
+- `refresh_session`, Ninova'da yeniden login oluyordu ama `ObsClient`'ın
+  önbelleğe aldığı eski JWT'yi hiç temizlemiyordu, o yüzden yeniden login
+  bile OBS tarafını düzeltmiyordu
+
+Düzeltmeler (`obs_client.py`, `server.py`):
+
+- `ensure_ready()` artık `ensure_logged_in(verify=True)` ile gerçek bir
+  doğrulama yapıyor ve JWT'yi zorla tazeliyor, böylece `obs_auth_status`
+  artık yanlış "ok" dönmüyor
+- Yeni `_looks_like_obs_login_page()`: HTTP 200 + İTÜ giriş sayfası HTML'ini
+  tanıyor (content-type ve gövde şekline bakarak)
+- `_get_jwt()` artık JWT gibi görünen ama aslında giriş sayfası olan
+  yanıtları reddediyor (eski nokta-sayma kontrolü tek başına HTML'i
+  kolayca JWT sanabiliyordu)
+- `api_get()` giriş sayfası tespit ettiğinde Ninova oturumunu da yeniden
+  doğrulayıp JWT'yi tazeliyor, bir kez daha deniyor; hâlâ giriş sayfasıysa
+  net bir `ObsError` fırlatıyor (ham HTML dönmek yerine)
+- `refresh_session` artık `ObsClient`'ın önbelleğe aldığı JWT'yi de
+  temizliyor
+
 ## v0.7.1
 
 README güncellemesi.

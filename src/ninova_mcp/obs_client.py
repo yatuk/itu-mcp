@@ -67,15 +67,40 @@ class ObsClient:
         return self.ninova._safe_request(method, url, **kwargs)
 
     def ensure_ready(self) -> dict[str, Any]:
-        """Ensure Ninova/SSO session exists and OBS JWT is available."""
-        self.ninova.ensure_logged_in()
+        """Ensure Ninova/SSO session exists and the OBS JWT is genuinely valid.
+
+        Forces a real verification and a fresh token rather than trusting
+        cached state, since callers use this to answer "can I reach OBS right
+        now", not "did we think so up to ``_jwt_ttl_seconds`` ago". A stale
+        Ninova session or an expired JWT does not reliably surface as a
+        clean error from OBS (see ``_looks_like_obs_login_page``), so a soft
+        check here would keep reporting success after access has quietly died.
+        """
+        self.ninova.ensure_logged_in(verify=True)
         self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
-        token = self._get_jwt(force=False)
+        token = self._get_jwt(force=True)
         return {
             "obs_base_url": self.base_url,
             "jwt_present": bool(token),
             "login_method": self.ninova.login_method,
         }
+
+    def _looks_like_obs_login_page(self, response: requests.Response) -> bool:
+        """True if OBS answered with the İTÜ SSO login page instead of data.
+
+        A dead session commonly does not surface as 401/403 here: OBS (or
+        the SSO gateway in front of it) can return HTTP 200 with the login
+        page's HTML body. Treating that as a normal response means a stale
+        session silently returns login-page markup as if it were the
+        requested data, instead of a diagnosable error.
+        """
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "json" in content_type:
+            return False
+        text = response.text
+        if not text or text.lstrip()[:1] in {"{", "["}:
+            return False
+        return self.ninova._looks_like_login_page(response, html=text)
 
     def _get_jwt(self, *, force: bool = False) -> str:
         now = time.time()
@@ -96,8 +121,15 @@ class ObsClient:
                 "https://obs.itu.edu.tr/ogrenci/ in a browser to verify access."
             )
         token = response.text.strip().strip('"')
-        if token.count(".") < 2:
-            raise NinovaAuthError("OBS JWT response did not look like a JWT token.")
+        # A dead Ninova session can make this endpoint return the SSO login
+        # page's HTML instead of a token; a bare dot-count check would often
+        # accept that HTML as a plausible-looking token (page markup easily
+        # contains 2+ literal dots), so the login-page shape is checked too.
+        if token.count(".") < 2 or self._looks_like_obs_login_page(response):
+            raise NinovaAuthError(
+                "OBS returned a login page instead of a JWT. The İTÜ SSO session is "
+                "stale; call refresh_session and try again."
+            )
         self._jwt = token
         self._jwt_obtained_at = now
         return token
@@ -123,8 +155,12 @@ class ObsClient:
             params=params,
             timeout=45,
         )
-        if response.status_code in {401, 403}:
-            # Refresh JWT once.
+        if response.status_code in {401, 403} or self._looks_like_obs_login_page(response):
+            # A stale JWT alone doesn't explain a login-page body; the
+            # underlying Ninova/SSO session itself is usually what died, so
+            # this re-verifies that too rather than just re-minting a token
+            # against cookies that are already dead.
+            self.ninova.ensure_logged_in(verify=True)
             self._get_jwt(force=True)
             self.ninova._throttle()
             response = self._safe_request(
@@ -134,6 +170,12 @@ class ObsClient:
                 params=params,
                 timeout=45,
             )
+            if self._looks_like_obs_login_page(response):
+                raise ObsError(
+                    f"OBS API {path} kept returning a login page after refreshing the "
+                    "session. Call refresh_session, or check access manually at "
+                    "https://obs.itu.edu.tr/ogrenci/."
+                )
         if response.status_code >= 400:
             # Some OBS endpoints return 500 when data is not yet published.
             raise ObsError(f"OBS API {path} failed with HTTP {response.status_code}")

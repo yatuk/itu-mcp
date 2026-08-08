@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
+from ninova_mcp.client import NinovaAuthError
 from ninova_mcp.obs_client import ObsClient, ObsError, redact_obs_profile
 from ninova_mcp.server import NinovaMcpApp, LOCAL_TOOL_NAMES
 
@@ -40,6 +41,158 @@ class ObsClientUnitTests(unittest.TestCase):
         self.assertEqual(latest["akademikDonemId"], 2)
         self.assertEqual(by_code["akademikDonemId"], 1)
         self.assertEqual(by_name["akademikDonemId"], 2)
+
+
+def _fake_response(
+    *,
+    status_code: int = 200,
+    text: str = "",
+    json_body: dict | None = None,
+    content_type: str = "application/json",
+) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = {"Content-Type": content_type}
+    resp.text = text
+    resp.content = text.encode("utf-8") or b"x"
+    resp.url = "https://obs.itu.edu.tr/api/ogrenci/x"
+    if json_body is not None:
+        resp.json.return_value = json_body
+    return resp
+
+
+class ObsSessionRecoveryTests(unittest.TestCase):
+    """Covers a real failure mode: a dead Ninova/SSO session makes OBS return
+    HTTP 200 with the İTÜ login page's HTML instead of 401/403. Without
+    detecting that shape, api_get silently returns login-page markup as if
+    it were valid data, and obs_auth_status/ensure_ready keep reporting
+    success because they only checked "is a JWT string cached", never
+    whether the server still accepts it.
+    """
+
+    def _client(self) -> ObsClient:
+        ninova = MagicMock()
+        ninova.login_method = "requests"
+        client = ObsClient(ninova_client=ninova)
+        return client
+
+    def test_looks_like_obs_login_page_true_for_html_login_body(self) -> None:
+        client = self._client()
+        client.ninova._looks_like_login_page.return_value = True
+        resp = _fake_response(content_type="text/html", text="<html>login form</html>")
+        self.assertTrue(client._looks_like_obs_login_page(resp))
+
+    def test_looks_like_obs_login_page_false_for_real_json(self) -> None:
+        client = self._client()
+        resp = _fake_response(content_type="application/json", text='{"ok": true}')
+        self.assertFalse(client._looks_like_obs_login_page(resp))
+        client.ninova._looks_like_login_page.assert_not_called()
+
+    def test_looks_like_obs_login_page_false_for_json_shaped_body_without_content_type(self) -> None:
+        client = self._client()
+        resp = _fake_response(content_type="text/plain", text='{"ok": true}')
+        self.assertFalse(client._looks_like_obs_login_page(resp))
+
+    def test_get_jwt_rejects_html_even_with_two_dots(self) -> None:
+        """A dot-count check alone is not enough: ordinary HTML markup can
+        easily contain 2+ literal dots and would pass a naive check.
+        """
+        client = self._client()
+        html = "<html><script src='a.b.js'></script>login page</html>"
+        client._safe_request = MagicMock(
+            return_value=_fake_response(status_code=200, text=html, content_type="text/html")
+        )
+        client.ninova._looks_like_login_page.return_value = True
+        with self.assertRaises(NinovaAuthError):
+            client._get_jwt(force=True)
+
+    def test_get_jwt_accepts_a_real_looking_token(self) -> None:
+        client = self._client()
+        token = "aa.bb.cc"
+        client._safe_request = MagicMock(
+            return_value=_fake_response(status_code=200, text=token, content_type="text/plain")
+        )
+        client.ninova._looks_like_login_page.return_value = False
+        self.assertEqual(client._get_jwt(force=True), token)
+
+    def test_api_get_recovers_when_retry_succeeds(self) -> None:
+        client = self._client()
+        login_page = _fake_response(status_code=200, text="<html>login</html>", content_type="text/html")
+        good = _fake_response(status_code=200, json_body={"ok": True}, text='{"ok": true}')
+        client._safe_request = MagicMock(side_effect=[login_page, good])
+        client.ninova._looks_like_login_page.side_effect = [True, False]
+        client._get_jwt = MagicMock(return_value="aa.bb.cc")
+
+        result = client.api_get("/api/ogrenci/x")
+
+        self.assertEqual(result, {"ok": True})
+        client.ninova.ensure_logged_in.assert_called_once_with(verify=True)
+        # _headers() also calls _get_jwt() (no force) to build every request's
+        # Authorization header; what matters here is that a *forced* refresh
+        # happened at least once during recovery, not the total call count.
+        self.assertIn(unittest.mock.call(force=True), client._get_jwt.call_args_list)
+
+    def test_api_get_raises_clearly_when_still_a_login_page_after_retry(self) -> None:
+        client = self._client()
+        login_page = _fake_response(status_code=200, text="<html>login</html>", content_type="text/html")
+        client._safe_request = MagicMock(return_value=login_page)
+        client.ninova._looks_like_login_page.return_value = True
+        client._get_jwt = MagicMock(return_value="aa.bb.cc")
+
+        with self.assertRaises(ObsError) as ctx:
+            client.api_get("/api/ogrenci/x")
+        self.assertIn("login page", str(ctx.exception))
+        client.ninova.ensure_logged_in.assert_called_once_with(verify=True)
+
+    def test_api_get_still_retries_on_plain_401(self) -> None:
+        """The pre-existing 401/403 path must keep working alongside the new check."""
+        client = self._client()
+        unauthorized = _fake_response(status_code=401, text="", content_type="text/plain")
+        good = _fake_response(status_code=200, json_body={"ok": True}, text='{"ok": true}')
+        client._safe_request = MagicMock(side_effect=[unauthorized, good])
+        client.ninova._looks_like_login_page.return_value = False
+        client._get_jwt = MagicMock(return_value="aa.bb.cc")
+
+        result = client.api_get("/api/ogrenci/x")
+        self.assertEqual(result, {"ok": True})
+
+    def test_ensure_ready_verifies_session_and_forces_fresh_jwt(self) -> None:
+        client = self._client()
+        client._safe_request = MagicMock(return_value=_fake_response(status_code=200, text="ok"))
+        client._get_jwt = MagicMock(return_value="aa.bb.cc")
+
+        result = client.ensure_ready()
+
+        client.ninova.ensure_logged_in.assert_called_once_with(verify=True)
+        client._get_jwt.assert_called_once_with(force=True)
+        self.assertTrue(result["jwt_present"])
+
+
+class RefreshSessionClearsObsJwtTests(unittest.TestCase):
+    def test_refresh_session_clears_cached_obs_jwt(self) -> None:
+        import os
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "NINOVA_USERNAME": "dummy",
+                    "NINOVA_PASSWORD": "dummy",
+                    "NINOVA_STATE_DIR": state_dir,
+                },
+            ):
+                app = NinovaMcpApp()
+                # Touch app.obs first so a stale JWT is actually cached, mirroring
+                # the real bug: an OBS call happens, then the session goes stale,
+                # then refresh_session is called to recover.
+                app.obs._jwt = "stale.token.value"
+                app.obs._jwt_obtained_at = 0.0
+                with patch.object(app.client, "login", return_value={"authenticated": True}):
+                    app.refresh_session()
+                self.assertIsNone(app._obs._jwt)
+                self.assertIsNone(app._obs._jwt_obtained_at)
 
 
 class ObsToolsRegisteredTests(unittest.TestCase):

@@ -65,7 +65,7 @@ from .text_extract import (
 from .tracking import diff_course_snapshots, load_tracking_state, merge_updates, save_tracking_state, utc_now_iso
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "0.7.1"
+SERVER_VERSION = "0.7.2"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
@@ -257,6 +257,13 @@ class NinovaMcpApp:
     def refresh_session(self) -> dict[str, Any]:
         self.invalidate_caches()
         session = self.client.login(force=True)
+        if self._obs is not None:
+            # A forced Ninova relogin does nothing for OBS-backed tools on
+            # its own: ObsClient caches its JWT independently and, without
+            # this, would keep reusing the old token (tied to the now-dead
+            # session) until its TTL happens to expire on its own.
+            self._obs._jwt = None
+            self._obs._jwt_obtained_at = None
         return {
             "authenticated": True,
             "session": session,
