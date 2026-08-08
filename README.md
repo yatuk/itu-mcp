@@ -3,7 +3,7 @@
 <div align="center">
 
   <p>
-    <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/logo.gif" alt="İTÜ MCP" width="120" />
+    <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/logo.gif" alt="İTÜ MCP" width="220" />
   </p>
 
   <h1>İTÜ MCP</h1>
