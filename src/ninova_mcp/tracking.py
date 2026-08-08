@@ -24,7 +24,20 @@ def load_tracking_state(path: Path) -> dict[str, Any]:
             "updates": [],
         }
 
-    document = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A write killed mid-flight (crash, kill -9) can leave a truncated
+        # file. Treating that the same as "no tracking state yet" matches
+        # session_store.load_session's handling of the same failure mode,
+        # and is safer than hard-failing every subsequent sync/get_updates
+        # call until someone manually deletes the file.
+        return {
+            "version": TRACKING_STATE_VERSION,
+            "last_sync_at": None,
+            "courses": {},
+            "updates": [],
+        }
     return {
         "version": document.get("version", TRACKING_STATE_VERSION),
         "last_sync_at": document.get("last_sync_at"),
@@ -34,11 +47,16 @@ def load_tracking_state(path: Path) -> dict[str, Any]:
 
 
 def save_tracking_state(path: Path, state: dict[str, Any]) -> None:
+    # Write-then-rename so a crash mid-write leaves the old file intact
+    # instead of a truncated one load_tracking_state would otherwise choke
+    # on — same pattern as session_store.save_session.
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
         json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    tmp.replace(path)
 
 
 def _stable_json(value: Any) -> str:

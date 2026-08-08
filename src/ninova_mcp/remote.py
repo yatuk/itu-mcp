@@ -27,6 +27,8 @@ from .server import (
     SERVER_VERSION,
     NinovaMcpApp,
     apply_server_version,
+    register_prompts,
+    register_resources,
     register_tools,
 )
 
@@ -101,6 +103,11 @@ def _build_fastmcp(app_logic: NinovaMcpApp, mount_path: str) -> FastMCP:
 
     apply_server_version(mcp)
     register_tools(mcp, app_logic, REMOTE_TOOL_NAMES)
+    # Prompts and resources are read-only text/JSON with no filesystem or
+    # write access, so unlike the excluded tools they are safe to expose on
+    # the hosted transport as-is.
+    register_prompts(mcp)
+    register_resources(mcp)
 
     # Keep the mounted path on the instance for observability/debug logs if needed.
     mcp.mount_path = mount_path  # type: ignore[attr-defined]

@@ -14,6 +14,62 @@ class GpaTests(unittest.TestCase):
         self.assertEqual(LETTER_TO_GRADE["FF"], 0.00)
         self.assertIsNone(LETTER_TO_GRADE.get("GE"))
 
+    def test_vf_counts_as_zero(self) -> None:
+        """VF is a failing grade, not an exemption: it must weigh on the GPA.
+
+        It used to be absent from the table, so `.get("VF")` returned None and
+        the course was dropped entirely — silently inflating the average.
+        """
+        self.assertEqual(LETTER_TO_GRADE["VF"], 0.00)
+        result = calculate_gpa([
+            {"code": "AAA 101", "credit": 3, "grade": "AA"},
+            {"code": "BBB 102", "credit": 3, "grade": "VF"},
+        ])
+        # (3*4.0 + 3*0.0) / 6 = 2.00 — the VF credits stay in the denominator.
+        self.assertEqual(result["gpa"], 2.00)
+        self.assertEqual(result["total_credits"], 6.0)
+        self.assertEqual(result["graded_course_count"], 2)
+
+    def test_vf_is_flagged_for_retake(self) -> None:
+        result = calculate_gpa([{"code": "BBB 102", "credit": 3, "grade": "VF"}])
+        self.assertEqual([c["code"] for c in result["ff_risk"]], ["BBB 102"])
+        self.assertIn("tekrar", result["ff_risk"][0]["note"])
+
+    def test_non_counting_grades_still_excluded(self) -> None:
+        """GE/KF/IA stay out of the average — only VF moved buckets."""
+        result = calculate_gpa([
+            {"code": "AAA 101", "credit": 3, "grade": "AA"},
+            {"code": "CCC 103", "credit": 3, "grade": "GE"},
+        ])
+        self.assertEqual(result["gpa"], 4.00)
+        self.assertEqual(result["total_credits"], 3.0)
+
+    def test_plus_grade_coefficients_match_official_table(self) -> None:
+        """İTÜ bağıl değerlendirme yönetmeliği Tablo 1'deki katsayılar.
+
+        DD+/DC+/CC+/CB+/BB+/BA+ (AA'nın üstü ve FF'nin altı yok) tabloda
+        yoktu; her biri gerçek OBS verisinde geçen bir not ve `.get()` None
+        döndürdüğünden dersi calculate_gpa'da tamamen düşürüyordu — VF ile
+        aynı sınıf hata, ama daha sık rastlanan bir notta.
+        """
+        expected = {
+            "DD+": 1.25, "DC+": 1.75, "CC+": 2.25,
+            "CB+": 2.75, "BB+": 3.25, "BA+": 3.75,
+        }
+        for grade, coefficient in expected.items():
+            with self.subTest(grade=grade):
+                self.assertEqual(LETTER_TO_GRADE[grade], coefficient)
+
+    def test_plus_grade_is_not_silently_dropped(self) -> None:
+        result = calculate_gpa([{"code": "X 101", "credit": 4, "grade": "BA+"}])
+        self.assertEqual(result["gpa"], 3.75)
+        self.assertEqual(result["graded_course_count"], 1)
+        self.assertEqual(result["ungraded"], [])
+
+    def test_plus_grade_low_end_flagged_as_low_grade(self) -> None:
+        result = calculate_gpa([{"code": "X 101", "credit": 3, "grade": "DC+"}])
+        self.assertIn("Düşük not", result["courses"][0]["note"])
+
     def test_calculate_gpa_basic(self) -> None:
         courses = [
             {"code": "MAT 103E", "credit": 5, "grade": "AA"},

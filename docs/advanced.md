@@ -97,6 +97,7 @@ export NINOVA_REMOTE_API_KEY="$(openssl rand -hex 32)"   # recommended
 export NINOVA_REMOTE_REQUIRE_API_KEY="1"                 # refuse start without key
 export NINOVA_REMOTE_RATE_LIMIT="60"                     # max MCP requests / window
 export NINOVA_REMOTE_RATE_WINDOW_SECONDS="60"
+export NINOVA_REMOTE_TRUST_PROXY_HEADERS="1"             # only if genuinely behind a proxy
 export NINOVA_PUBLIC_BASE_URL="https://itu-mcp.example.com"
 export NINOVA_ALLOWED_HOSTS="itu-mcp.example.com"
 export NINOVA_ALLOWED_ORIGINS="https://claude.ai,https://claude.com"
@@ -111,7 +112,10 @@ requests must send `Authorization: Bearer <key>` or `X-API-Key: <key>`. OAuth is
 not implemented — treat API key + secret path as the shared secret.
 
 Rate limiting (default 60 req / 60s per client IP) applies to the MCP path. Disable with
-`NINOVA_REMOTE_DISABLE_RATE_LIMIT=1` if needed.
+`NINOVA_REMOTE_DISABLE_RATE_LIMIT=1` if needed. The connecting socket's IP is used unless
+`NINOVA_REMOTE_TRUST_PROXY_HEADERS=1` is set — only turn that on if a real reverse proxy sits
+in front of the server, since `X-Forwarded-For` is otherwise a client-supplied header anyone
+can rotate to dodge the limit.
 
 > **Privacy warning:** a hosted remote server means whoever uses it sends their İTÜ
 > credentials to *your* server. Prefer the local stdio setup for anyone but yourself.
@@ -144,7 +148,7 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 - `auth_status` — check whether credentials exist and a fresh Ninova session can be created.
 - `refresh_session` — force a new login with the configured credentials.
 - `get_dashboard` — read `/Kampus1` and summarize sections, recent items, and courses.
-- `list_courses` / `get_courses` — return the discovered courses from the dashboard (TTL-cached; `refresh` bypasses cache).
+- `list_courses` — return the discovered courses from the dashboard (TTL-cached; `refresh` bypasses cache).
 - `get_course_announcements` — announcements for a course (code, title, path, or URL).
 - `get_course_class_files` — structured entries from `Sınıf Dosyaları`, optionally recursive.
 - `get_course_lesson_files` — structured entries from `Ders Dosyaları`, optionally recursive.
@@ -208,7 +212,9 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - `obs_get_course_grades` / `obs_get_attendance` — per class (`sinifId` or course code)
 - `obs_get_schedule` — weekly + final calendar
 - `obs_get_graduation_remaining` — remaining courses / debts
-- `obs_download_transcript` — save transcript PDF under state dir
+- `obs_download_transcript` — save transcript PDF under state dir; writes to a caller-supplied
+  directory, so like `download_resource`/`snapshot_page` it is not exposed by the remote HTTP
+  transport
 
 ### Portal and derived planning tools
 
@@ -219,6 +225,11 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - `obs_get_help_tickets(query, limit)` / `obs_get_cloud_quota`
 - `obs_calculate_gpa(projected_grades)` — projected values override existing grades
 - `calculate_target_gpa` — aggregate target-GPA estimate without reading OBS
+- `estimate_relative_grade(class_scores, my_score)` — likely letter grade under İTÜ's
+  bağıl değerlendirme rules, by both official methods (T-score against an example
+  class-level table, and mean ± standard-deviation multiples); pure local computation,
+  no OBS call. The example table is exactly that — an example — so treat the result as
+  a planning estimate, not the official grade.
 - `check_course_conflicts` — scans one or more department codes
 - `get_personal_exam_calendar` — authenticated student's official final calendar
 
@@ -283,6 +294,35 @@ a year, and this surfaces that without a separate lookup.
 
 The archive client uses its own cookie-free session and a single-host HTTPS allowlist derived
 from `ITU_ARCHIVE_BASE_URL`.
+
+### Prompts
+
+User-invoked templates (the `/` menu in Claude Desktop). They are not triggered by the
+model on its own — each one names a tool chain and restates the rules that are easy to
+misread in these tools' output.
+
+- `weekly_briefing(days="14")` — upcoming deadlines + recent activity; splits on
+  `is_fully_uploaded`
+- `plan_next_term()` — `plan_remaining_courses` → eligibility → open sections → conflicts
+- `check_course_eligibility(course_code)` — forces `prerequisite_status`, `cross_check`
+  and `archive_seasonality` to be reported together
+- `research_course(course)` — archive history; forces `coverage` to be reported
+- `gpa_scenario(target_gpa="", projected="")` — current GPA, what-if, target average
+
+Prompt arguments arrive as strings over the wire regardless of annotation, so every
+builder parses its own input and falls back to a default on garbage.
+
+### Resources
+
+Static reference tables only — no network, no credentials, no per-student state.
+
+- `itu://reference/grade-scale` — letter-grade coefficients, grades excluded from the
+  GPA, failing grades, and the GPA comment bands
+- `itu://reference/program-types` — valid `program_type` values (LS/LU/ÖL/LUİ) and their
+  accepted aliases, so callers stop discovering them by triggering an error
+
+Both are concrete resources (no URI templates) and are registered on both the stdio and
+remote HTTP transports.
 
 ### Library tools
 

@@ -19,7 +19,7 @@ from mcp.client.stdio import stdio_client
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def _handshake() -> tuple[str, str, list[str], bool]:
+async def _handshake() -> tuple[str, str, list[str], bool, list[str], list[str]]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
     # Dummy credentials: initialize/tools-list/auth_status never hit the network.
@@ -38,12 +38,30 @@ async def _handshake() -> tuple[str, str, list[str], bool]:
             tools = await session.list_tools()
             names = [tool.name for tool in tools.tools]
             result = await session.call_tool("auth_status", {})
-            return init.serverInfo.name, init.protocolVersion, names, result.isError
+            prompts = await session.list_prompts()
+            prompt_names = [prompt.name for prompt in prompts.prompts]
+            resources = await session.list_resources()
+            resource_uris = [str(resource.uri) for resource in resources.resources]
+            return (
+                init.serverInfo.name,
+                init.protocolVersion,
+                names,
+                result.isError,
+                prompt_names,
+                resource_uris,
+            )
 
 
 class ServerProtocolTests(unittest.TestCase):
     def test_initialize_list_tools_and_call(self) -> None:
-        name, protocol_version, tool_names, auth_is_error = asyncio.run(_handshake())
+        (
+            name,
+            protocol_version,
+            tool_names,
+            auth_is_error,
+            prompt_names,
+            resource_uris,
+        ) = asyncio.run(_handshake())
 
         self.assertEqual(name, "itu-mcp")
         self.assertTrue(protocol_version)  # SDK negotiates a real MCP version
@@ -73,6 +91,13 @@ class ServerProtocolTests(unittest.TestCase):
 
         # auth_status returns cleanly (credentials present but not authenticated).
         self.assertFalse(auth_is_error)
+
+        # Prompts and resources are advertised over the real protocol, not just
+        # registered in-process.
+        for expected in ("plan_next_term", "check_course_eligibility", "research_course"):
+            self.assertIn(expected, prompt_names)
+        self.assertIn("itu://reference/grade-scale", resource_uris)
+        self.assertIn("itu://reference/program-types", resource_uris)
 
 
 if __name__ == "__main__":

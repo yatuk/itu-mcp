@@ -8,17 +8,26 @@ from __future__ import annotations
 
 from typing import Any
 
-# İTÜ lisans harf notu → 4'lük katsayı
-LETTER_TO_GRADE: dict[str, float] = {
+# İTÜ lisans harf notu → 4'lük katsayı.
+# None, "kredisi sayılabilir ama GANO'ya katılmaz" demek; 0.00 ise gerçek bir
+# başarısızlık notu ve ortalamayı aşağı çeker.
+LETTER_TO_GRADE: dict[str, float | None] = {
     "AA": 4.00,
+    "BA+": 3.75,  # İTÜ bağıl değerlendirme yönetmeliği Tablo 1 — ara ("+") notlar
     "BA": 3.50,
+    "BB+": 3.25,
     "BB": 3.00,
+    "CB+": 2.75,
     "CB": 2.50,
+    "CC+": 2.25,
     "CC": 2.00,
+    "DC+": 1.75,
     "DC": 1.50,
+    "DD+": 1.25,
     "DD": 1.00,
     "FD": 0.50,
     "FF": 0.00,
+    "VF": 0.00,  # Devamsızlıktan kalma — FF gibi 0.00 sayılır, tekrar gerekir
     # Yüksek lisans
     "BL": 0.00,  # Başarısız (lisansüstü)
     "BZ": 0.00,  # Başarısız (lisansüstü)
@@ -110,10 +119,10 @@ def calculate_gpa(
         }
 
         # Risk flags
-        if grade == "FF":
-            detail["note"] = "FF — dersten kalındı, tekrar alınması gerekir."
+        if grade in ("FF", "VF"):
+            detail["note"] = f"{grade} — dersten kalındı, tekrar alınması gerekir."
             ff_risk.append(detail)
-        elif grade in ("FD", "DD", "DC"):
+        elif grade in ("FD", "DD", "DD+", "DC", "DC+"):
             detail["note"] = "Düşük not — GANO'yu aşağı çekebilir."
 
         details.append(detail)

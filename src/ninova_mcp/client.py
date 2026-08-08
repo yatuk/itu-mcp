@@ -76,7 +76,7 @@ class NinovaClient:
         if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "ninova.itu.edu.tr":
             raise NinovaError("NINOVA_BASE_URL must be https://ninova.itu.edu.tr")
         self.credentials = NinovaCredentials.from_env()
-        self.session = self._build_session()
+        self._replace_session()
         self.last_login_at: str | None = None
         self.login_method: str | None = None
         self._min_request_interval = _request_delay_seconds()
@@ -90,6 +90,19 @@ class NinovaClient:
         session.headers.update(DEFAULT_HEADERS)
         return session
 
+    def _replace_session(self) -> None:
+        """Swap in a fresh session, closing the old one's connection pool.
+
+        ``requests.Session`` has no ``__del__``, so a discarded session's
+        pooled connections are only released deterministically via an
+        explicit close — otherwise they linger until GC gets to them, which
+        matters on a long-lived server re-logging in repeatedly.
+        """
+        old_session = getattr(self, "session", None)
+        self.session = self._build_session()
+        if old_session is not None:
+            old_session.close()
+
     def _try_restore_session(self) -> bool:
         restored = load_session(
             self.session_path,
@@ -98,7 +111,7 @@ class NinovaClient:
         )
         if restored is None:
             return False
-        self.session = self._build_session()
+        self._replace_session()
         for cookie in restored["jar"]:
             self.session.cookies.set_cookie(cookie)
         # Soft mark; ensure_logged_in(verify=True) / first get will re-login if dead.
@@ -202,7 +215,7 @@ class NinovaClient:
 
     def login(self, force: bool = False) -> dict[str, Any]:
         if force:
-            self.session = self._build_session()
+            self._replace_session()
             self._clear_persisted_session()
             self.last_login_at = None
             self.login_method = None
@@ -310,7 +323,7 @@ class NinovaClient:
                     raise NinovaAuthError(f"Ninova login failed: {error_text}") from exc
 
                 cookies = context.cookies()
-                self.session = self._build_session()
+                self._replace_session()
                 for cookie in cookies:
                     self.session.cookies.set(
                         cookie["name"],

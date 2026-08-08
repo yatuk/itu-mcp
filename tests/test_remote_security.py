@@ -32,6 +32,80 @@ class RemoteSecurityUnitTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertGreaterEqual(retry, 1)
 
+    def test_prune_empty_drops_fully_expired_client_keys(self) -> None:
+        """Without pruning, every distinct client key ever seen (including a
+        spoofed X-Forwarded-For value) leaves a permanent dict entry.
+
+        window_seconds is clamped to a 1s minimum by the constructor, so
+        time.monotonic is faked forward past the window instead of actually
+        sleeping.
+        """
+        from unittest.mock import patch
+
+        limiter = RateLimiter(max_requests=5, window_seconds=1)
+        with patch("ninova_mcp.remote_security.time.monotonic", return_value=1000.0):
+            limiter.allow("stale-client")
+        with patch("ninova_mcp.remote_security.time.monotonic", return_value=1002.0):
+            limiter.prune_empty()
+        self.assertNotIn("stale-client", limiter._hits)
+
+    def test_prune_empty_keeps_active_client_keys(self) -> None:
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+        limiter.allow("active-client")
+        limiter.prune_empty()
+        self.assertIn("active-client", limiter._hits)
+
+    def test_allow_prunes_periodically_on_its_own(self) -> None:
+        from unittest.mock import patch
+
+        limiter = RateLimiter(max_requests=1000, window_seconds=1)
+        with patch("ninova_mcp.remote_security.time.monotonic", return_value=1000.0):
+            limiter.allow("stale-client")
+        # Enough further calls (from other keys, now safely past the window)
+        # to cross the periodic prune threshold without calling
+        # prune_empty() directly.
+        with patch("ninova_mcp.remote_security.time.monotonic", return_value=1002.0):
+            for i in range(RateLimiter._PRUNE_EVERY + 1):
+                limiter.allow(f"other-{i}")
+        self.assertNotIn("stale-client", limiter._hits)
+
+    def test_forwarded_for_is_ignored_by_default(self) -> None:
+        """X-Forwarded-For is caller-supplied and unverifiable unless the
+        server is actually behind a trusted proxy; trusting it by default
+        both lets a client rotate the header to dodge rate limiting and
+        inflates the limiter's key space without bound.
+        """
+        from ninova_mcp.remote_security import RemoteSecurityMiddleware
+
+        middleware = RemoteSecurityMiddleware.__new__(RemoteSecurityMiddleware)
+
+        class _FakeClient:
+            host = "203.0.113.9"
+
+        class _FakeRequest:
+            headers = {"x-forwarded-for": "198.51.100.1"}
+            client = _FakeClient()
+
+        self.assertEqual(middleware._client_key(_FakeRequest()), "203.0.113.9")
+
+    def test_forwarded_for_is_used_when_trusted(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from ninova_mcp.remote_security import RemoteSecurityMiddleware
+
+        middleware = RemoteSecurityMiddleware.__new__(RemoteSecurityMiddleware)
+
+        class _FakeClient:
+            host = "203.0.113.9"
+
+        class _FakeRequest:
+            headers = {"x-forwarded-for": "198.51.100.1, 10.0.0.1"}
+            client = _FakeClient()
+
+        with patch.dict(os.environ, {"NINOVA_REMOTE_TRUST_PROXY_HEADERS": "1"}):
+            self.assertEqual(middleware._client_key(_FakeRequest()), "198.51.100.1")
+
     def test_extract_api_key_headers(self) -> None:
         async def run() -> None:
             scope = {

@@ -26,6 +26,20 @@ class CliTests(unittest.TestCase):
         self.assertIn("list_courses", output)
         self.assertIn("get_upcoming_deadlines", output)
 
+    def test_list_prompts(self) -> None:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main(["--list-prompts"])
+        output = buf.getvalue()
+        self.assertIn("plan_next_term", output)
+        self.assertIn("check_course_eligibility", output)
+
+    def test_list_resources(self) -> None:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main(["--list-resources"])
+        self.assertIn("itu://reference/grade-scale", buf.getvalue())
+
     def test_check_auth_missing_credentials(self) -> None:
         import os
         import tempfile

@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -19,6 +20,8 @@ from .env import load_ninova_env
 from .archive_client import ItuArchiveClient, ItuArchiveError
 from .community_data import CrossCheckDataClient, CrossCheckDataError
 from .graduation import summarize_graduation_plan
+from .prompts import PROMPT_NAMES, PROMPTS
+from .resources import RESOURCE_URIS, RESOURCES
 from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
 from .public_client import ItuPublicClient
 from .library_client import LibraryClient
@@ -62,7 +65,7 @@ from .text_extract import (
 from .tracking import diff_course_snapshots, load_tracking_state, merge_updates, save_tracking_state, utc_now_iso
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.7.1"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
@@ -122,6 +125,18 @@ class NinovaMcpApp:
         self._library: LibraryClient | None = None
         self._archive: ItuArchiveClient | None = None
         self._prereq_crosscheck: CrossCheckDataClient | None = None
+        # One lock for every lazy client property below. The remote HTTP
+        # transport dispatches these synchronous tool methods to a thread
+        # pool, so two concurrent requests can otherwise both observe a
+        # None client and each construct their own — each running its own
+        # independent login, with whichever assignment lands last silently
+        # orphaning the other's session (a leak) while callers still holding
+        # the orphaned reference continue against a disconnected cookie jar.
+        # Contention is negligible since this only runs once per client.
+        # RLock, not Lock: obs's property constructs its client while still
+        # holding the lock, and does so by reading self.client — which would
+        # otherwise try to re-acquire the same lock on the same thread.
+        self._client_lock = threading.RLock()
         state_root = os.getenv("NINOVA_STATE_DIR") or str(Path.home() / ".ninova_state")
         self.state_dir = Path(state_root)
         self.snapshot_dir = self.state_dir / "snapshots"
@@ -137,45 +152,59 @@ class NinovaMcpApp:
     @property
     def client(self) -> NinovaClient:
         if self._client is None:
-            self._client = NinovaClient()
+            with self._client_lock:
+                if self._client is None:
+                    self._client = NinovaClient()
         return self._client
 
     @property
     def obs(self) -> ObsClient:
         if self._obs is None:
-            self._obs = ObsClient(ninova_client=self.client)
+            with self._client_lock:
+                if self._obs is None:
+                    self._obs = ObsClient(ninova_client=self.client)
         return self._obs
 
     @property
     def obs_public(self) -> ObsPublicClient:
         if self._obs_public is None:
-            # Public OBS tools must work without credentials and must not send
-            # authenticated SSO cookies to no-auth endpoints.
-            self._obs_public = ObsPublicClient()
+            with self._client_lock:
+                if self._obs_public is None:
+                    # Public OBS tools must work without credentials and must
+                    # not send authenticated SSO cookies to no-auth endpoints.
+                    self._obs_public = ObsPublicClient()
         return self._obs_public
 
     @property
     def itu_public(self) -> ItuPublicClient:
         if self._itu_public is None:
-            self._itu_public = ItuPublicClient()
+            with self._client_lock:
+                if self._itu_public is None:
+                    self._itu_public = ItuPublicClient()
         return self._itu_public
 
     @property
     def library(self) -> LibraryClient:
         if self._library is None:
-            self._library = LibraryClient()
+            with self._client_lock:
+                if self._library is None:
+                    self._library = LibraryClient()
         return self._library
 
     @property
     def archive(self) -> ItuArchiveClient:
         if self._archive is None:
-            self._archive = ItuArchiveClient()
+            with self._client_lock:
+                if self._archive is None:
+                    self._archive = ItuArchiveClient()
         return self._archive
 
     @property
     def prereq_crosscheck(self) -> CrossCheckDataClient:
         if self._prereq_crosscheck is None:
-            self._prereq_crosscheck = CrossCheckDataClient()
+            with self._client_lock:
+                if self._prereq_crosscheck is None:
+                    self._prereq_crosscheck = CrossCheckDataClient()
         return self._prereq_crosscheck
 
     def invalidate_caches(self) -> None:
@@ -279,9 +308,6 @@ class NinovaMcpApp:
         if dashboard.get("parse_warning"):
             result["parse_warning"] = dashboard["parse_warning"]
         return result
-
-    def get_courses(self, refresh: bool = False) -> dict[str, Any]:
-        return self.list_courses(refresh=refresh)
 
     @staticmethod
     def _looks_like_authenticated_dashboard(page_data: dict[str, Any], html: str) -> bool:
@@ -1153,11 +1179,24 @@ class NinovaMcpApp:
         # grade is not in yet, which silently drops them from the weighted
         # average and makes what-if projections wrong. The degree-plan endpoint
         # carries the real credit for the same courses, so use it as a fallback.
-        plan_credits = self._plan_credit_lookup()
+        #
+        # Separately, observed on at least one account: this endpoint's
+        # harfNotu comes back None for every course in every term, including
+        # terms years in the past — not just "not graded yet". When that
+        # happens the tool would otherwise silently compute gpa=None every
+        # time. Fall back to the same graduation-remaining payload for
+        # grades too, scoped to this term's donemKodu: a retaken course has
+        # one entry per attempt with a different grade each time, so a
+        # code-only lookup (fine for credit, which doesn't vary by attempt)
+        # would risk picking the wrong attempt's grade here.
+        graduation_info = self._fetch_graduation_info()
+        plan_credits = self._plan_credit_lookup(graduation_info)
+        plan_grades = self._plan_grade_lookup(graduation_info, resolved.get("donemKodu"))
 
         courses: list[dict[str, Any]] = []
         credit_fallbacks: list[str] = []
         missing_credits: list[str] = []
+        grade_fallbacks: list[str] = []
         for item in registered:
             code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
             credit = item.get("kredi")
@@ -1174,12 +1213,23 @@ class NinovaMcpApp:
                     credit_fallbacks.append(code)
                 else:
                     missing_credits.append(code)
+
+            grade = item.get("harfNotu")
+            grade_source = "registration"
+            if not grade:
+                fallback_grade = plan_grades.get(normalize_lookup_text(code))
+                if fallback_grade:
+                    grade = fallback_grade
+                    grade_source = "degree_plan"
+                    grade_fallbacks.append(code)
+
             courses.append({
                 "code": code,
                 "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
                 "credit": credit,
                 "credit_source": credit_source,
-                "grade": item.get("harfNotu"),
+                "grade": grade,
+                "grade_source": grade_source,
                 "crn": item.get("crn"),
             })
 
@@ -1196,19 +1246,32 @@ class NinovaMcpApp:
                 "Bu dersler için hiçbir kaynakta kredi bulunamadı; ortalamaya 0 kredi "
                 "ile girdiler."
             )
+        if grade_fallbacks:
+            result["grade_fallback_courses"] = grade_fallbacks
+            result["grade_fallback_note"] = (
+                "Bu derslerin notu kayıt kaydında boş geldi; not mezuniyet durumu "
+                "(MezuniyetimeNeKaldi) verisinden, bu döneme ait kayıttan alındı."
+            )
         return result
 
-    def _plan_credit_lookup(self) -> dict[str, float]:
-        """Map normalised course code → credit from the student's degree plan.
+    def _fetch_graduation_info(self) -> dict[str, Any]:
+        """Fetch and unwrap the MezuniyetimeNeKaldi payload once.
 
-        ``MezuniyetimeNeKaldi`` lists every plan course with ``kredisiDec``,
-        including courses that are registered but not yet graded.
+        Shared by _plan_credit_lookup and _plan_grade_lookup so
+        obs_calculate_gpa hits this endpoint once per call, not twice.
         """
         try:
             graduation = self.obs.get_graduation_remaining(self.obs.default_program_id())
         except (ObsError, NinovaError):
             return {}
-        info = graduation.get("mezuniyetimeNeKaldiBilgi") or {}
+        return graduation.get("mezuniyetimeNeKaldiBilgi") or {}
+
+    def _plan_credit_lookup(self, info: dict[str, Any]) -> dict[str, float]:
+        """Map normalised course code → credit from the student's degree plan.
+
+        ``MezuniyetimeNeKaldi`` lists every plan course with ``kredisiDec``,
+        including courses that are registered but not yet graded.
+        """
         lookup: dict[str, float] = {}
         for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
             for item in info.get(bucket) or []:
@@ -1222,6 +1285,29 @@ class NinovaMcpApp:
                     continue
                 if code and numeric > 0:
                     lookup.setdefault(normalize_lookup_text(code), numeric)
+        return lookup
+
+    def _plan_grade_lookup(self, info: dict[str, Any], donem_kodu: str | None) -> dict[str, str]:
+        """Map normalised course code → official letter grade for one term.
+
+        Fallback source for obs_calculate_gpa when the registered-courses
+        endpoint's own harfNotu is empty. Scoped to a single term
+        (``donem_kodu``, e.g. "202410") rather than returning one grade per
+        code globally: a retaken course appears once per attempt with a
+        different grade each time, and this must not silently return the
+        wrong attempt's grade for the term actually being asked about.
+        """
+        if not donem_kodu:
+            return {}
+        lookup: dict[str, str] = {}
+        for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
+            for item in info.get(bucket) or []:
+                if str(item.get("donem") or "") != str(donem_kodu):
+                    continue
+                code = str(item.get("bransKodu") or "").strip()
+                grade = str(item.get("harfNotu") or "").strip()
+                if code and grade:
+                    lookup[normalize_lookup_text(code)] = grade
         return lookup
 
     def calculate_target_gpa(
@@ -1240,6 +1326,22 @@ class NinovaMcpApp:
             target_gpa=target_gpa,
             future_credits=future_credits,
         )
+
+    def estimate_relative_grade(
+        self,
+        class_scores: list[float],
+        my_score: float,
+    ) -> dict[str, Any]:
+        """Estimate a likely letter grade under İTÜ's relative-grading rules.
+
+        Pure local computation — no OBS/network call. Uses both official
+        methods from İTÜ's bağıl değerlendirme yönetmeliği: Method 1 (T-score
+        against the example class-level table) and Method 2 (mean ± standard
+        deviation multiples). This is an estimate, not the official grade.
+        """
+        from .relative_grading import estimate_relative_grade
+
+        return estimate_relative_grade(class_scores=class_scores, my_score=my_score)
 
     def check_course_conflicts(
         self,
@@ -2733,7 +2835,10 @@ class NinovaMcpApp:
         page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
         payload = make_snapshot_payload(page_data, label=label)
         snapshot_path = self._snapshot_path(page_data["url"], label=label)
-        snapshot_path.write_text(
+        # Write-then-rename: a crash mid-write must not leave a truncated
+        # file that a later diff_snapshot scan would trip over.
+        tmp_path = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
+        tmp_path.write_text(
             json.dumps(
                 {
                     "captured_at": datetime.now(tz=UTC).isoformat(),
@@ -2744,6 +2849,7 @@ class NinovaMcpApp:
             ),
             encoding="utf-8",
         )
+        tmp_path.replace(snapshot_path)
         return {
             "snapshot_path": str(snapshot_path),
             "url": page_data["url"],
@@ -2774,14 +2880,22 @@ class NinovaMcpApp:
     ) -> SnapshotReference:
         if snapshot_path:
             path = Path(snapshot_path).expanduser().resolve()
-            payload = json.loads(path.read_text(encoding="utf-8"))["snapshot"]
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))["snapshot"]
+            except (OSError, json.JSONDecodeError, KeyError) as exc:
+                raise NinovaError(f"Snapshot file is unreadable or corrupt: {path}") from exc
             return SnapshotReference(path=path, payload=payload)
 
         candidates = sorted(self.snapshot_dir.glob("*.json"), reverse=True)
         normalized_url = normalize_url(url, self.client.base_url)
         for candidate in candidates:
-            document = json.loads(candidate.read_text(encoding="utf-8"))
-            snapshot = document["snapshot"]
+            try:
+                document = json.loads(candidate.read_text(encoding="utf-8"))
+                snapshot = document["snapshot"]
+            except (OSError, json.JSONDecodeError, KeyError):
+                # A corrupt snapshot from an interrupted write shouldn't stop
+                # the scan from finding a good one among the rest.
+                continue
             if snapshot.get("url") != normalized_url:
                 continue
             if label is not None and snapshot.get("label") != label:
@@ -3310,22 +3424,6 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_courses",
-        "title": "Get Courses",
-        "description": "Return all courses visible in the Ninova dashboard (alias of list_courses).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "refresh": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Bypass the course list cache and re-fetch the dashboard.",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
         "name": "get_course_announcements",
         "title": "Get Course Announcements",
         "description": "Return announcements for a specific Ninova course.",
@@ -3471,7 +3569,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_course_grades",
         "title": "Get Course Grades",
-        "description": "Read the Ninova 'Notlar' page for a course.",
+        "description": (
+            "Read the Ninova 'Notlar' page for a course — grades as the instructor entered "
+            "them in the LMS, not the official transcript record. For the official letter/"
+            "midterm grade, use obs_get_course_grades instead."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -3514,7 +3616,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_course_attendance",
         "title": "Get Course Attendance",
-        "description": "Read the Ninova 'Yoklama' page for a course.",
+        "description": (
+            "Read the Ninova 'Yoklama' page for a course — attendance as the instructor "
+            "recorded it in the LMS, not the official OBS record. For official attendance "
+            "with an absence-risk summary, use obs_get_attendance instead."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -4038,7 +4144,12 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_course_grades",
         "title": "OBS Course Grades",
-        "description": "Read midterm and/or letter grades for an OBS class (by sinifId or course code).",
+        "description": (
+            "Read the official midterm and/or letter grades for an OBS class (by sinifId or "
+            "course code) — the authoritative record. For grades as entered in the Ninova "
+            "LMS by the instructor, which can differ before the official record is updated, "
+            "use get_course_grades instead."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -4057,7 +4168,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_attendance",
         "title": "OBS Attendance",
-        "description": "Read attendance for an OBS class. Includes computed absence-risk summary by default.",
+        "description": (
+            "Read the official attendance record for an OBS class, with a computed "
+            "absence-risk summary by default. For attendance as recorded in the Ninova LMS "
+            "by the instructor, use get_course_attendance instead."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -4172,8 +4287,9 @@ TOOLS: list[dict[str, Any]] = [
         "name": "obs_get_course_prerequisites",
         "title": "OBS Course Prerequisites",
         "description": (
-            "Query prerequisite and postrequisite relationships for a course "
-            "from the OBS public catalog. Supports chain queries up to 10 levels deep."
+            "Public, no login required. Query prerequisite and postrequisite relationships "
+            "for a course from the OBS public catalog. Supports chain queries up to 10 "
+            "levels deep."
         ),
         "inputSchema": {
             "type": "object",
@@ -4243,6 +4359,43 @@ TOOLS: list[dict[str, Any]] = [
                 "future_credits": {"type": "number", "exclusiveMinimum": 0},
             },
             "required": ["current_gpa", "current_credits", "target_gpa", "future_credits"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "estimate_relative_grade",
+        "title": "Estimate Relative Grade",
+        "description": (
+            "Estimate a likely letter grade from raw class scores under İTÜ's relative-"
+            "grading (bağıl değerlendirme) rules, using both official methods: Method 1 "
+            "(T-score against Table 1, an EXAMPLE class-level table from the regulation — "
+            "the actual instructor may use different T-score cutoffs) and Method 2 (mean ± "
+            "standard-deviation multiples, Table 2, a fixed formula with no table lookup). "
+            "This is an estimate for planning purposes only, not the official grade. "
+            "class_scores must be every student's raw 0-100 score who counts toward the "
+            "relative-grading average (VF students are excluded from that average per the "
+            "regulation and must not be included here)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "class_scores": {
+                    "type": "array",
+                    "items": {"type": "number", "minimum": 0, "maximum": 100},
+                    "minItems": 2,
+                    "description": (
+                        "Raw 0-100 scores of every student counted toward the class "
+                        "average (exclude VF students)."
+                    ),
+                },
+                "my_score": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Your own raw 0-100 score.",
+                },
+            },
+            "required": ["class_scores", "my_score"],
             "additionalProperties": False,
         },
     },
@@ -4861,6 +5014,10 @@ REMOTE_EXCLUDED_TOOLS = {
     "read_page",
     "library_renew_loan",
     "library_reserve_item",
+    # Writes to a caller-supplied output_dir on the host filesystem, same as
+    # download_resource/snapshot_page above — belongs in the same exclusion
+    # for the same reason.
+    "obs_download_transcript",
 }
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS
@@ -4899,6 +5056,43 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
         )
 
 
+def register_prompts(mcp: Any) -> None:
+    """Register the user-invoked prompt templates on a FastMCP instance.
+
+    Prompts carry no per-request state, so unlike tools they need no app
+    instance. Both transports call this so the stdio and HTTP servers expose
+    the same prompt list.
+    """
+    from mcp.server.fastmcp.prompts.base import Prompt
+
+    for meta in PROMPTS:
+        mcp.add_prompt(
+            Prompt.from_function(
+                meta["builder"],
+                name=meta["name"],
+                title=meta.get("title"),
+                description=meta.get("description"),
+            )
+        )
+
+
+def register_resources(mcp: Any) -> None:
+    """Register the static reference resources on a FastMCP instance."""
+    from mcp.server.fastmcp.resources import FunctionResource
+
+    for meta in RESOURCES:
+        mcp.add_resource(
+            FunctionResource.from_function(
+                meta["builder"],
+                uri=meta["uri"],
+                name=meta.get("name"),
+                title=meta.get("title"),
+                description=meta.get("description"),
+                mime_type="application/json",
+            )
+        )
+
+
 def apply_server_version(mcp: Any, version: str = SERVER_VERSION) -> None:
     """Report our package version in the MCP ``serverInfo`` handshake.
 
@@ -4927,6 +5121,8 @@ def build_stdio_server(app: NinovaMcpApp | None = None) -> Any:
     mcp = FastMCP(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     apply_server_version(mcp)
     register_tools(mcp, app, LOCAL_TOOL_NAMES)
+    register_prompts(mcp)
+    register_resources(mcp)
     return mcp
 
 
@@ -4955,6 +5151,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print registered local tool names and exit.",
     )
+    parser.add_argument(
+        "--list-prompts",
+        action="store_true",
+        help="Print registered prompt names and exit.",
+    )
+    parser.add_argument(
+        "--list-resources",
+        action="store_true",
+        help="Print registered resource URIs and exit.",
+    )
     return parser
 
 
@@ -4966,6 +5172,16 @@ def main(argv: list[str] | None = None) -> None:
     if args.list_tools:
         for name in LOCAL_TOOL_NAMES:
             print(name)
+        return
+
+    if args.list_prompts:
+        for name in PROMPT_NAMES:
+            print(name)
+        return
+
+    if args.list_resources:
+        for uri in RESOURCE_URIS:
+            print(uri)
         return
 
     if args.check_auth:

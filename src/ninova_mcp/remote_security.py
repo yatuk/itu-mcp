@@ -64,10 +64,17 @@ def api_key_matches(provided: str | None, expected: str | None) -> bool:
 class RateLimiter:
     """In-memory sliding-window rate limiter (single process)."""
 
+    # A key just touched by allow() always ends up with a fresh, non-empty
+    # bucket, so per-key self-cleanup can't catch keys that go quiet — only a
+    # periodic sweep across all keys can. Amortized by running it every N
+    # calls rather than on every one.
+    _PRUNE_EVERY = 128
+
     def __init__(self, *, max_requests: int, window_seconds: float) -> None:
         self.max_requests = max(1, int(max_requests))
         self.window_seconds = max(1.0, float(window_seconds))
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._calls_since_prune = 0
 
     def allow(self, key: str) -> tuple[bool, int]:
         now = time.monotonic()
@@ -77,9 +84,37 @@ class RateLimiter:
             bucket.popleft()
         if len(bucket) >= self.max_requests:
             retry_after = int(max(1.0, self.window_seconds - (now - bucket[0])))
+            self._maybe_prune()
             return False, retry_after
         bucket.append(now)
+        self._maybe_prune()
         return True, 0
+
+    def _maybe_prune(self) -> None:
+        self._calls_since_prune += 1
+        if self._calls_since_prune < self._PRUNE_EVERY:
+            return
+        self._calls_since_prune = 0
+        self.prune_empty()
+
+    def prune_empty(self) -> None:
+        """Drop dict entries for clients whose bucket has fully expired.
+
+        Every distinct client key (IP, or a forwarded-for value) that ever
+        calls ``allow`` creates a dict entry that would otherwise never be
+        removed, even long after that client stops connecting — trivially
+        amplified by an unvalidated spoofed forwarded-for header (see
+        ``_client_key``).
+        """
+        now = time.monotonic()
+        window_start = now - self.window_seconds
+        stale = [
+            key
+            for key, bucket in self._hits.items()
+            if not bucket or bucket[-1] < window_start
+        ]
+        for key in stale:
+            del self._hits[key]
 
 
 def build_rate_limiter_from_env() -> RateLimiter | None:
@@ -120,9 +155,14 @@ class RemoteSecurityMiddleware(BaseHTTPMiddleware):
         self.public_paths = {"/", "/healthz"}
 
     def _client_key(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",", 1)[0].strip()
+        # X-Forwarded-For is caller-supplied and unverifiable unless the
+        # server actually sits behind a proxy that sets it — trusting it by
+        # default lets a client rotate the header to bypass rate limiting
+        # entirely, and inflates the limiter's key space without bound.
+        if _env_flag("NINOVA_REMOTE_TRUST_PROXY_HEADERS", default=False):
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                return forwarded.split(",", 1)[0].strip()
         if request.client:
             return request.client.host or "unknown"
         return "unknown"
