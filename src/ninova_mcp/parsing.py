@@ -1155,6 +1155,21 @@ def extract_attendance(html: str, page_url: str, base_url: str) -> dict[str, Any
             attendance_table = table
             break
 
+    # Ninova pages show attendance from two independent systems (native Ninova
+    # and Kepler) under separate headings; instructors may use either one, and
+    # the page itself warns the two can disagree. Report which table this data
+    # actually came from so callers don't mistake Kepler data for a native
+    # Ninova record.
+    source_system = None
+    if attendance_table is not None:
+        if attendance_table is _table_after_heading(soup, "Kepler Yoklama Bilgileri"):
+            source_system = "kepler"
+        elif attendance_table is _table_after_heading(soup, "Ninova Yoklama Bilgileri"):
+            source_system = "ninova"
+
+    disclaimer_tag = soup.find(class_="uyari")
+    disclaimer = clean_text(disclaimer_tag.get_text(" ", strip=True)) if disclaimer_tag else None
+
     headers: list[str] = []
     weeks: list[dict[str, Any]] = []
     total_present = 0
@@ -1188,6 +1203,8 @@ def extract_attendance(html: str, page_url: str, base_url: str) -> dict[str, Any
     return {
         "url": page["url"],
         "student_name": student_name,
+        "source_system": source_system,
+        "disclaimer": disclaimer,
         "headers": headers,
         "count": len(weeks),
         "weeks": weeks,
@@ -1545,6 +1562,8 @@ def extract_course_schedule_table(
                 ]
             elif eligible_text and eligible_text != "-":
                 eligible_programs = [p.strip() for p in eligible_text.split(",") if p.strip()]
+        # OBS sometimes repeats the same program code in this cell's source text.
+        eligible_programs = list(dict.fromkeys(eligible_programs))
 
         # Ders Önşartları: "Detay" link or "-"
         detay_url = None

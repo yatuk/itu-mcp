@@ -15,6 +15,19 @@ def _cell_texts(row: Tag) -> list[str]:
     return [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["th", "td"], recursive=False)]
 
 
+def _cell_text_br_joined(cell: Tag) -> str:
+    """Join a cell's text, treating <br/> as an explicit " / " separator.
+
+    Without this, multi-value cells (e.g. two exam locations separated by
+    <br/>) collapse into an ambiguous space-joined string that reads as one
+    run-on value.
+    """
+    inner = cell.decode_contents() if hasattr(cell, "decode_contents") else str(cell)
+    parts_html = re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)
+    parts = [clean_text(re.sub(r"<[^>]+>", "", part)) for part in parts_html]
+    return " / ".join(part for part in parts if part)
+
+
 def _table_matrix(table: Tag) -> list[list[str]]:
     return [cells for row in table.find_all("tr") if (cells := _cell_texts(row))]
 
@@ -71,7 +84,7 @@ def extract_final_exam_schedule(html: str, page_url: str) -> dict[str, Any]:
             cells = row.find_all("td", recursive=False)
             if not cells:
                 continue
-            values = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+            values = [_cell_text_br_joined(cell) for cell in cells]
             if not any(values):
                 continue
             item: dict[str, Any] = {}

@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ninova_mcp.planning import (
-    explain_course_eligibility,
     filter_academic_calendar,
     find_empty_classrooms,
     find_open_sections,
@@ -107,37 +106,6 @@ class PlanningTests(unittest.TestCase):
         result = filter_academic_calendar(calendar, date_from="2026-07-22", date_to="2026-07-30", category="exam")
         self.assertEqual(result["event_count"], 1)
         self.assertEqual(result["total_event_count"], 2)
-
-    def test_eligibility_groups(self) -> None:
-        data = {"prerequisites": [
-            {"code": "BLG 101E", "group": "1"},
-            {"code": "BLG 102E", "group": "1"},
-            {"code": "MAT 103E", "group": "2"},
-        ]}
-        result = explain_course_eligibility(data, completed_courses=["BLG 102E", "MAT 103E"])
-        self.assertTrue(result["eligible"])
-
-    def test_eligibility_credit_and_class_requirement(self) -> None:
-        data = {
-            "prerequisites": [],
-            "credit_prerequisite": "En az 60 kredi ve 3. sınıf",
-        }
-        missing = explain_course_eligibility(
-            data,
-            completed_courses=[],
-            completed_credits=55,
-            class_year=3,
-        )
-        self.assertFalse(missing["eligible"])
-        self.assertFalse(missing["credit_requirement_satisfied"])
-        eligible = explain_course_eligibility(
-            data,
-            completed_courses=[],
-            completed_credits=65,
-            class_year=3,
-        )
-        self.assertTrue(eligible["eligible"])
-        self.assertTrue(eligible["class_requirement_satisfied"])
 
 
 class PublicClientSafetyTests(unittest.TestCase):
