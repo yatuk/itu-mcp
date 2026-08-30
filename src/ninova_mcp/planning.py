@@ -128,7 +128,9 @@ def find_empty_classrooms(
             for session in course.get("sessions") or []:
                 room = str(session.get("room") or "").strip()
                 session_building = str(session.get("building") or "").strip()
-                if not room or normalize_lookup_text(room) in {"online", "cevrimici", "-"}:
+                if not room or normalize_lookup_text(room) in {"online", "cevrimici", "-", "--"}:
+                    continue
+                if normalize_lookup_text(session_building) in {"", "-", "undeclared"}:
                     continue
                 if building_key and building_key not in normalize_lookup_text(session_building):
                     continue
@@ -156,81 +158,4 @@ def find_empty_classrooms(
         ],
         "departments_scanned": [schedule.get("department_code") for schedule in schedules],
         "coverage_notice": "Boşluk tahmini yalnızca taranan bölüm programlarında görülen dersliklere dayanır; rezervasyonları kapsamaz.",
-    }
-
-
-def explain_course_eligibility(
-    prerequisite_data: dict[str, Any],
-    *,
-    completed_courses: list[str],
-    completed_credits: float | None = None,
-    class_year: int | None = None,
-) -> dict[str, Any]:
-    completed = {normalize_lookup_text(code) for code in completed_courses}
-    prerequisites = prerequisite_data.get("prerequisites") or []
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for index, item in enumerate(prerequisites):
-        group = str(item.get("group") or f"requirement-{index + 1}")
-        groups.setdefault(group, []).append(item)
-
-    group_results: list[dict[str, Any]] = []
-    for group, options in groups.items():
-        evaluated = [
-            {**option, "completed": normalize_lookup_text(option.get("code")) in completed}
-            for option in options
-        ]
-        # OBS group numbers represent alternatives inside a group; separate
-        # groups are cumulative. Preserve the raw type so callers can audit it.
-        satisfied = any(option["completed"] for option in evaluated)
-        group_results.append({"group": group, "satisfied": satisfied, "options": evaluated, "logic": "OR"})
-
-    credit_requirement = prerequisite_data.get("credit_prerequisite")
-    requirement_key = normalize_lookup_text(credit_requirement) if credit_requirement else ""
-    credit_satisfied: bool | None = None
-    class_satisfied: bool | None = None
-    credit_required = False
-    class_required = False
-    if credit_requirement:
-        import re
-
-        credit_match = re.search(
-            r"(\d+(?:[.,]\d+)?)\s*(?:basarilmis\s+|basarilan\s+)?kredi",
-            requirement_key,
-        )
-        class_match = re.search(r"(\d+)\s*(?:inci|nci|uncu|\.?)?\s*sinif", requirement_key)
-        credit_required = credit_match is not None
-        class_required = class_match is not None
-        if credit_match and completed_credits is not None:
-            credit_satisfied = completed_credits >= float(credit_match.group(1).replace(",", "."))
-        if class_match and class_year is not None:
-            class_satisfied = class_year >= int(class_match.group(1))
-
-    checks: list[bool] = [bool(group["satisfied"]) for group in group_results]
-    if credit_satisfied is not None:
-        checks.append(credit_satisfied)
-    if class_satisfied is not None:
-        checks.append(class_satisfied)
-    unknown_requirements = (
-        (credit_required and credit_satisfied is None)
-        or (class_required and class_satisfied is None)
-    )
-    if any(not check for check in checks):
-        eligible: bool | None = False
-    elif unknown_requirements:
-        eligible = None
-    else:
-        eligible = True
-    return {
-        "eligible": eligible,
-        "eligibility_status": (
-            "eligible" if eligible is True else "ineligible" if eligible is False else "unknown"
-        ),
-        "prerequisite_groups": group_results,
-        "credit_requirement": credit_requirement,
-        "credit_requirement_satisfied": credit_satisfied,
-        "class_requirement_satisfied": class_satisfied,
-        "completed_credits": completed_credits,
-        "class_year": class_year,
-        "missing_groups": [group for group in group_results if not group["satisfied"]],
-        "interpretation_notice": "Sonuç OBS önşart gruplarını grup içinde VEYA, gruplar arasında VE olarak yorumlar; resmî kayıt kararı OBS'nindir.",
     }
