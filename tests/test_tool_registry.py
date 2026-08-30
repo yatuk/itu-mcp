@@ -18,7 +18,13 @@ from __future__ import annotations
 import inspect
 import unittest
 
-from ninova_mcp.server import LOCAL_TOOL_NAMES, TOOLS, NinovaMcpApp, register_tools
+from ninova_mcp.server import (
+    LOCAL_TOOL_NAMES,
+    MAIL_TOOL_NAMES,
+    TOOLS,
+    NinovaMcpApp,
+    register_tools,
+)
 
 _EMPTY = inspect.Parameter.empty
 _VARARGS_KINDS = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
@@ -117,6 +123,57 @@ class ToolRegistrationTests(unittest.TestCase):
         destructive = fake.registered["submit_assignment"]
         self.assertFalse(destructive.readOnlyHint)
         self.assertTrue(destructive.destructiveHint)
+
+    def test_attachment_tool_uses_mixed_mcp_content(self) -> None:
+        class FakeMcp:
+            def __init__(self) -> None:
+                self.kwargs: dict[str, object] = {}
+
+            def add_tool(self, fn: object, **kwargs: object) -> None:
+                del fn
+                self.kwargs = kwargs
+
+        fake = FakeMcp()
+        register_tools(fake, NinovaMcpApp(), ["mail_get_attachment"])
+        self.assertFalse(fake.kwargs["structured_output"])
+
+    def test_all_mail_tools_are_annotated_read_only(self) -> None:
+        class FakeMcp:
+            def __init__(self) -> None:
+                self.registered: dict[str, object] = {}
+
+            def add_tool(self, fn: object, **kwargs: object) -> None:
+                del fn
+                self.registered[str(kwargs["name"])] = kwargs["annotations"]
+
+        fake = FakeMcp()
+        register_tools(fake, NinovaMcpApp(), sorted(MAIL_TOOL_NAMES))
+        for annotations in fake.registered.values():
+            self.assertTrue(annotations.readOnlyHint)
+            self.assertFalse(annotations.destructiveHint)
+            self.assertTrue(annotations.idempotentHint)
+
+    def test_attachment_image_becomes_text_and_image_content(self) -> None:
+        from mcp.server.fastmcp.utilities.types import Image
+        from mcp.types import TextContent
+
+        class FakeMail:
+            def get_attachment(self, uid: str, part_id: str, *, max_chars: int):
+                del uid, part_id, max_chars
+                return {
+                    "kind": "image",
+                    "content_type": "image/png",
+                    "filename": "diagram.png",
+                    "untrusted_external_content": True,
+                    "image_bytes": b"png bytes",
+                }
+
+        app = NinovaMcpApp()
+        app._mail = FakeMail()  # type: ignore[assignment]
+        result = app.mail_get_attachment("1", "2")
+        self.assertIsInstance(result[0], TextContent)
+        self.assertIsInstance(result[1], Image)
+        self.assertEqual(result[1].to_image_content().mimeType, "image/png")
 
 
 class ToolSignatureConsistencyTests(unittest.TestCase):

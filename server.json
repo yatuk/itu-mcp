@@ -32,6 +32,19 @@
           "isSecret": true
         },
         {
+          "name": "NINOVA_MAIL_USERNAME",
+          "description": "Optional separate ITU Mail username",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "NINOVA_MAIL_PASSWORD",
+          "description": "Optional separate ITU Mail password",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
           "name": "NINOVA_LIBRARY_NAME",
           "description": "Kütüphane hesabındaki ad (hesap araçları için isteğe bağlı)",
           "isRequired": false,

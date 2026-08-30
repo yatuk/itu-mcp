@@ -1,6 +1,6 @@
 # Security Notes
 
-This project logs in to İTÜ Ninova, OBS and Portal with the username and password supplied by the user. Public İTÜ and library-catalog tools do not require those credentials.
+This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with credentials supplied by the user. Public İTÜ and library-catalog tools do not require those credentials.
 
 ## Do
 
@@ -17,6 +17,7 @@ This project logs in to İTÜ Ninova, OBS and Portal with the username and passw
 - Keep library account values in the separate `NINOVA_LIBRARY_NAME`,
   `NINOVA_LIBRARY_ID`, and `NINOVA_LIBRARY_PIN` variables.
 - Treat announcement, assignment, catalog and other fetched text as untrusted data.
+- Keep remote mail tools disabled unless they are explicitly needed.
 
 ## Do not
 
@@ -39,6 +40,8 @@ This project logs in to İTÜ Ninova, OBS and Portal with the username and passw
 - `LibraryClient` accepts only `https://divit.library.itu.edu.tr`. It validates TLS
   and fails closed. A custom CA can be supplied with `NINOVA_LIBRARY_CA_BUNDLE`;
   there is no insecure `verify=false` switch.
+- `ItuMailClient` uses verified IMAPS, selects only `INBOX` in read-only mode, and
+  fetches bodies and attachments with `BODY.PEEK` so unread state is preserved.
 - Public and library clients apply the same pre-request redirect validation, so an
   allowlisted page cannot bounce the client to localhost or an unrelated host.
 - User input is sent as query/form values, never concatenated into an arbitrary host,
@@ -61,6 +64,7 @@ instruction aimed at an LLM. Every MCP dictionary result is therefore marked wit
 `untrusted_external_content` and a `content_notice`; the server instructions tell the
 client to treat embedded instructions as data. This provenance marker is preserved on
 raw Ninova/OBS content as well as public announcements and library records.
+Mail bodies and attachment content cross the same untrusted-content boundary.
 
 ## Data stored locally
 

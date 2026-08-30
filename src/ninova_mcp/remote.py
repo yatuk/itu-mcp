@@ -21,6 +21,7 @@ from .remote_security import (
     configured_api_key,
 )
 from .server import (
+    MAIL_TOOL_NAMES,
     REMOTE_TOOL_NAMES,
     SERVER_INSTRUCTIONS,
     SERVER_NAME,
@@ -43,6 +44,27 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def _split_csv_env(name: str) -> list[str]:
     value = os.getenv(name, "")
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _selected_remote_tool_names() -> list[str]:
+    available = [
+        name
+        for name in REMOTE_TOOL_NAMES
+        if _env_flag("NINOVA_REMOTE_ENABLE_MAIL", default=False)
+        or name not in MAIL_TOOL_NAMES
+    ]
+    configured = _split_csv_env("NINOVA_REMOTE_ALLOWED_TOOLS")
+    if not configured:
+        return available
+
+    unknown = sorted(set(configured) - set(available))
+    if unknown:
+        raise RuntimeError(
+            "NINOVA_REMOTE_ALLOWED_TOOLS contains unknown, disabled, or "
+            "remote-excluded tools: " + ", ".join(unknown)
+        )
+    allowed = set(configured)
+    return [name for name in available if name in allowed]
 
 
 def _normalize_mount_path(value: str | None, default: str) -> str:
@@ -102,7 +124,7 @@ def _build_fastmcp(app_logic: NinovaMcpApp, mount_path: str) -> FastMCP:
     )
 
     apply_server_version(mcp)
-    register_tools(mcp, app_logic, REMOTE_TOOL_NAMES)
+    register_tools(mcp, app_logic, _selected_remote_tool_names())
     # Prompts and resources are read-only text/JSON with no filesystem or
     # write access, so unlike the excluded tools they are safe to expose on
     # the hosted transport as-is.
