@@ -5029,6 +5029,18 @@ REMOTE_EXCLUDED_TOOLS = {
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS
 ]
+STATEFUL_TOOL_NAMES = {
+    "refresh_session",
+    "sync_all_courses",
+    "get_upcoming_deadlines",
+    "download_resource",
+    "snapshot_page",
+    "obs_download_transcript",
+    "submit_assignment",
+    "library_renew_loan",
+    "library_reserve_item",
+}
+DESTRUCTIVE_TOOL_NAMES = {"submit_assignment"}
 
 
 def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
@@ -5037,6 +5049,8 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
     Both the local stdio server and the remote HTTP server go through this so
     the two transports always expose the same tool contract.
     """
+    from mcp.types import ToolAnnotations
+
     metadata = {tool["name"]: tool for tool in TOOLS}
     for name in tool_names:
         fn = getattr(app, name)
@@ -5059,6 +5073,13 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
             name=name,
             title=meta.get("title"),
             description=meta.get("description"),
+            annotations=ToolAnnotations(
+                title=meta.get("title"),
+                readOnlyHint=name not in STATEFUL_TOOL_NAMES,
+                destructiveHint=name in DESTRUCTIVE_TOOL_NAMES,
+                idempotentHint=name not in STATEFUL_TOOL_NAMES,
+                openWorldHint=True,
+            ),
             structured_output=True,
         )
 

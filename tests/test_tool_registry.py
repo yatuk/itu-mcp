@@ -18,7 +18,7 @@ from __future__ import annotations
 import inspect
 import unittest
 
-from ninova_mcp.server import LOCAL_TOOL_NAMES, TOOLS, NinovaMcpApp
+from ninova_mcp.server import LOCAL_TOOL_NAMES, TOOLS, NinovaMcpApp, register_tools
 
 _EMPTY = inspect.Parameter.empty
 _VARARGS_KINDS = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
@@ -90,6 +90,33 @@ class ToolRegistrationTests(unittest.TestCase):
             with self.subTest(tool=name):
                 self.assertTrue(hasattr(NinovaMcpApp, name), f"no NinovaMcpApp.{name}")
                 self.assertTrue(callable(getattr(app, name)))
+
+    def test_registration_includes_safety_annotations(self) -> None:
+        class FakeMcp:
+            def __init__(self) -> None:
+                self.registered: dict[str, object] = {}
+
+            def add_tool(self, fn: object, **kwargs: object) -> None:
+                del fn
+                self.registered[str(kwargs["name"])] = kwargs["annotations"]
+
+        fake = FakeMcp()
+        register_tools(fake, NinovaMcpApp(), ["auth_status", "sync_all_courses", "submit_assignment"])
+
+        read = fake.registered["auth_status"]
+        self.assertTrue(read.readOnlyHint)
+        self.assertFalse(read.destructiveHint)
+        self.assertTrue(read.idempotentHint)
+        self.assertTrue(read.openWorldHint)
+
+        stateful = fake.registered["sync_all_courses"]
+        self.assertFalse(stateful.readOnlyHint)
+        self.assertFalse(stateful.destructiveHint)
+        self.assertFalse(stateful.idempotentHint)
+
+        destructive = fake.registered["submit_assignment"]
+        self.assertFalse(destructive.readOnlyHint)
+        self.assertTrue(destructive.destructiveHint)
 
 
 class ToolSignatureConsistencyTests(unittest.TestCase):
