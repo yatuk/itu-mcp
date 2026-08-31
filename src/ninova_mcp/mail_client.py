@@ -33,6 +33,20 @@ _ALLOWED_ATTACHMENT_TYPES = {
     "image/jpeg": {".jpg", ".jpeg"},
     "image/png": {".png"},
 }
+_IMAP_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
 
 
 class ItuMailError(RuntimeError):
@@ -279,7 +293,10 @@ def _image_dimensions(data: bytes, content_type: str) -> tuple[int, int]:
     raise ItuMailError("Could not read safe JPEG dimensions from the attachment.")
 
 
-def _validate_attachment_identity(part: Message, data: bytes) -> tuple[str, str]:
+def _validate_attachment_identity(
+    part: Message,
+    data: bytes,
+) -> tuple[str, str, tuple[int, int] | None]:
     content_type = part.get_content_type().casefold()
     filename = _decode_header_value(part.get_filename(), max_chars=500)
     disposition = (part.get_content_disposition() or "").casefold()
@@ -291,12 +308,18 @@ def _validate_attachment_identity(part: Message, data: bytes) -> tuple[str, str]
     if not filename or not any(lowered.endswith(ext) for ext in _ALLOWED_ATTACHMENT_TYPES[content_type]):
         raise ItuMailError("Attachment filename extension does not match the safe type allowlist.")
 
+    image_dimensions = None
     if content_type == "application/pdf":
         if not data.startswith(b"%PDF-"):
             raise ItuMailError("Attachment bytes do not match the declared PDF type.")
     else:
-        _image_dimensions(data, content_type)
-    return filename, content_type
+        image_dimensions = _image_dimensions(data, content_type)
+    return filename, content_type, image_dimensions
+
+
+def _format_imap_search_date(value: datetime) -> str:
+    month = _IMAP_MONTHS[value.month - 1]
+    return f"{value.day:02d}-{month}-{value.year:04d}"
 
 
 def _extract_pdf_text(data: bytes, *, max_chars: int) -> dict[str, Any]:
@@ -430,7 +453,7 @@ class ItuMailClient:
         criteria: list[str] = ["UNSEEN" if unread_only else "ALL"]
         if since_days:
             since = datetime.now(UTC) - timedelta(days=since_days)
-            criteria.extend(["SINCE", since.strftime("%d-%b-%Y")])
+            criteria.extend(["SINCE", _format_imap_search_date(since)])
         status, data = connection.uid("SEARCH", None, *criteria)
         if status != "OK":
             raise ItuMailError("İTÜ Mail could not search the inbox.")
@@ -600,7 +623,7 @@ class ItuMailClient:
                 f"Attachment exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB safety limit."
             )
 
-        filename, content_type = _validate_attachment_identity(part, data)
+        filename, content_type, image_dimensions = _validate_attachment_identity(part, data)
         result: dict[str, Any] = {
             "mailbox": "INBOX",
             "read_only": True,
@@ -621,7 +644,9 @@ class ItuMailClient:
             result.update(_extract_pdf_text(data, max_chars=max_chars))
             return result
 
-        width, height = _image_dimensions(data, content_type)
+        if image_dimensions is None:
+            raise ItuMailError("Image attachment dimensions were not validated.")
+        width, height = image_dimensions
         if (
             width < 1
             or height < 1

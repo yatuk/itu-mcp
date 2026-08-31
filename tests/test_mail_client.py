@@ -5,10 +5,12 @@ import io
 import os
 import re
 import unittest
+from datetime import UTC, datetime
 from email import message_from_bytes, policy
 from email.message import EmailMessage
 from unittest.mock import patch
 
+import ninova_mcp.mail_client as mail_client
 from ninova_mcp.mail_client import ItuMailAuthError, ItuMailClient, ItuMailError
 
 
@@ -193,6 +195,11 @@ class ItuMailClientTests(unittest.TestCase):
         self.assertTrue(all("BODY.PEEK[HEADER.FIELDS" in str(call[2]) for call in fetches))
         self.assertTrue(all(call == ("INBOX", True) for call in fake.select_calls))
 
+    def test_imap_search_date_uses_fixed_english_month_name(self) -> None:
+        value = datetime(2026, 8, 31, tzinfo=UTC)
+
+        self.assertEqual(mail_client._format_imap_search_date(value), "31-Aug-2026")
+
     def test_get_message_extracts_plain_text_without_attachment_content(self) -> None:
         client, fake, _ = self.make_client()
         result = client.get_message("102", max_chars=5_000)
@@ -249,12 +256,18 @@ class ItuMailClientTests(unittest.TestCase):
         self.assertEqual(attachment["part_id"], "2")
         self.assertTrue(attachment["supported_for_safe_read"])
 
-        result = client.get_attachment("103", "2")
+        with patch.object(
+            mail_client,
+            "_image_dimensions",
+            wraps=mail_client._image_dimensions,
+        ) as image_dimensions:
+            result = client.get_attachment("103", "2")
         self.assertEqual(result["kind"], "image")
         self.assertEqual(result["content_type"], "image/png")
         self.assertEqual((result["width"], result["height"]), (2, 3))
         self.assertEqual(result["image_bytes"], _minimal_png())
         self.assertFalse(result["executed"])
+        image_dimensions.assert_called_once_with(_minimal_png(), "image/png")
         attachment_fetches = [
             call for call in fake.uid_calls if call[0] == "FETCH" and "BODY.PEEK[2" in str(call[2])
         ]
