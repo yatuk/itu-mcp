@@ -234,6 +234,7 @@ codex mcp add itu \
 - *"İTÜ mekik saatleri ve yüzme havuzu çalışma saatleri?"*<sup>✨</sup>
 - *"ÖDEK ve İKM'deki son duyuruları göster."*<sup>✨</sup>
 - *"Kütüphanede Introduction to Algorithms var mı?"*<sup>✨</sup>
+- *"Son okunmamış mesajlarımı listele ve seçtiğim PDF ekini özetle."*
 
 <sup>✨</sup> <sub>Kimlik gerektirmez, `.env` olmadan da çalışır.</sub>
 
@@ -275,6 +276,9 @@ codex mcp add itu \
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>explain_course_eligibility</code> · <code>library_*</code>
     </td>
+  </tr>
+  <tr>
+    <td colspan="4"><strong>ITU Mail (read-only):</strong> <code>mail_status</code> · <code>mail_list_inbox</code> · <code>mail_get_message</code> · <code>mail_get_attachment</code></td>
   </tr>
 </table>
 
@@ -356,6 +360,9 @@ export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS=3600
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS=60
 export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS=300
 export NINOVA_LIBRARY_CACHE_TTL_SECONDS=300
+# Optional separate mail credentials; shared credentials are used if omitted:
+# NINOVA_MAIL_USERNAME="name.surname@itu.edu.tr"
+# NINOVA_MAIL_PASSWORD="mail-password"
 # Kütüphane hesabı araçları için (public katalog araması bunları istemez):
 # NINOVA_LIBRARY_NAME="Soyad, Ad"
 # NINOVA_LIBRARY_ID="öğrenci-numarası"

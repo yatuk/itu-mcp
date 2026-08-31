@@ -33,7 +33,9 @@
       "env": {
         "PYTHONPATH": "${__dirname}/server/lib",
         "NINOVA_USERNAME": "${user_config.ninova_username}",
-        "NINOVA_PASSWORD": "${user_config.ninova_password}"
+        "NINOVA_PASSWORD": "${user_config.ninova_password}",
+        "NINOVA_MAIL_USERNAME": "${user_config.mail_username}",
+        "NINOVA_MAIL_PASSWORD": "${user_config.mail_password}"
       },
       "platform_overrides": {
         "win32": {
@@ -46,6 +48,22 @@
     {
       "name": "auth_status",
       "description": "Check whether Ninova credentials are configured and whether a fresh session can be created."
+    },
+    {
+      "name": "mail_status",
+      "description": "Check the verified-TLS, read-only İTÜ IMAP connection and return inbox counts."
+    },
+    {
+      "name": "mail_list_inbox",
+      "description": "List recent INBOX headers and UIDs without marking messages as read."
+    },
+    {
+      "name": "mail_get_message",
+      "description": "Read one bounded INBOX message without downloading attachments or changing unread state."
+    },
+    {
+      "name": "mail_get_attachment",
+      "description": "Inspect one bounded PDF, JPEG, or PNG attachment in memory without execution."
     },
     {
       "name": "refresh_session",
@@ -158,9 +176,22 @@
     "ninova_password": {
       "type": "string",
       "title": "İTÜ Şifresi",
-      "description": "İTÜ şifren. Cihazının güvenli anahtarlığında saklanır ve yalnızca ninova.itu.edu.tr'ye gönderilir.",
+      "description": "İTÜ şifren. Cihazının güvenli anahtarlığında saklanır ve yalnızca etkinleştirdiğin İTÜ hizmetlerine gönderilir.",
       "sensitive": true,
       "required": true
+    },
+    "mail_username": {
+      "type": "string",
+      "title": "ITU Mail Username",
+      "description": "Optional separate mail username; the shared ITU username is used when empty.",
+      "required": false
+    },
+    "mail_password": {
+      "type": "string",
+      "title": "ITU Mail Password",
+      "description": "Optional separate mail password; the shared ITU password is used when empty.",
+      "sensitive": true,
+      "required": false
     }
   },
   "compatibility": {

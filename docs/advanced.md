@@ -24,6 +24,9 @@ announcement and library-catalog tools work without them:
 ```dotenv
 NINOVA_USERNAME=your_username
 NINOVA_PASSWORD=your_password
+# Optional; mail tools fall back to the shared credentials above.
+NINOVA_MAIL_USERNAME=your_email
+NINOVA_MAIL_PASSWORD=your_mail_password
 ```
 
 The server reads them from the process environment. If a `.env` file exists in the
@@ -49,6 +52,9 @@ export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS="60" # capacity/schedule reads
 export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS="300"     # directory/SKS/news pages
 export NINOVA_LIBRARY_CACHE_TTL_SECONDS="300"
+export NINOVA_MAIL_HOST="imap.itu.edu.tr"
+export NINOVA_MAIL_PORT="993"
+export NINOVA_MAIL_TIMEOUT_SECONDS="15"
 export ITU_ARCHIVE_BASE_URL="https://yatuk.github.io/itu-archive/data"  # course archive
 export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates daily
 export PREREQ_CROSSCHECK_BASE_URL="<community pipe-delimited course feed URL>"
@@ -97,6 +103,8 @@ export NINOVA_REMOTE_API_KEY="$(openssl rand -hex 32)"   # recommended
 export NINOVA_REMOTE_REQUIRE_API_KEY="1"                 # refuse start without key
 export NINOVA_REMOTE_RATE_LIMIT="60"                     # max MCP requests / window
 export NINOVA_REMOTE_RATE_WINDOW_SECONDS="60"
+export NINOVA_REMOTE_ENABLE_MAIL="0"                   # explicit opt-in for mail tools
+export NINOVA_REMOTE_ALLOWED_TOOLS=""                  # optional comma-separated allowlist
 export NINOVA_REMOTE_TRUST_PROXY_HEADERS="1"             # only if genuinely behind a proxy
 export NINOVA_PUBLIC_BASE_URL="https://itu-mcp.example.com"
 export NINOVA_ALLOWED_HOSTS="itu-mcp.example.com"
@@ -146,6 +154,10 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 ## Exposed tools
 
 - `auth_status` — check whether credentials exist and a fresh Ninova session can be created.
+- `mail_status` — verify the read-only IMAPS connection and return inbox counts.
+- `mail_list_inbox` — list bounded message headers and UIDs without changing unread state.
+- `mail_get_message` — read one bounded text body and attachment metadata with `BODY.PEEK`.
+- `mail_get_attachment` — inspect one size-limited PDF, JPEG, or PNG attachment in memory.
 - `refresh_session` — force a new login with the configured credentials.
 - `get_dashboard` — read `/Kampus1` and summarize sections, recent items, and courses.
 - `list_courses` — return the discovered courses from the dashboard (TTL-cached; `refresh` bypasses cache).
@@ -182,6 +194,14 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - Set `NINOVA_ALLOW_UPLOADS=0` to disable uploads entirely.
 - Remote HTTP transport does **not** expose upload tools (local stdio only).
 - Always verify the target course/assignment/slot with the user before `confirm=true`.
+
+### Mail read-only scope
+
+Mail tools select only `INBOX` with `readonly=True` and fetch content with `BODY.PEEK`.
+They cannot send, delete, move, flag, or mark messages as read. Attachment inspection accepts
+only bounded PDF, JPEG, and PNG data and never executes files. Remote HTTP keeps all mail tools
+disabled unless `NINOVA_REMOTE_ENABLE_MAIL=1`; `NINOVA_REMOTE_ALLOWED_TOOLS` can further narrow
+the published tool set.
 
 ## Notes
 
