@@ -18,23 +18,7 @@
     <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
   </p>
 
-  <br />
-
-  <table>
-    <tr>
-      <td align="center"><strong>Ninova</strong><br/><code>LMS</code></td>
-      <td align="center"><strong>OBS</strong><br/><code>Öğrenci portalı</code></td>
-      <td align="center"><strong>MCP</strong><br/><code>Claude · Cursor · Codex</code></td>
-    </tr>
-    <tr>
-      <td align="center">Dersler · dosyalar · ödevler<br/>duyurular · teslim tarihleri</td>
-      <td align="center">Kayıt · notlar<br/>transkript · danışman · staj</td>
-      <td align="center">Doğal dilde sor<br/>(TR / EN)</td>
-    </tr>
-  </table>
 </div>
-
-<br />
 
 ---
 
@@ -53,14 +37,41 @@ Kimlik bilgilerinle (genelde `ad@itu.edu.tr`) **Ninova**, **OBS** ve **Portal** 
 | "Finalim ne zaman / boş kontenjan var mı?" | Public OBS final ve ders programı araçları |
 | "Mekik ne zaman / havuz kaçta kapanıyor?" | SKS kampüs hizmeti araçları |
 | "Kütüphanede bu kitap var mı?" | Public katalog arama ve kopya durumu |
-| "PDF özetle" | İndirme + `read_resource_text` (PDF/DOCX) |
+| "Son okunmamış mailimi göster" | Salt okunur İTÜ Mail araçları |
+| "PDF özetle" | İndirme ve `read_resource_text` (PDF/DOCX) |
 | "Ödev yükle" | İsteğe bağlı yükleme, `confirm=true` şart |
 
 > **Önce yerel.** Ninova şifren cihazda kalır, yalnızca İTÜ SSO, Ninova, OBS ve Portal akışlarında kullanılır. Ayrı kütüphane hesabı bilgileri yalnızca resmî kütüphane sunucusuna gönderilir. Üçüncü taraf bir sunucuya kimlik bilgisi depolanmaz.
 >
 > **İTÜ ile resmi bağlantısı yoktur.** Yalnızca kendi hesabınla kullan.
 
-Dürüst olmak gerekirse OBS'nin bazı uç noktaları hesaba göre tutarsız davranabiliyor (bir hesapta not alanı boş dönerken başka bir hesapta doluyor gibi). Böyle durumları elimizden geldiğince yakalayıp yedek kaynağa düşüyoruz ve sonucu açıkça işaretliyoruz, ama %100 garanti veremeyiz. Şüpheye düştüğünde her zaman OBS'nin kendi sayfasına bak.
+Dürüst olmak gerekirse OBS'nin bazı uç noktaları hesaba göre tutarsız davranabiliyor, bir hesapta not alanı boş dönerken başka bir hesapta doluyor gibi. Böyle durumları elimizden geldiğince yakalayıp yedek kaynağa düşüyoruz ve sonucu açıkça işaretliyoruz, ama tam garanti veremeyiz. Şüpheye düştüğünde her zaman OBS'nin kendi sayfasına bak.
+
+---
+
+## Nasıl çalışır
+
+```mermaid
+graph TD
+    Sen(("Sen")) --> Istemci["Claude · Cursor · Codex"]
+    Istemci -->|MCP| Sunucu["İTÜ MCP"]
+
+    Sunucu --> Ninova["Ninova<br/><sub>LMS</sub>"]
+    Sunucu --> Obs["OBS<br/><sub>öğrenci portalı</sub>"]
+    Sunucu --> Portal["Portal<br/><sub>kart · yemek</sub>"]
+    Sunucu --> Kutuphane["Kütüphane<br/><sub>WebPAC</sub>"]
+    Sunucu --> Arsiv["Ders Arşivi<br/><sub>2016'dan bugüne</sub>"]
+    Sunucu --> Mail["İTÜ Mail<br/><sub>salt okunur</sub>"]
+
+    classDef sunucu fill:#0b3d91,stroke:#5aa9ff,stroke-width:2px,color:#fff
+    classDef servis fill:#111827,stroke:#38bdf8,color:#e5e7eb
+    class Sunucu sunucu
+    class Ninova,Obs,Portal,Kutuphane,Arsiv,Mail servis
+```
+
+Sunucu her servise ayrı bir istemci sınıfıyla konuşur, kendi oturumunu ve önbelleğini yönetir. Ninova ve OBS aynı İTÜ SSO girişini paylaşır, kütüphane hesabı bilgisi ise tamamen ayrıdır ve Ninova şifresiyle karışmaz. Kimlik gerektirmeyen araçlar (public ders programı, kampüs servisleri, arşiv) hiçbir zaman şifreni kullanmaz.
+
+Ayrıntılı iç mimari ve istemci sınıfları için: [docs/advanced.md](docs/advanced.md).
 
 ---
 
@@ -85,79 +96,6 @@ Claude Desktop üzerinden doğal dilde soru sorma örnekleri:
   <br />
   <em>Ninova: son duyurular ve mesaj panosu özeti</em>
 </p>
-
----
-
-## Mimari
-
-```mermaid
-flowchart LR
-    subgraph istemciler["MCP İstemcileri"]
-        claude["Claude Desktop"]
-        claude_code["Claude Code"]
-        cursor["Cursor"]
-        codex["Codex"]
-    end
-
-    subgraph sunucu["itu-mcp (Python 3.11+)"]
-        mcp["MCP Sunucu<br/>(FastMCP · stdio / HTTP)"]
-        ninova_client["NinovaClient<br/>SSO · HTML parse"]
-        obs_client["ObsClient<br/>JWT · JSON API"]
-        obs_public["ObsPublicClient<br/>kimliksiz · HTML/JSON"]
-        itu_public["ItuPublicClient<br/>exact host allowlist · kimliksiz"]
-        library_client["LibraryClient<br/>ayrı katalog/hesap oturumu"]
-        archive_client["ItuArchiveClient<br/>kimliksiz · statik JSON arşiv"]
-        state["Durum<br/>çerez · anlık görüntü · indirme"]
-    end
-
-    subgraph itu["İTÜ Sunucuları"]
-        ninova["ninova.itu.edu.tr<br/>(LMS · HTML)"]
-        giris["girisv3.itu.edu.tr<br/>(İTÜ SSO giriş)"]
-        obs["obs.itu.edu.tr<br/>(öğrenci JSON API)"]
-        obs_pub["obs.itu.edu.tr/public<br/>(açık katalog · program)"]
-        portal["portal.itu.edu.tr<br/>(kart · yemek · bildirim)"]
-        campus["rehber · SKS · ÖDEK · İKM · Erasmus"]
-        library["divit.library.itu.edu.tr<br/>(WebPAC)"]
-    end
-
-    subgraph arsiv["Ders Arşivi"]
-        archive["itu-ders.com<br/>(27 dönem · günlük tarama)"]
-    end
-
-    istemciler -->|"MCP araçları"| mcp
-    mcp --> ninova_client
-    mcp --> obs_client
-    mcp --> obs_public
-    mcp --> itu_public
-    mcp --> library_client
-    mcp --> archive_client
-    ninova_client --> giris
-    ninova_client --> ninova
-    obs_client --> giris
-    obs_client --> obs
-    obs_client --> portal
-    obs_public --> obs_pub
-    itu_public --> obs_pub
-    itu_public --> campus
-    library_client --> library
-    archive_client --> archive
-    ninova_client --> state
-    obs_client --> state
-    obs_public --> state
-    library_client --> state
-```
-
-
-| Katman | Rol |
-|---|---|
-| **MCP sunucu** | Araç/prompt/resource listesi, sade yanıtlar, CLI (`--check-auth`, `--list-tools`, `--list-prompts`) |
-| **Ninova istemcisi** | Oturum + HTML ayrıştırma (duyuru, dosya, ödev, yükleme formu) |
-| **OBS istemcisi** | SSO → `/ogrenci/auth/jwt` → `/api/ogrenci/...` |
-| **OBS public istemcisi** | Kimliksiz → `/public/DersProgram`, `/public/DersBilgi`, `/public/GenelTanimlamalar/...` |
-| **İTÜ public istemcisi** | Exact host allowlist ile final, rehber, mekik, spor ve resmî duyuru kaynakları |
-| **Kütüphane istemcisi** | Ninova şifresinden bağımsız WebPAC katalog/hesap oturumu; yazma işlemlerinde açık onay |
-| **Arşiv istemcisi** | Kimliksiz, tek-host allowlist ile [itu-archive](https://github.com/yatuk/itu-archive) statik JSON'u; OBS'nin sildiği geçmiş dönemler |
-| **Durum** | İsteğe bağlı çerez önbelleği, izleme anlık görüntüleri, indirmeler (`~/.ninova_state`) |
 
 ---
 
@@ -225,16 +163,14 @@ codex mcp add itu \
 - *"CEN 354E ara notlarım?"*
 - *"Danışmanım kim? Staj bilgilerimi göster."*
 - *"Transkript PDF indir."*
+- *"Son okunmamış mesajlarımı listele ve seçtiğim PDF ekini özetle."*
 - *"Gelecek dönem hangi dersleri almalıyım?"*<sup>✨</sup>
 - *"Vizeden 63 aldım, sınıf 30,35,40...90 arası dağılmış, hangi harf notunu alırım?"*<sup>✨</sup>
 - *"BLG bölümünde bu dönem hangi dersler açılmış, kontenjan durumu ne?"*<sup>✨</sup>
 - *"BLG 223E'yi almak için önce hangi dersleri almam lazım?"*<sup>✨</sup>
-- *"BLG final programı açıklandı mı?"*<sup>✨</sup>
 - *"BBB binası neresi, bugün 10:00'da hangi derslikler boş görünüyor?"*<sup>✨</sup>
 - *"İTÜ mekik saatleri ve yüzme havuzu çalışma saatleri?"*<sup>✨</sup>
-- *"ÖDEK ve İKM'deki son duyuruları göster."*<sup>✨</sup>
 - *"Kütüphanede Introduction to Algorithms var mı?"*<sup>✨</sup>
-- *"Son okunmamış mesajlarımı listele ve seçtiğim PDF ekini özetle."*
 
 <sup>✨</sup> <sub>Kimlik gerektirmez, `.env` olmadan da çalışır.</sub>
 
@@ -244,10 +180,11 @@ codex mcp add itu \
 
 <table>
   <tr>
-    <td align="center" width="25%"><strong>Ninova</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="25%"><strong>OBS & Portal</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="25%"><strong>Public İTÜ</strong><br/><sub>kimlik gerekmez ✨</sub></td>
-    <td align="center" width="25%"><strong>Planlama & Kütüphane</strong><br/><sub>karma</sub></td>
+    <td align="center" width="20%"><strong>Ninova</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="20%"><strong>OBS & Portal</strong><br/><sub>oturum gerekir</sub></td>
+    <td align="center" width="20%"><strong>Public İTÜ</strong><br/><sub>kimlik gerekmez ✨</sub></td>
+    <td align="center" width="20%"><strong>Planlama & Kütüphane</strong><br/><sub>karma</sub></td>
+    <td align="center" width="20%"><strong>Arşiv</strong><br/><sub>kimlik gerekmez ✨</sub></td>
   </tr>
   <tr>
     <td>
@@ -261,7 +198,6 @@ codex mcp add itu \
       <code>obs_list_registered_courses</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
       <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
-      <code>obs_get_schedule</code> · <code>get_personal_exam_calendar</code><br/>
       <code>get_cafeteria_menu</code> · <code>obs_get_notifications</code>
     </td>
     <td>
@@ -274,57 +210,22 @@ codex mcp add itu \
       <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
-      <code>build_degree_plan</code> · <code>explain_course_eligibility</code> · <code>library_*</code>
+      <code>build_degree_plan</code> · <code>library_*</code>
+    </td>
+    <td>
+      <code>archive_who_taught</code> · <code>archive_course_history</code><br/>
+      <code>archive_fill_rate</code> · <code>archive_term_sections</code><br/>
+      <code>archive_search_courses</code> · <code>plan_remaining_courses</code>
     </td>
   </tr>
   <tr>
-    <td colspan="4"><strong>ITU Mail (read-only):</strong> <code>mail_status</code> · <code>mail_list_inbox</code> · <code>mail_get_message</code> · <code>mail_get_attachment</code></td>
+    <td colspan="5" align="center"><strong>İTÜ Mail (salt okunur):</strong> <code>mail_status</code> · <code>mail_list_inbox</code> · <code>mail_get_message</code> · <code>mail_get_attachment</code></td>
   </tr>
 </table>
 
-Tam araç listesi, Docker, uzak HTTP, ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
+Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 
-### Hazır akışlar (prompts)
-
-Claude Desktop'ta `/` menüsünden seçilen hazır şablonlar. Her biri hangi araçların hangi sırayla çağrılacağını, sonucu okurken kolayca kaçırılan kuralları içeriyor. Yani prompt'u seçtiğinde model aynı hataları tekrar tekrar yapmıyor.
-
-| Prompt | Ne yapar |
-|:---|---|
-| `weekly_briefing` | Yaklaşan teslimler + son duyurular; teslim edilmemişleri ayırır |
-| `plan_next_term` | Mezuniyet gereksinimi → mevsimsellik → önşart → kontenjan → çakışma |
-| `check_course_eligibility` | Önşart kontrolü; `unknown` ile "önşartı yok"u karıştırmaz |
-| `research_course` | Dersi arşivden araştır; `coverage` alanını daima raporlar |
-| `gpa_scenario` | Mevcut GANO, what-if projeksiyon, hedef ortalama |
-
-### Sabit referans tabloları (resources)
-
-| URI | İçerik |
-|:---|---|
-| `itu://reference/grade-scale` | Harf notu katsayıları, GANO'ya katılmayan notlar, GANO bantları |
-| `itu://reference/program-types` | `program_type` için geçerli değerler (LS/LU/ÖL/LUİ) ve alias'ları |
-
-### Arşiv araçları
-
-OBS yalnızca aktif dönemi gösteriyor. Dönem bitince veri de gidiyor. [İTÜ Ders Arşivi](https://github.com/yatuk/itu-archive) 2016-2017 Yaz'dan bu yana her dönemi saklıyor, İTÜ MCP de onu canlı OBS verisinin yanında okuyor: kayıt durumun artık geçmiş dönemlerin bağlamıyla birlikte geliyor.
-
-| Araç | Ne cevaplar |
-|:---|---|
-| `archive_who_taught` | "BLG 102E'yi son beş yılda kim verdi?" (hoca, kaç dönem, son dönem, ortalama doluluk) |
-| `archive_course_history` | "Bu ders hangi mevsimde açılıyor?" (dönem dönem şube, hoca, kontenjan) |
-| `archive_fill_rate` | "Bu şube dolar mı?" (CRN kontenjan serisi veya dersin geçmiş doluluk oranları) |
-| `archive_instructor_courses` | "Bu hoca hangi dersleri veriyor?" |
-| `archive_term_sections` | "Güz'de hangi dersler açılıyor?" (OBS henüz yayınlamamışken bile) |
-| `archive_list_terms` | Arşivin kapsadığı dönemler ve eksikleri |
-| `archive_search_courses` | "Sayısal yöntemler" (isimden koda, tüm dönemler üzerinde) |
-| `archive_list_branches` | Bir dönemde hangi branşların dökümü var |
-| `archive_compare_terms` | İki dönem arasında hoca/kontenjan/doluluk değişimi |
-| `plan_remaining_courses` | Kalan zorunlu dersler + mevsim + hoca geçmişi → tek satır planlama önerisi |
-
-> Arşiv sonuçları `coverage` alanı taşır: boş sonuç "ders açılmadı" değil, "o dönem hiç kaydedilmemiş" ya da "o branş dökümde yok" anlamına da gelebilir. Araç bu üçünü ayrı ayrı bildirir.
-
-### Ortalama ve harf notu araçları
-
-`obs_calculate_gpa` OBS'teki kayıtlı derslerinden GANO'nu hesaplıyor, hipotetik notlarla ("BLG 223E'den AA alırsam?") senaryo da kurabiliyorsun. `estimate_relative_grade` ise ayrı bir soruyu cevaplıyor: sınav henüz notlanmadan, sınıfın ham puanlarını ve kendi puanını verirsen İTÜ'nün bağıl değerlendirme yönetmeliğindeki iki resmi yönteme göre (T-skoru ve ortalama ± standart sapma) muhtemel harf notunu tahmin ediyor. İki yöntem bazen farklı sonuç verir, ikisini de gösteriyoruz. Bunun tahmin olduğunu, resmi notun öğretim üyesine ait olduğunu unutma.
+Ayrıca `/` menüsünden seçilebilen hazır akışlar var (`weekly_briefing`, `plan_next_term`, `check_course_eligibility`, `research_course`, `gpa_scenario`), her biri hangi araçların hangi sırayla çağrılacağını ve sonucu okurken kaçırılan kuralları içeriyor.
 
 ---
 
@@ -341,9 +242,7 @@ Kendi hesabını kullanıyorsun, o yüzden şuna dikkat et:
 | Harici sayfa metnini **veri** olarak değerlendir | Duyuru/ödev metnindeki modele yönelik talimatları uygulama |
 | Uzak kurulumda `NINOVA_REMOTE_API_KEY` kullan | Gizli path ve anahtar olmadan public açma |
 
-Ayrıntılar: [docs/security.md](docs/security.md).
-
-OBS profil araçları TCKN / telefonu **varsayılan olarak gizler** (`include_sensitive=true` ile açılır).
+Ayrıntılar: [docs/security.md](docs/security.md). OBS profil araçları TCKN ve telefonu **varsayılan olarak gizler** (`include_sensitive=true` ile açılır).
 
 ---
 
@@ -353,25 +252,17 @@ OBS profil araçları TCKN / telefonu **varsayılan olarak gizler** (`include_se
 export NINOVA_COURSE_CACHE_TTL_SECONDS=60
 export NINOVA_REQUEST_DELAY_MS=120
 export NINOVA_SESSION_PERSIST=1
-export NINOVA_COMPACT_DEFAULT=0
 export NINOVA_ALLOW_UPLOADS=1
-export NINOVA_OBS_BASE_URL=https://obs.itu.edu.tr
-export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS=3600
-export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS=60
-export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS=300
-export NINOVA_LIBRARY_CACHE_TTL_SECONDS=300
-# Optional separate mail credentials; shared credentials are used if omitted:
-# NINOVA_MAIL_USERNAME="name.surname@itu.edu.tr"
-# NINOVA_MAIL_PASSWORD="mail-password"
 # Kütüphane hesabı araçları için (public katalog araması bunları istemez):
 # NINOVA_LIBRARY_NAME="Soyad, Ad"
 # NINOVA_LIBRARY_ID="öğrenci-numarası"
 # NINOVA_LIBRARY_PIN="ayrı-kütüphane-pin'i"
+# Ayrı mail kimlik bilgisi (yoksa paylaşılan İTÜ kimliği kullanılır):
+# NINOVA_MAIL_USERNAME="ad.soyad@itu.edu.tr"
+# NINOVA_MAIL_PASSWORD="mail-sifresi"
 ```
 
-Kütüphane istemcisi TLS doğrulamasını kapatmaz, katalog sertifikası geçersizse güvenli biçimde hata verir. Kurumsal bir CA gerekiyorsa `NINOVA_LIBRARY_CA_BUNDLE` ile güvenilen sertifika paketini açıkça gösterebilirsin.
-
-`.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
+Tüm değişkenler için `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
 
 ---
 
@@ -407,7 +298,7 @@ Bu proje, [**Hikmet Gultekin**](https://github.com/hikmedit)'in yazdığı oriji
 
 İTÜ MCP bunun üzerine OBS öğrenci portalı API'lerini, PDF metin okumayı, güvenli ödev yüklemeyi, oturum kalıcılığını, uzak API anahtarını ve arşiv/prompt/resource desteğini ekliyor.
 
-Salt okunur İTÜ Mail araçları (`mail_status` · `mail_list_inbox` · `mail_get_message` · `mail_get_attachment`) [**tzi4**](https://github.com/tzi4) tarafından katkı olarak eklendi — teşekkürler!
+Salt okunur İTÜ Mail araçlarını (`mail_status`, `mail_list_inbox`, `mail_get_message`, `mail_get_attachment`) [**tzi4**](https://github.com/tzi4) katkı olarak ekledi, teşekkürler.
 
 ---
 
