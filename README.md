@@ -52,21 +52,14 @@ Dürüst olmak gerekirse OBS'nin bazı uç noktaları hesaba göre tutarsız dav
 ## Nasıl çalışır
 
 ```mermaid
-graph TD
-    Sen(("Sen")) --> Istemci["Claude · Cursor · Codex"]
-    Istemci -->|MCP| Sunucu["İTÜ MCP"]
-
-    Sunucu --> Ninova["Ninova<br/><sub>LMS</sub>"]
-    Sunucu --> Obs["OBS<br/><sub>öğrenci portalı</sub>"]
-    Sunucu --> Portal["Portal<br/><sub>kart · yemek</sub>"]
-    Sunucu --> Kutuphane["Kütüphane<br/><sub>WebPAC</sub>"]
-    Sunucu --> Arsiv["Ders Arşivi<br/><sub>2016'dan bugüne</sub>"]
-    Sunucu --> Mail["İTÜ Mail<br/><sub>salt okunur</sub>"]
-
-    classDef sunucu fill:#0b3d91,stroke:#5aa9ff,stroke-width:2px,color:#fff
-    classDef servis fill:#111827,stroke:#38bdf8,color:#e5e7eb
-    class Sunucu sunucu
-    class Ninova,Obs,Portal,Kutuphane,Arsiv,Mail servis
+graph LR
+    istemci[Claude / Cursor / Codex] -->|MCP| sunucu[İTÜ MCP]
+    sunucu --> ninova[Ninova]
+    sunucu --> obs[OBS]
+    sunucu --> portal[Portal]
+    sunucu --> kutuphane[Kütüphane]
+    sunucu --> arsiv[Ders Arşivi]
+    sunucu --> mail[İTÜ Mail]
 ```
 
 Sunucu her servise ayrı bir istemci sınıfıyla konuşur, kendi oturumunu ve önbelleğini yönetir. Ninova ve OBS aynı İTÜ SSO girişini paylaşır, kütüphane hesabı bilgisi ise tamamen ayrıdır ve Ninova şifresiyle karışmaz. Kimlik gerektirmeyen araçlar (public ders programı, kampüs servisleri, arşiv) hiçbir zaman şifreni kullanmaz.
