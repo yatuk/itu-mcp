@@ -148,10 +148,10 @@ class ToolRegistrationTests(unittest.TestCase):
 
         fake = FakeMcp()
         register_tools(fake, NinovaMcpApp(), sorted(MAIL_TOOL_NAMES))
-        for annotations in fake.registered.values():
-            self.assertTrue(annotations.readOnlyHint)
-            self.assertFalse(annotations.destructiveHint)
-            self.assertTrue(annotations.idempotentHint)
+        for tool_annotations in fake.registered.values():
+            self.assertTrue(tool_annotations.readOnlyHint)
+            self.assertFalse(tool_annotations.destructiveHint)
+            self.assertTrue(tool_annotations.idempotentHint)
 
     def test_attachment_image_becomes_text_and_image_content(self) -> None:
         from mcp.server.fastmcp.utilities.types import Image

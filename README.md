@@ -121,7 +121,7 @@ flowchart LR
     end
 
     subgraph arsiv["Ders Arşivi"]
-        archive["yatuk.github.io/itu-archive<br/>(27 dönem · günlük tarama)"]
+        archive["itu-ders.com<br/>(27 dönem · günlük tarama)"]
     end
 
     istemciler -->|"MCP araçları"| mcp
@@ -406,6 +406,8 @@ python -m unittest discover -s tests -v
 Bu proje, [**Hikmet Gultekin**](https://github.com/hikmedit)'in yazdığı orijinal **[ninova-mcp](https://github.com/hikmedit/ninova-mcp)** üzerine kuruldu. İlk açık kaynak, kimlik bilgisiyle çalışan İTÜ Ninova MCP sunucusudur (LMS giriş, HTML ayrıştırma, izleme, `.mcpb` paketleme).
 
 İTÜ MCP bunun üzerine OBS öğrenci portalı API'lerini, PDF metin okumayı, güvenli ödev yüklemeyi, oturum kalıcılığını, uzak API anahtarını ve arşiv/prompt/resource desteğini ekliyor.
+
+Salt okunur İTÜ Mail araçları (`mail_status` · `mail_list_inbox` · `mail_get_message` · `mail_get_attachment`) [**tzi4**](https://github.com/tzi4) tarafından katkı olarak eklendi — teşekkürler!
 
 ---
 

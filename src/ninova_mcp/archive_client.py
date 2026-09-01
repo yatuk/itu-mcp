@@ -33,7 +33,7 @@ class ItuArchiveClient:
     re-fetching more often only costs latency.
     """
 
-    DEFAULT_BASE_URL = "https://yatuk.github.io/itu-archive/data"
+    DEFAULT_BASE_URL = "https://itu-ders.com/data"
     DEFAULT_CACHE_TTL = 6 * 60 * 60.0
 
     def __init__(
