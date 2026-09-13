@@ -174,7 +174,10 @@ def _registration_period(obs: Any) -> tuple[dict[str, Any] | None, set[tuple[str
         term_labels = [period.get('akademikDonemAdi'), period.get('akademikDonemAdiEN')]
         try:
             semesters = require_success(obs.list_semesters(), 'semester list')
-            for semester in semesters.get('ogrenciDonemListesi') or []:
+            rows = semesters.get('ogrenciDonemListesi')
+            for semester in rows if isinstance(rows, list) else []:
+                if not isinstance(semester, dict):
+                    continue
                 if str(semester.get('donemKodu')) == str(period.get('akademikDonemKodu')):
                     term_labels.extend([semester.get('akademikDonemAdi'), semester.get('akademikDonemAdiEN')])
         except _READ_ERRORS:

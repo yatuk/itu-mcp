@@ -908,6 +908,12 @@ class NinovaMcpApp:
         from .registration_tools import validate_plan
         return validate_plan(self, crns)
 
+    def obs_get_grade_distribution(
+        self, course_code: str, year: int | None = None, term_code: str | None = None,
+    ) -> dict[str, Any]:
+        from .grade_distribution import get_grade_distribution
+        return get_grade_distribution(self.obs_public, course_code, year, term_code)
+
     def obs_get_advisor(self) -> dict[str, Any]:
         return self.obs.get_advisor()
 
@@ -4308,6 +4314,22 @@ TOOLS: list[dict[str, Any]] = [
             "crns": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]{4,5}$"},
                      "minItems": 1, "maxItems": 12, "uniqueItems": True},
         }, "required": ["crns"], "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_grade_distribution",
+        "title": "OBS Grade Distribution",
+        "description": (
+            "Read public OBS historical letter-grade counts and percentages for a course, by term. "
+            "year is the academic ending year: 2026 means 2025-2026; defaults to the current calendar year. "
+            "Optionally select a term_code returned in available_terms. Reports AA, BA, BB and every "
+            "other published grade, including plus grades. OBS may combine Turkish and English course "
+            "codes; reported_course_codes states the actual aggregate scope. No login required."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "course_code": {"type": "string", "description": "Full course code, such as UZB 438E."},
+            "year": {"type": "integer", "minimum": 1900, "maximum": 2100, "description": "Academic ending year; 2026 selects 2025-2026."},
+            "term_code": {"type": "string", "pattern": "^[0-9]{6}$", "description": "Optional official term code from available_terms; determines year when year is omitted."},
+        }, "required": ["course_code"], "additionalProperties": False},
     },
     {
         "name": "obs_get_advisor",

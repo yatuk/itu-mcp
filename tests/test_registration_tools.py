@@ -330,5 +330,23 @@ class ElectiveCoordinatorTests(unittest.TestCase):
         app.obs.validate_registration_crns.assert_not_called()
 
 
+    def test_malformed_optional_semester_list_preserves_verified_period(self) -> None:
+        for rows in ("unrecognized", [None, "unrecognized"]):
+            app = make_app()
+            app.obs.list_semesters.return_value["ogrenciDonemListesi"] = rows
+            with self.subTest(rows=rows), patch("ninova_mcp.registration_tools.fetch_elective_group", return_value=elective_group(731, ["BLG 201"])):
+                result = get_elective_group(app, 731)
+            self.assertTrue(result["courses"][0]["eligibility"]["eligible"])
+            self.assertEqual(result["eligibility_checked_section_count"], 1)
+
+    def test_malformed_optional_rows_do_not_hide_a_matching_semester(self) -> None:
+        app = make_app()
+        app.obs.api_get.return_value["kayitZamanKontrolResult"].pop("akademikDonemAdi")
+        app.obs.list_semesters.return_value["ogrenciDonemListesi"].insert(0, None)
+        with patch("ninova_mcp.registration_tools.fetch_elective_group", return_value=elective_group(731, ["BLG 201"])):
+            result = get_elective_group(app, 731)
+        self.assertTrue(result["courses"][0]["eligibility"]["eligible"])
+
+
 if __name__ == "__main__":
     unittest.main()

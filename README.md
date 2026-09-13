@@ -189,12 +189,15 @@ codex mcp add itu \
     <td>
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
       <code>obs_list_registered_courses</code><br/>
+      <code>obs_get_registration_draft</code><br/>
+      <code>obs_get_elective_group</code> · <code>obs_validate_registration_plan</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
       <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
       <code>get_cafeteria_menu</code> · <code>obs_get_notifications</code>
     </td>
     <td>
       <code>get_public_course_schedule</code> · <code>get_public_exam_schedule</code><br/>
+      <code>obs_get_grade_distribution</code><br/>
       <code>search_itu_directory</code> · <code>search_campus_locations</code><br/>
       <code>get_shuttle_schedule</code> · <code>get_sports_facility_hours</code><br/>
       <code>get_itu_announcements</code> · <code>get_academic_calendar</code>
@@ -215,6 +218,19 @@ codex mcp add itu \
     <td colspan="5" align="center"><strong>İTÜ Mail (salt okunur):</strong> <code>mail_status</code> · <code>mail_list_inbox</code> · <code>mail_get_message</code> · <code>mail_get_attachment</code></td>
   </tr>
 </table>
+
+### Registration planning and grade history
+
+These four tools help you review your course choices before registration:
+
+| Tool | What it does |
+|---|---|
+| `obs_get_registration_draft()` | Reads your saved draft with CRNs, eligibility reasons, and the available timetable. |
+| `obs_get_elective_group(group_id)` | Shows which courses can fill an elective slot, their current sections and meeting times, and whether you can take them. |
+| `obs_validate_registration_plan(crns)` | Checks a proposed selection for conflicts and prerequisites, elective coverage, graduation progress, and the course chains you would keep or delay. |
+| `obs_get_grade_distribution(course_code, year, term_code)` | Shows how many students received each published letter grade in previous terms, with percentages and the exact group of course codes reported by OBS. |
+
+They leave your saved draft and registrations unchanged. The plan validator reports missing evidence as `incomplete`; future chains depend on passing with the required grades. See [Registration planning](docs/registration-planning.md) and [Grade distributions](docs/grade-distribution.md) for examples and limits. Grade distributions are public; `year` means the academic ending year, and the term filter is optional.
 
 Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 
@@ -304,7 +320,3 @@ Salt okunur İTÜ Mail araçlarını (`mail_status`, `mail_list_inbox`, `mail_ge
 <div align="center">
   <sub><a href="https://github.com/yatuk">yatuk</a> tarafından · <a href="https://github.com/yatuk/itu-mcp">GitHub</a></sub>
 </div>
-
-### Registration planning
-
-`obs_get_registration_draft`, `obs_get_elective_group`, and `obs_validate_registration_plan` connect saved drafts, current sections, eligibility, and degree requirements. See [Registration planning](docs/registration-planning.md) for inputs, result states, and limitations.
