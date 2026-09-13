@@ -1291,23 +1291,27 @@ def extract_course_select_options(html: str, page_url: str) -> list[dict[str, An
 
 
 def extract_course_search_results(html: str, page_url: str) -> list[dict[str, Any]]:
-    """Parse OBS ``/public/DersBilgi/Search`` results into course dicts.
+    """Parse the public course information results, including nested tables.
 
     Tries table-based extraction first (headers like "Ders Kodu", "Ders Adı"),
     then falls back to link-list scanning.
     """
     soup = make_soup(html)
     results: list[dict[str, Any]] = []
+    from .archive import COURSE_CODE_PATTERN, normalize_course_code
 
     # Strategy 1: look for a table with "Ders Kodu" header
     target_headers = {"ders kodu", "ders adı", "ders adi", "course code", "course name"}
     for table in soup.find_all("table"):
-        th_texts = {normalize_lookup_text(th.get_text(" ", strip=True)) for th in table.find_all("th")}
+        own_headers = [th for th in table.find_all("th") if th.find_parent("table") is table]
+        th_texts = {normalize_lookup_text(th.get_text(" ", strip=True)) for th in own_headers}
         if not th_texts & target_headers:
             continue
-        headers = [clean_text(th.get_text(" ", strip=True)) for th in table.find_all("th")]
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all("td")
+        headers = [clean_text(th.get_text(" ", strip=True)) for th in own_headers]
+        for row in table.find_all("tr"):
+            if row.find_parent("table") is not table:
+                continue
+            cells = row.find_all("td", recursive=False)
             if len(cells) < 2:
                 continue
             item: dict[str, Any] = {}
@@ -1330,10 +1334,10 @@ def extract_course_search_results(html: str, page_url: str) -> list[dict[str, An
                 or item.get("Course Name")
                 or ""
             )
-            if code or name:
-                item["code"] = code
-                item["name"] = name
-            results.append(item)
+            codes = list(dict.fromkeys(normalize_course_code(match.group(0))
+                                       for match in COURSE_CODE_PATTERN.finditer(code)))
+            for canonical in codes:
+                results.append({**item, "code": canonical, "name": name, "url": page_url})
         if results:
             return results
 
