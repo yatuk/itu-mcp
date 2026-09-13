@@ -897,6 +897,17 @@ class NinovaMcpApp:
             "ders_kayit_durumu": self.obs.get_lesson_registration_status(),
         }
 
+    def obs_get_registration_draft(self) -> dict[str, Any]:
+        return self.obs.get_registration_draft()
+
+    def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
+        from .registration_tools import get_elective_group
+        return get_elective_group(self, group_id)
+
+    def obs_validate_registration_plan(self, crns: list[str]) -> dict[str, Any]:
+        from .registration_tools import validate_plan
+        return validate_plan(self, crns)
+
     def obs_get_advisor(self) -> dict[str, Any]:
         return self.obs.get_advisor()
 
@@ -4255,6 +4266,48 @@ TOOLS: list[dict[str, Any]] = [
         "title": "OBS Registration Status",
         "description": "Read OBS registration and course-registration status (active/class level).",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_registration_draft",
+        "title": "OBS Registration Draft",
+        "description": (
+            "Read the saved OBS registration draft with CRNs, course names, saved eligibility "
+            "verdicts, restriction reasons, last check time and available draft meeting times. "
+            "Reads the active registration term. Does not save or recheck the draft. "
+            "Saved eligibility is a snapshot; use obs_validate_registration_plan for a fresh check."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_elective_group",
+        "title": "OBS Elective Group",
+        "description": (
+            "Read any official elective group by group_id, including eligible course membership, "
+            "current undergraduate offerings, CRNs, meeting times and student-specific section "
+            "eligibility. Each section is checked independently, up to 24 sections per call. "
+            "Membership and schedules are public; eligibility requires an OBS session. "
+            "Unknown source data stays unknown. Does not change the saved draft or registration."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "group_id": {"type": "integer", "minimum": 1, "description": "Official OBS elective group ID from a degree plan."},
+        }, "required": ["group_id"], "additionalProperties": False},
+    },
+    {
+        "name": "obs_validate_registration_plan",
+        "title": "OBS Validate Registration Plan",
+        "description": (
+            "Validate one to twelve proposed CRNs using the independent OBS CRN checker, public "
+            "meeting times, official prerequisite rules and the student's completed course history. "
+            "Reports time conflicts, program/credit/class restrictions, possible elective-slot "
+            "assignments, remaining graduation requirements and prerequisite-chain deferral risks. "
+            "Planned courses count toward future chains only conditionally on passing, never as "
+            "already completed prerequisites. Returns valid, invalid or incomplete. Future course "
+            "offerings and final graduation are not guaranteed. Does not save a draft or register courses."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "crns": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]{4,5}$"},
+                     "minItems": 1, "maxItems": 12, "uniqueItems": True},
+        }, "required": ["crns"], "additionalProperties": False},
     },
     {
         "name": "obs_get_advisor",

@@ -304,3 +304,7 @@ Salt okunur İTÜ Mail araçlarını (`mail_status`, `mail_list_inbox`, `mail_ge
 <div align="center">
   <sub><a href="https://github.com/yatuk">yatuk</a> tarafından · <a href="https://github.com/yatuk/itu-mcp">GitHub</a></sub>
 </div>
+
+### Registration planning
+
+`obs_get_registration_draft`, `obs_get_elective_group`, and `obs_validate_registration_plan` connect saved drafts, current sections, eligibility, and degree requirements. See [Registration planning](docs/registration-planning.md) for inputs, result states, and limitations.
