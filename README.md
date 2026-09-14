@@ -219,18 +219,18 @@ codex mcp add itu \
   </tr>
 </table>
 
-### Registration planning and grade history
+### Kayıt taslağı ve geçmiş not dağılımları
 
-These four tools help you review your course choices before registration:
+Ders seçimini kayıt öncesinde gözden geçirmek için dört araç:
 
-| Tool | What it does |
+| Araç | Ne işe yarar? |
 |---|---|
-| `obs_get_registration_draft()` | Reads your saved draft with CRNs, eligibility reasons, and the available timetable. |
-| `obs_get_elective_group(group_id)` | Shows which courses can fill an elective slot, their current sections and meeting times, and whether you can take them. |
-| `obs_validate_registration_plan(crns)` | Checks a proposed selection for conflicts and prerequisites, elective coverage, graduation progress, and the course chains you would keep or delay. |
-| `obs_get_grade_distribution(course_code, year, term_code)` | Shows how many students received each published letter grade in previous terms, with percentages and the exact group of course codes reported by OBS. |
+| `obs_get_registration_draft()` | Kayıtlı taslağı CRN’ler, alınabilirlik durumu, hata nedenleri ve varsa taslak takvimiyle okur. |
+| `obs_get_elective_group(group_id)` | Seçmeli grubu doldurabilen dersleri, bu dönem açılan şubeleri, CRN’leri, gün/saat bilgilerini ve alınabilirlik durumunu gösterir. |
+| `obs_validate_registration_plan(crns)` | CRN listesini saat çakışmaları, ön şartlar, seçmeli gereksinimleri, mezuniyet ilerlemesi ve sonraki derslere etkisi açısından kontrol eder. |
+| `obs_get_grade_distribution(course_code, year, term_code)` | Önceki dönemlerde her harf notunu kaç kişinin aldığını ve yüzdelerini, OBS’nin birlikte raporladığı ders kodlarıyla gösterir. |
 
-They leave your saved draft and registrations unchanged. The plan validator reports missing evidence as `incomplete`; future chains depend on passing with the required grades. See [Registration planning](docs/registration-planning.md) and [Grade distributions](docs/grade-distribution.md) for examples and limits. Grade distributions are public; `year` means the academic ending year, and the term filter is optional.
+Bu araçlar taslağını veya ders kayıtlarını değiştirmez. Kesin bir engel bulunmasa bile eksik bilgiler varsa plan sonucu `incomplete` olur. Sonraki derslere geçiş, ön şart derslerini gereken notlarla tamamlamana bağlıdır. Not dağılımı herkese açıktır. `year`, akademik yılın bittiği yılı belirtir (2026 = 2025–2026). Yıl ve dönem filtresi isteğe bağlıdır. Örnekler ve sınırlar: [Kayıt planlama](docs/registration-planning.md) ve [Not dağılımları](docs/grade-distribution.md).
 
 Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 
