@@ -6,6 +6,7 @@ ortalama hesaplama.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .archive import normalize_course_code
@@ -15,7 +16,7 @@ from .grading import LETTER_TO_GRADE, normalize_grade
 # Kayıtlı ders listesinde `kredi` genelde string gelir.
 
 
-def _course_key(value: Any) -> str:
+def course_key(value: Any) -> str:
     try:
         return normalize_course_code(str(value or ""))
     except ValueError:
@@ -23,12 +24,34 @@ def _course_key(value: Any) -> str:
         return " ".join(str(value or "").upper().split())
 
 
+def parse_credit(value: Any) -> float | None:
+    """Parse a finite nonnegative credit value, preserving a genuine zero."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _json_safe(value: Any) -> Any:
+    """Do not leak nonfinite backend provenance into a JSON tool response."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def calculate_gpa(
     courses: list[dict[str, Any]],
     *,
     projected_grades: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Compute weighted GPA (GANO) from a list of course dicts.
+    """Compute the credit-weighted average of the supplied course records.
 
     Each course dict should have at least:
     - ``code`` (str): ders kodu, e.g. ``"BLG 223E"``
@@ -40,7 +63,7 @@ def calculate_gpa(
     """
     projected: dict[str, str] = {}
     for code, grade in (projected_grades or {}).items():
-        key, normalized_grade = _course_key(code), normalize_grade(grade)
+        key, normalized_grade = course_key(code), normalize_grade(grade)
         if not key or normalized_grade not in LETTER_TO_GRADE:
             raise ValueError("Projected grades require a course code and a recognized İTÜ grade.")
         if key in projected and projected[key] != normalized_grade:
@@ -54,6 +77,9 @@ def calculate_gpa(
     ff_risk: list[dict[str, Any]] = []
     ungraded: list[dict[str, Any]] = []
     unrecognized_grades: list[dict[str, Any]] = []
+    invalid_credits: list[dict[str, Any]] = []
+    excluded_courses: list[dict[str, Any]] = []
+    eligible_count = 0
 
     for course in courses:
         code = course.get("code") or course.get("dersKodu") or "?"
@@ -63,26 +89,26 @@ def calculate_gpa(
         credit_raw = course.get("credit")
         if credit_raw is None:
             credit_raw = course.get("kredi")
-        try:
-            credit = float(str(credit_raw).replace(",", "."))
-        except (ValueError, TypeError):
-            credit = 0.0
+        credit = parse_credit(credit_raw)
 
         # Not
         # A what-if value is an explicit override, including for a course that
         # already has an OBS letter grade.  This matches the public tool's
         # documented behaviour and lets users compare alternative outcomes.
-        course_key = _course_key(code)
-        projected_grade = projected.get(course_key)
+        key = course_key(code)
+        projected_grade = projected.get(key)
         if projected_grade is not None:
-            used_projections.add(course_key)
-        grade_raw = projected_grade or course.get("grade") or course.get("harfNotu")
-        grade = str(grade_raw).strip().upper() if grade_raw else None
+            used_projections.add(key)
+        grade_raw = projected_grade if projected_grade is not None else course.get("grade")
+        if grade_raw is None or grade_raw == "":
+            grade_raw = course.get("harfNotu")
+        grade = (str(grade_raw).strip().upper() or None) if grade_raw is not None else None
 
         coefficient = LETTER_TO_GRADE.get(grade) if grade else None
 
         if grade is None:
-            ungraded.append({**course, "code": code, "name": name, "credit": credit})
+            ungraded.append({**course, "code": code, "name": name, "credit": credit,
+                             "credit_status": "valid" if credit is not None else "missing" if credit_raw is None or str(credit_raw).strip() == "" else "invalid"})
             continue
 
         if grade not in LETTER_TO_GRADE:
@@ -91,9 +117,21 @@ def calculate_gpa(
 
         if coefficient is None:
             # GE, KF, IA, MU gibi GANO'ya katılmayan notlar
+            excluded_courses.append({"code": code, "grade": grade, "credit": credit, "reason": "grade_excluded_from_gpa"})
             continue
 
+        eligible_count += 1
+        failure_note = f"{grade} notu bildirildi. Dersin tekrar veya yerine alma koşulları OBS kurallarına bağlıdır."
+        if credit is None:
+            reason = "missing_credit" if credit_raw is None or str(credit_raw).strip() == "" else "invalid_credit"
+            invalid_credits.append({"code": code, "grade": grade, "reason": reason, "raw_credit": credit_raw})
+            if grade in ("FF", "VF"):
+                ff_risk.append({"code": code, "grade": grade, "credit": None, "note": failure_note})
+            continue
         points = credit * coefficient
+        if not all(math.isfinite(value) for value in (points, total_credits + credit, total_points + points)):
+            invalid_credits.append({"code": code, "grade": grade, "reason": "credit_arithmetic_overflow", "raw_credit": credit_raw})
+            continue
         total_credits += credit
         total_points += points
 
@@ -112,31 +150,26 @@ def calculate_gpa(
 
         # Risk flags
         if grade in ("FF", "VF"):
-            detail["note"] = f"{grade} — dersten kalındı, tekrar alınması gerekir."
+            detail["note"] = failure_note
             ff_risk.append(detail)
         elif grade in ("FD", "DD", "DD+", "DC", "DC+"):
-            detail["note"] = "Düşük not — GANO'yu aşağı çekebilir."
+            detail["note"] = "Düşük not. Bu dersin ortalamaya katkısı kredi ağırlığına bağlıdır."
 
         details.append(detail)
 
-    gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
-
-    # GANO yorumu
-    comment: str | None = None
-    if gpa is not None:
-        if gpa >= 3.50:
-            comment = "Yüksek onur derecesinde."
-        elif gpa >= 3.00:
-            comment = "Onur derecesinde."
-        elif gpa >= 2.00:
-            comment = "Geçer seviyede (2.00 üstü)."
-        elif gpa >= 1.80:
-            comment = "Uyarı seviyesinde (2.00 altı); notları yükseltmeye bak."
-        else:
-            comment = "Kritik seviyede (1.80 altı); akademik uyarı riski var."
-
-    return {
-        "gpa": gpa,
+    known_gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
+    complete = not (invalid_credits or unrecognized_grades or ungraded)
+    unused_projections = sorted(set(projected) - used_projections)
+    return _json_safe({
+        "gpa": known_gpa if complete else None,
+        "known_courses_gpa": known_gpa,
+        "calculation_complete": complete,
+        "calculation_status": "incomplete" if not complete else "complete" if known_gpa is not None else "no_gpa_credits",
+        "average_scope": "supplied_courses",
+        "input_course_count": len(courses),
+        "gpa_eligible_course_count": eligible_count,
+        "covered_course_count": len(details),
+        "excluded_course_count": len(excluded_courses),
         "total_credits": round(total_credits, 1),
         "total_points": round(total_points, 2),
         "graded_course_count": len(details),
@@ -144,15 +177,21 @@ def calculate_gpa(
         "courses": details,
         "ungraded": ungraded,
         "unrecognized_grades": unrecognized_grades,
-        "unused_projected_courses": sorted(set(projected) - used_projections),
+        "invalid_credits": invalid_credits,
+        "excluded_courses": excluded_courses,
+        "unused_projected_courses": unused_projections,
+        "projection_complete": not unused_projections,
+        "applied_projection_count": len(used_projections),
         "ff_risk": ff_risk,
-        "comment": comment,
+        "comment": None,
         "scale": "4.00",
         "note": (
-            "Bu hesaplama bilgi amaçlıdır; resmi GANO için OBS transkriptine bakın. "
+            "Hesap yalnız verilen dersleri kapsar. Eksik veya geçersiz not/kredi varsa "
+            "gpa verilmez; known_courses_gpa ve toplamlar yalnız doğrulanan kayıtları kapsar. "
+            "Bu sonuç onur derecesi, akademik durum veya kümülatif GANO belirlemez. "
             "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
         ),
-    }
+    })
 
 
 def calculate_target_gpa(
@@ -167,12 +206,20 @@ def calculate_target_gpa(
     This is a planning estimate.  It deliberately works from aggregate GPA
     points so it can be used without exposing a transcript.
     """
-    values = {
-        "current_gpa": float(current_gpa),
-        "current_credits": float(current_credits),
-        "target_gpa": float(target_gpa),
-        "future_credits": float(future_credits),
-    }
+    values = {}
+    for name, raw in {
+        "current_gpa": current_gpa, "current_credits": current_credits,
+        "target_gpa": target_gpa, "future_credits": future_credits,
+    }.items():
+        if isinstance(raw, bool):
+            raise ValueError(f"{name} must be a finite number")
+        try:
+            number = float(raw)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a finite number") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{name} must be a finite number")
+        values[name] = number
     if not 0.0 <= values["current_gpa"] <= 4.0:
         raise ValueError("current_gpa must be between 0.00 and 4.00")
     if not 0.0 <= values["target_gpa"] <= 4.0:
@@ -188,19 +235,21 @@ def calculate_target_gpa(
     )
     required_points = target_points - current_points
     required_average = required_points / values["future_credits"]
+    maximum_possible_gpa = (
+        (current_points + 4.0 * values["future_credits"])
+        / (values["current_credits"] + values["future_credits"])
+    )
+    if not all(math.isfinite(value) for value in (current_points, target_points, required_points, required_average, maximum_possible_gpa)):
+        raise ValueError("Credit arithmetic exceeds the supported finite numeric range")
     feasible = required_average <= 4.0
-    already_reached = required_average <= 0.0
 
     return {
         **values,
         "required_future_average": round(max(0.0, required_average), 2),
         "required_future_points": round(max(0.0, required_points), 2),
         "feasible_on_4_scale": feasible,
-        "already_at_or_above_target": already_reached,
-        "maximum_possible_gpa": round(
-            (current_points + 4.0 * values["future_credits"])
-            / (values["current_credits"] + values["future_credits"]),
-            2,
-        ),
+        "already_at_or_above_target": values["current_gpa"] >= values["target_gpa"],
+        "target_reached_with_zero_future_points": required_average <= 0.0,
+        "maximum_possible_gpa": round(maximum_possible_gpa, 2),
         "note": "Bilgi amaçlı tahmindir; ders tekrarları ve özel OBS kuralları hesaba katılmaz.",
     }

@@ -192,13 +192,30 @@ def extract_directory_detail(html: str, page_url: str) -> dict[str, Any]:
         value = term.find_next_sibling("dd")
         if value:
             detail[_header_key(clean_text(term.get_text(" ", strip=True)))] = clean_text(value.get_text(" ", strip=True))
-    heading = profile.find("h2") if profile is not soup else None
-    if heading is None:
-        heading = next((node for node in soup.find_all(["h2", "h1"])
-                        if "rehber" not in normalize_lookup_text(node.get_text(" ", strip=True))
-                        and "istanbul teknik universitesi" not in normalize_lookup_text(node.get_text(" ", strip=True))), None)
-    if heading and clean_text(heading.get_text(" ", strip=True)):
-        detail["full_name"] = clean_text(heading.get_text(" ", strip=True))
+    def person_heading(node: Tag) -> str | None:
+        text = clean_text(node.get_text(" ", strip=True))
+        normalized = normalize_lookup_text(text)
+        generic = (
+            "rehber", "istanbul teknik universitesi", "giris", "login", "sign in",
+            "oturum", "iletisim bilgileri", "contact information", "kisi bilgileri",
+            "person details", "profile details", "profil bilgileri", "hata", "error",
+            "access denied", "bulunamadi", "not found", "no results", "duyurular",
+        )
+        if any(marker in normalized for marker in generic):
+            return None
+        if len(text) > 160 or any(char.isdigit() for char in text):
+            return None
+        if sum(any(char.isalpha() for char in word) for word in text.split()) < 2:
+            return None
+        return text
+
+    # A page heading alone is not evidence of a person's name. Prefer the
+    # profile card; the global fallback also requires recognizable contacts.
+    candidates = [name for node in profile.find_all(["h2", "h1"])
+                  if (name := person_heading(node)) is not None]
+    has_contacts = bool(contacts) or any(detail.get(key) for key in aliases.values())
+    if len(set(candidates)) == 1 and (profile is not soup or has_contacts):
+        detail["full_name"] = candidates[0]
     if "giris yapmalisiniz" in normalize_lookup_text(soup.get_text(" ", strip=True)):
         detail["additional_details_require_login"] = True
     if not contacts and not any(key in detail for key in (*aliases.values(), "full_name")):

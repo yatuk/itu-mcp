@@ -64,6 +64,30 @@ class ParserRegressionTests(unittest.TestCase):
         self.assertNotIn('full_name', result)
         self.assertIn('parse_warning', result)
 
+    def test_directory_login_heading_does_not_invent_a_person(self):
+        for wrapper in ('<main>{}</main>', '<div class="white-box">{}</div>'):
+            html = '<h1>İTÜ Rehber</h1>' + wrapper.format('<h2>Giriş Yapmalısınız</h2>')
+            result = extract_directory_detail(html, 'https://rehber.itu.edu.tr/example')
+            self.assertNotIn('full_name', result)
+            self.assertTrue(result['additional_details_require_login'])
+            self.assertIn('parse_warning', result)
+
+    def test_global_directory_heading_needs_contact_evidence(self):
+        html = '<h1>Example Person</h1>'
+        result = extract_directory_detail(html, 'https://rehber.itu.edu.tr/example')
+        self.assertNotIn('full_name', result)
+        self.assertIn('parse_warning', result)
+        result = extract_directory_detail(html + '<table><tr><td>Telefon</td><td>1234</td></tr></table>',
+                                          'https://rehber.itu.edu.tr/example')
+        self.assertEqual(result['full_name'], 'Example Person')
+        self.assertEqual(result['phone'], '1234')
+
+    def test_ambiguous_profile_headings_do_not_choose_a_name(self):
+        html = '<div class="white-box"><h2>Example Person</h2><h2>Another Person</h2></div>'
+        result = extract_directory_detail(html, 'https://rehber.itu.edu.tr/example')
+        self.assertNotIn('full_name', result)
+        self.assertIn('parse_warning', result)
+
 
 class TicketFallbackTests(unittest.TestCase):
     def setUp(self):
