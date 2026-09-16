@@ -567,6 +567,7 @@ class NinovaMcpApp:
         include_assignment_details: bool = False,
     ) -> dict[str, Any]:
         courses = self.list_courses(refresh=True)["courses"]
+        current_course_urls = {course["url"] for course in courses}
         if course_limit is not None:
             courses = courses[: max(1, min(course_limit, len(courses)))]
 
@@ -576,7 +577,6 @@ class NinovaMcpApp:
         updates: list[dict[str, Any]] = []
         course_results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
-        current_course_urls = {course["url"] for course in courses}
 
         for course in courses:
             try:
@@ -952,7 +952,11 @@ class NinovaMcpApp:
         result: dict[str, Any] = {"class": resolved_class, "errors": []}
         if include_letter:
             try:
-                result["letter_grades"] = self.obs.get_letter_grades(sid)
+                from .obs_grades import get_class_letter_grades
+
+                result["letter_grades"] = get_class_letter_grades(
+                    self.obs, resolved_class, semester=semester,
+                )
             except ObsError as exc:
                 result["letter_grades"] = None
                 result["errors"].append({"scope": "letter_grades", "error": str(exc)})
@@ -1070,13 +1074,33 @@ class NinovaMcpApp:
     # ------------------------------------------------------------------
 
     def obs_search_courses(self, query: str, limit: int = 15) -> dict[str, Any]:
-        """Search the OBS public course catalog by code or name fragment."""
-        results = self.obs_public.search_courses(query)
-        results = results[: max(1, min(limit, 50))]
+        """Look up exact codes in OBS and name/code fragments in the labeled archive."""
+        from .archive import search_courses, split_course_code
+
+        term = query.strip()
+        if len(term) < 2:
+            raise ObsError("Enter at least two characters of a course code or name.")
+        bounded_limit = max(1, min(limit, 50))
+        try:
+            split_course_code(term)
+        except ValueError:
+            matches = search_courses(self.archive.get_course_codes(), term, limit=bounded_limit)
+            results = [{"code": row["course_code"], "name": row["course_name"],
+                        "branch": row["branch"], "terms_seen": row["term_count"]} for row in matches]
+            source = "course_archive"
+            source_url = self.archive.base_url + "/history/codes.json"
+        else:
+            results = self.obs_public.search_courses(term)[:bounded_limit]
+            source = "official_obs_course_information"
+            source_url = "https://obs.itu.edu.tr/public/DersBilgi"
         return {
             "query": query,
             "count": len(results),
             "courses": results,
+            "source": source,
+            "source_url": source_url,
+            "offering_note": "Catalog or archive membership does not establish a current-term offering.",
+            "untrusted_external_content": True,
         }
 
     def obs_get_course_prerequisites(
@@ -1091,6 +1115,12 @@ class NinovaMcpApp:
         ``"postrequisites"`` (what this course unlocks), or ``"both"``.
         ``max_depth`` > 1 builds a recursive chain (adjacency list).
         """
+        from .archive import normalize_course_code
+
+        try:
+            course_code = normalize_course_code(course_code)
+        except ValueError as exc:
+            raise ObsError("A full course code such as BLG 223E is required.") from exc
         direction = direction.lower()
         if direction not in ("prerequisites", "postrequisites", "both"):
             raise ObsError(
@@ -1099,6 +1129,10 @@ class NinovaMcpApp:
         max_depth = max(1, min(max_depth, 10))
 
         resolved = self.obs_public.resolve_course_code(course_code)
+        if resolved.get("code") != course_code:
+            # A legacy fuzzy match must not replace the requested course or
+            # attach another language variant's name to its prerequisite tree.
+            resolved = {"code": course_code, "source": "requested_course_code"}
 
         result: dict[str, Any] = {
             "course": resolved,
@@ -1108,9 +1142,14 @@ class NinovaMcpApp:
 
         if direction in ("prerequisites", "both"):
             raw = self.obs_public.get_prerequisites(
-                resolved.get("brans_kodu_id") or course_code
+                course_code
             )
             result["prerequisites"] = raw.get("prerequisites") or []
+            for key in ("prerequisite_status", "prerequisite_status_note", "requirement_tree",
+                        "official_prerequisite", "credit_requirement", "credit_requirement_text",
+                        "prerequisite_source"):
+                if key in raw:
+                    result[key] = raw[key]
             if raw.get("parse_warnings"):
                 result["prereq_parse_warnings"] = raw["parse_warnings"]
             if raw.get("raw_tables") and not raw.get("prerequisites"):
@@ -1122,9 +1161,13 @@ class NinovaMcpApp:
 
         if direction in ("postrequisites", "both"):
             post = self.obs_public.get_postrequisites(
-                resolved.get("brans_kodu_id") or course_code
+                course_code
             )
             result["postrequisites"] = post.get("postrequisites") or []
+            for key in ("postrequisite_status", "complete", "scanned_courses", "scanned_branches",
+                        "unknown_branches", "unscanned_branches", "sources"):
+                if key in post:
+                    result["postreq_" + key if key != "postrequisite_status" else key] = post[key]
             if post.get("note"):
                 result["postreq_note"] = post["note"]
             if max_depth > 1 and post.get("postrequisites"):
@@ -1132,6 +1175,7 @@ class NinovaMcpApp:
                     resolved, post.get("postrequisites") or [], max_depth
                 )
 
+        result["untrusted_external_content"] = True
         return result
 
     def _build_prereq_chain(
@@ -1143,6 +1187,9 @@ class NinovaMcpApp:
         nodes: set[str] = set()
         edges: list[dict[str, str]] = []
         visited: set[str] = set()
+        unknown_courses: set[str] = set()
+        requirements: dict[str, Any] = {}
+        unexpanded_courses: set[str] = set()
 
         start_code = start_course.get("code") or "?"
         queue: list[tuple[str, int]] = [(start_code, 0)]
@@ -1150,17 +1197,21 @@ class NinovaMcpApp:
 
         while queue:
             current_code, depth = queue.pop(0)
-            if depth >= max_depth or current_code in visited:
+            if current_code in visited:
+                continue
+            if depth >= max_depth:
+                unexpanded_courses.add(current_code)
                 continue
             visited.add(current_code)
 
             try:
-                resolved = self.obs_public.resolve_course_code(current_code)
-                prereq_data = self.obs_public.get_prerequisites(
-                    resolved.get("brans_kodu_id") or current_code
-                )
+                prereq_data = self.obs_public.get_prerequisites(current_code)
             except ObsError:
+                unknown_courses.add(current_code)
                 continue
+            if prereq_data.get("prerequisite_status") == "unknown" or prereq_data.get("available") is False:
+                unknown_courses.add(current_code)
+            requirements[current_code] = prereq_data.get("requirement_tree")
 
             for prereq in prereq_data.get("prerequisites") or []:
                 prereq_code = prereq.get("code")
@@ -1179,6 +1230,14 @@ class NinovaMcpApp:
             "nodes": sorted(nodes),
             "edges": edges,
             "source": "prerequisite_chain",
+            "requirements": requirements,
+            "complete": not unknown_courses and not unexpanded_courses,
+            "complete_within_requested_depth": not unknown_courses,
+            "depth_limited": bool(unexpanded_courses),
+            "unexpanded_courses": sorted(unexpanded_courses),
+            "unknown_courses": sorted(unknown_courses),
+            "max_depth": max_depth,
+            "note": "Edges reference courses in the requirement expressions; they are not all mandatory. Coverage is limited to max_depth.",
         }
 
     def _build_postreq_chain(
@@ -1189,8 +1248,10 @@ class NinovaMcpApp:
     ) -> dict[str, Any]:
         """Recursively build a postrequisite adjacency list."""
         nodes: set[str] = set()
-        edges: list[dict[str, str]] = []
+        edges: list[dict[str, Any]] = []
         visited: set[str] = set()
+        unknown_courses: set[str] = set()
+        unexpanded_courses: set[str] = set()
 
         start_code = start_course.get("code") or "?"
         queue: list[tuple[str, int]] = [(start_code, 0)]
@@ -1198,17 +1259,20 @@ class NinovaMcpApp:
 
         while queue:
             current_code, depth = queue.pop(0)
-            if depth >= max_depth or current_code in visited:
+            if current_code in visited:
+                continue
+            if depth >= max_depth:
+                unexpanded_courses.add(current_code)
                 continue
             visited.add(current_code)
 
             try:
-                resolved = self.obs_public.resolve_course_code(current_code)
-                post_data = self.obs_public.get_postrequisites(
-                    resolved.get("brans_kodu_id") or current_code
-                )
+                post_data = self.obs_public.get_postrequisites(current_code)
             except ObsError:
+                unknown_courses.add(current_code)
                 continue
+            if post_data.get("complete") is False or post_data.get("available") is False:
+                unknown_courses.add(current_code)
 
             for postreq in post_data.get("postrequisites") or []:
                 postreq_code = postreq.get("code")
@@ -1219,6 +1283,7 @@ class NinovaMcpApp:
                     "from": current_code,
                     "to": postreq_code,
                     "type": postreq.get("prerequisite_type") or "postrequisite",
+                    "requirement_tree": postreq.get("requirement_tree"),
                 })
                 if postreq_code not in visited:
                     queue.append((postreq_code, depth + 1))
@@ -1227,6 +1292,13 @@ class NinovaMcpApp:
             "nodes": sorted(nodes),
             "edges": edges,
             "source": "postrequisite_chain",
+            "complete": not unknown_courses and not unexpanded_courses,
+            "complete_within_requested_depth": not unknown_courses,
+            "depth_limited": bool(unexpanded_courses),
+            "unexpanded_courses": sorted(unexpanded_courses),
+            "unknown_courses": sorted(unknown_courses),
+            "max_depth": max_depth,
+            "note": "Edges show references in full prerequisite expressions, not guaranteed eligibility. Coverage is limited to max_depth and the reported branch scans.",
         }
 
     # ------------------------------------------------------------------
@@ -1235,10 +1307,9 @@ class NinovaMcpApp:
 
     def obs_get_campus_card(self) -> dict[str, Any]:
         """Read campus card balance and recent transactions from the İTÜ Portal."""
-        html, url = self._get_portal_page()
-        from .parsing import extract_campus_card_info
+        from .portal_data import campus_card
 
-        return extract_campus_card_info(html, url)
+        return campus_card(self._get_portal_json("GetBalance"))
 
     def obs_calculate_gpa(
         self,
@@ -1506,6 +1577,9 @@ class NinovaMcpApp:
             "GetFoodMenu2",
             "GetNotification",
             "GetYardim",
+            "GetBalance",
+            "GetQuota",
+            "GetQuotaEski",
         }
         if operation not in allowed:
             raise NinovaError(f"Portal operation not allowed: {operation}")
@@ -1707,9 +1781,9 @@ class NinovaMcpApp:
 
     def obs_get_cloud_quota(self) -> dict[str, Any]:
         """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""
-        html, url = self._get_portal_page()
-        from .parsing import extract_cloud_quota
-        return extract_cloud_quota(html, url)
+        from .portal_data import storage_quota
+
+        return storage_quota(self._get_portal_json)
 
     def get_public_course_schedule(
         self,
@@ -4492,7 +4566,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_search_courses",
         "title": "OBS Search Courses",
-        "description": "Search the public OBS course catalog by code or name (no auth required).",
+        "description": "Look up exact course codes in public OBS; name or partial-code searches use the labeled course archive. Results do not establish current-term offerings. No login required.",
         "inputSchema": {
             "type": "object",
             "properties": {

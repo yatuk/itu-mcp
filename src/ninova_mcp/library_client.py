@@ -93,8 +93,12 @@ class LibraryClient:
             )
         except requests.exceptions.SSLError as exc:
             raise LibraryError(
-                "İTÜ kütüphane kataloğunun TLS sertifika zinciri doğrulanamadı. "
-                "Güvenli bağlantı düzelene kadar işlem yapılmadı; TLS doğrulaması otomatik kapatılmaz."
+                "The library catalog TLS certificate could not be verified. "
+                "TLS verification remains enabled. ITU's library website now links to "
+                "https://katalog.kutuphane.itu.edu.tr/client/tr_TR/default/, which uses "
+                "a different catalog platform. This client's legacy WebPAC routes cannot "
+                "be moved there by changing the base URL. Use the official catalog "
+                "while the legacy connection or a verified new-platform adapter is unavailable."
             ) from exc
         except requests.RequestException as exc:
             raise LibraryError(f"İTÜ kütüphane isteği başarısız: {exc}") from exc
@@ -145,23 +149,48 @@ class LibraryClient:
 
     def check_availability(self, record_id: str) -> dict[str, Any]:
         item = self.get_item(record_id)
-        available_markers = ("check shelf", "rafta", "available")
         copies = item.get("copies") or []
-        available = []
+        positive_statuses = {"check shelf", "rafta", "available"}
+        negative_statuses = {"unavailable", "not available", "checked out", "on loan", "ödünçte"}
+        available_count = 0
+        unavailable_count = 0
         for copy in copies:
-            blob = " ".join(str(value or "") for value in copy.values()).casefold()
-            if any(marker in blob for marker in available_markers):
-                available.append(copy)
-        return self._mark({
+            if not isinstance(copy, dict):
+                continue
+            statuses = [
+                clean_text(value).casefold()
+                for key, value in copy.items()
+                if key in {"status", "statusu", "durum"} and isinstance(value, str) and clean_text(value)
+            ]
+            # Conflicting or unfamiliar statuses are incomplete evidence.
+            if statuses and all(status in positive_statuses for status in statuses):
+                available_count += 1
+            elif statuses and all(status in negative_statuses for status in statuses):
+                unavailable_count += 1
+        unknown_count = len(copies) - available_count - unavailable_count
+        available: bool | None = (
+            True if available_count else False if copies and not unknown_count else None
+        )
+        result = {
             "record_id": item.get("record_id"),
             "title": item.get("title"),
             "copy_count": len(copies),
-            "available_copy_count": len(available),
-            "available": bool(available),
+            "available_copy_count": available_count,
+            "unavailable_copy_count": unavailable_count,
+            "unknown_copy_count": unknown_count,
+            "available": available,
             "copies": copies,
             "url": item.get("url"),
             "source": "divit.library.itu.edu.tr",
-        })
+        }
+        if item.get("parse_warning"):
+            result["parse_warning"] = item["parse_warning"]
+        if not copies or unknown_count:
+            result["availability_warning"] = (
+                "Some copy statuses are missing or unrecognized. Counts include only "
+                "explicitly recognized statuses; unknown copies are not treated as unavailable."
+            )
+        return self._mark(result)
 
     def _credentials(self) -> tuple[str, str, str]:
         name = os.getenv("NINOVA_LIBRARY_NAME")
