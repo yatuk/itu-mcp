@@ -154,19 +154,54 @@ def extract_directory_results(html: str, page_url: str) -> dict[str, Any]:
 
 def extract_directory_detail(html: str, page_url: str) -> dict[str, Any]:
     soup = make_soup(html)
-    detail: dict[str, Any] = {"url": page_url}
-    for row in soup.select("table tr"):
-        cells = _cell_texts(row)
-        if len(cells) >= 2:
-            detail[_header_key(cells[0])] = cells[1]
+    detail: dict[str, Any] = {"url": page_url, "coverage": "public"}
+    contacts = []
+    aliases = {"birim": "unit", "bolum": "department", "is_telefonu": "phone",
+               "telefon": "phone", "e_posta_adresi": "email", "e_posta": "email",
+               "ofis": "office", "oda": "office"}
+    profile = soup.select_one(".white-box") or soup
+    for table in profile.find_all("table"):
+        rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+        if not rows:
+            continue
+        headers = _cell_texts(rows[0])
+        keys = [aliases.get(_header_key(header)) for header in headers]
+        if len(keys) >= 3 and sum(key is not None for key in keys) >= 3:
+            for row in rows[1:]:
+                values = _cell_texts(row)
+                if not values:
+                    continue
+                contact = {key: value or None for key, value in zip(keys, values) if key}
+                if not any(contact.values()):
+                    continue
+                contact["primary_fields"] = [key for key, header in zip(keys, headers) if key and "*" in header]
+                contacts.append(contact)
+            continue
+        # Retain supported two-column/definition-list layouts without treating
+        # an unrelated multi-column table as a key/value record.
+        for row in rows:
+            cells = _cell_texts(row)
+            if len(cells) == 2 and _header_key(cells[0]) in aliases:
+                detail[aliases[_header_key(cells[0])]] = cells[1] or None
+    if contacts:
+        detail["contacts"] = contacts
+        for key in ("unit", "department", "phone", "email", "office"):
+            primary = next((item.get(key) for item in contacts if key in item["primary_fields"] and item.get(key)), None)
+            detail[key] = primary or next((item.get(key) for item in contacts if item.get(key)), None)
     for term in soup.find_all("dt"):
         value = term.find_next_sibling("dd")
         if value:
             detail[_header_key(clean_text(term.get_text(" ", strip=True)))] = clean_text(value.get_text(" ", strip=True))
-    heading = soup.find(["h1", "h2"])
-    if heading:
-        detail.setdefault("full_name", clean_text(heading.get_text(" ", strip=True)))
-    if len(detail) == 1:
+    heading = profile.find("h2") if profile is not soup else None
+    if heading is None:
+        heading = next((node for node in soup.find_all(["h2", "h1"])
+                        if "rehber" not in normalize_lookup_text(node.get_text(" ", strip=True))
+                        and "istanbul teknik universitesi" not in normalize_lookup_text(node.get_text(" ", strip=True))), None)
+    if heading and clean_text(heading.get_text(" ", strip=True)):
+        detail["full_name"] = clean_text(heading.get_text(" ", strip=True))
+    if "giris yapmalisiniz" in normalize_lookup_text(soup.get_text(" ", strip=True)):
+        detail["additional_details_require_login"] = True
+    if not contacts and not any(key in detail for key in (*aliases.values(), "full_name")):
         detail["parse_warning"] = "Rehber detay alanları bulunamadı."
     return detail
 

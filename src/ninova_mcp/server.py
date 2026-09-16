@@ -1737,22 +1737,38 @@ class NinovaMcpApp:
 
     def obs_get_help_tickets(self, query: str | None = None, limit: int = 20) -> dict[str, Any]:
         """Read İTÜ Portal help tickets (requires login)."""
+        from urllib.parse import urljoin
+        from .parsing import extract_help_tickets
+
+        def finish(payload: dict[str, Any]) -> dict[str, Any]:
+            tickets = payload.get("tickets") or []
+            for ticket in tickets:
+                if ticket.get("url"):
+                    ticket["url"] = urljoin("https://portal.itu.edu.tr/", str(ticket["url"]))
+                ticket.setdefault("id", None)
+                ticket.setdefault("status", None)
+                ticket["missing_fields"] = [key for key in ("id", "status", "url") if not ticket.get(key)]
+            if query:
+                target = normalize_lookup_text(query)
+                tickets = [item for item in tickets if target in normalize_lookup_text(
+                    f"{item.get('title') or ''} {item.get('status') or ''}")]
+            payload["total_matching_count"] = len(tickets)
+            payload["tickets"] = tickets[: max(1, min(limit, 100))]
+            payload["count"] = len(payload["tickets"])
+            payload["metadata_complete"] = all(not item["missing_fields"] for item in payload["tickets"])
+            payload["untrusted_external_content"] = True
+            return payload
+
+        def fallback() -> dict[str, Any]:
+            html, url = self._get_portal_page()
+            result = extract_help_tickets(html, url)
+            result["api_fallback"] = True
+            return finish(result)
+
         try:
             data = self._get_portal_json("GetYardim")
         except (NinovaError, ValueError):
-            html, url = self._get_portal_page()
-            from .parsing import extract_help_tickets
-
-            fallback = extract_help_tickets(html, url)
-            tickets = fallback.get("tickets") or []
-            if query:
-                target = normalize_lookup_text(query)
-                tickets = [item for item in tickets if target in normalize_lookup_text(str(item.get("title") or ""))]
-            fallback["tickets"] = tickets[: max(1, min(limit, 100))]
-            fallback["count"] = len(fallback["tickets"])
-            fallback["api_fallback"] = True
-            fallback["untrusted_external_content"] = True
-            return fallback
+            return fallback()
         raw_items = data.get("YardimInformationList") or data.get("HelpInformationList") or []
         tickets = []
         for item in raw_items:
@@ -1769,15 +1785,8 @@ class NinovaMcpApp:
         if not tickets:
             # Portal deployments may omit the JSON list; keep the stable HTML
             # parser as a compatibility fallback.
-            html, url = self._get_portal_page()
-            from .parsing import extract_help_tickets
-
-            return extract_help_tickets(html, url)
-        if query:
-            target = normalize_lookup_text(query)
-            tickets = [item for item in tickets if target in normalize_lookup_text(f"{item.get('title') or ''} {item.get('status') or ''}")]
-        tickets = tickets[: max(1, min(limit, 100))]
-        return {"count": len(tickets), "tickets": tickets, "source": "portal.itu.edu.tr/GetYardim", "untrusted_external_content": True}
+            return fallback()
+        return finish({"tickets": tickets, "source": "portal.itu.edu.tr/GetYardim"})
 
     def obs_get_cloud_quota(self) -> dict[str, Any]:
         """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""

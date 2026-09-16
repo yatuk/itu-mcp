@@ -232,15 +232,20 @@ def _extract_links(soup: BeautifulSoup, base_url: str, page_url: str) -> list[di
 
 
 def _table_to_rows(table: Tag) -> dict[str, Any]:
-    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.select("th")]
+    # Nested date/layout tables belong to their enclosing cell, not this table.
+    own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    headers = []
     rows: list[list[str]] = []
-    for row in table.find_all("tr"):
-        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["td", "th"])]
+    for row in own_rows:
+        nodes = row.find_all(["td", "th"], recursive=False)
+        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
         if cells:
+            if not rows and all(cell.name == "th" for cell in nodes):
+                headers = cells
             rows.append(cells)
 
     structured_rows: list[dict[str, Any] | list[str]] = []
-    if headers and len(headers) == len(rows[0]):
+    if headers and rows and len(headers) == len(rows[0]):
         body_rows = rows[1:]
         for row in body_rows:
             structured_rows.append(dict(zip(headers, row, strict=False)))
@@ -1224,20 +1229,32 @@ def _table_after_heading(soup: BeautifulSoup, heading_text: str) -> Tag | None:
 
 def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
+    own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    headers = [clean_text(cell.get_text(" ", strip=True)) for row in own_rows
+               for cell in row.find_all("th", recursive=False)]
+    def empty_state(text: str) -> bool:
+        normalized = normalize_lookup_text(text)
+        return not normalized or any(marker in normalized for marker in (
+            "herhangi bir uzaktan egitim oturumu bulunmamaktadir",
+            "no remote learning sessions", "no sessions found",
+        ))
     if not headers:
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
+        for row in own_rows:
+            cells = row.find_all("td", recursive=False)
             if len(cells) != 1:
                 continue
             text = clean_text(cells[0].get_text(" ", strip=True))
-            if text and "herhangi bir uzaktan eğitim oturumu bulunmamaktadır" not in normalize_lookup_text(text):
-                rows.append({"text": text})
+            if not empty_state(text):
+                item = {"text": text, "title": text}
+                anchor = cells[0].find("a", href=True)
+                if anchor is not None:
+                    item["meeting_url"] = urljoin(page_url, str(anchor["href"]))
+                rows.append(item)
         return rows
 
-    for row in table.find_all("tr")[1:]:
-        cells = row.find_all("td")
-        if not cells:
+    for row in own_rows:
+        cells = row.find_all("td", recursive=False)
+        if not cells or empty_state(row.get_text(" ", strip=True)):
             continue
         item: dict[str, Any] = {}
         for header, cell in zip(headers, cells, strict=False):
@@ -1245,6 +1262,15 @@ def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, An
             anchor = cell.find("a", href=True)
             if anchor is not None:
                 item[f"{header}_url"] = urljoin(page_url, anchor["href"])
+                if any(word in normalize_lookup_text(header) for word in ("baglanti", "link", "katil")):
+                    item["meeting_url"] = item[f"{header}_url"]
+            key = normalize_lookup_text(header)
+            if key in {"baslik", "oturum", "title", "session"}:
+                item["title"] = item[header]
+            elif key in {"baslangic", "baslangic tarihi", "start", "start time"}:
+                item["start_at"] = ninova_datetime_iso(item[header])
+            elif key in {"bitis", "bitis tarihi", "end", "end time"}:
+                item["end_at"] = ninova_datetime_iso(item[header])
         rows.append(item)
     return rows
 
@@ -1861,7 +1887,7 @@ def extract_help_tickets(
             date_span = anchor.find("span", class_="pull-right") if anchor else None
             title = clean_text(title_span.get_text(" ", strip=True)) if title_span else None
             date = clean_text(date_span.get_text(" ", strip=True)) if date_span else None
-            url = anchor.get("href") if anchor else None
+            url = urljoin(page_url, str(anchor["href"])) if anchor else None
             is_archived = bool(title_span and title_span.find("span", class_="panel-red"))
             if title:
                 items.append({
@@ -1874,7 +1900,7 @@ def extract_help_tickets(
     return {
         "url": page_url,
         "count": len(items),
-        "tickets": items[:20],
+        "tickets": items,
     }
 
 
