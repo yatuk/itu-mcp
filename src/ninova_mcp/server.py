@@ -1466,8 +1466,8 @@ class NinovaMcpApp:
         if missing_credits:
             result["credits_unresolved"] = missing_credits
             result["credits_unresolved_note"] = (
-                "Bu dersler için hiçbir kaynakta kredi bulunamadı; ortalamaya 0 kredi "
-                "ile girdiler."
+                "Bu dersler için güvenilir kredi belirlenemedi. "
+                "Hesaplama kapsamı ve bilinen derslerin ortalaması ayrı değerlendirilmelidir."
             )
         if grade_fallbacks:
             result["grade_fallback_courses"] = grade_fallbacks

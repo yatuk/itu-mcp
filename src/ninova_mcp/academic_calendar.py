@@ -285,17 +285,16 @@ def parse_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
         coverage = {"scope": "displayed_month", "start_date": date(default_year, month, 1).isoformat(),
                     "end_date": date(default_year, month, month_calendar.monthrange(default_year, month)[1]).isoformat(), "complete": complete}
     semesters = []
-    current_semester = None
     for event in ordered:
         description = normalize_lookup_text(event["description"])
         for term, label in (("fall term", "Fall (Güz)"), ("spring term", "Spring (Bahar)"), ("summer term", "Summer (Yaz)"), ("summer school", "Summer School (Yaz Okulu)")):
             if term in description and "beginning of" in description:
-                current_semester = label
                 semesters.append({"semester": label, "start": event["date"], "type": "start"})
             elif term in description and "end of" in description:
                 semesters.append({"semester": label, "end": event["date"], "type": "end"})
     result: dict[str, Any] = {"url": page_url, "event_count": len(ordered), "events": ordered,
-        "semesters": semesters, "current_semester": current_semester, "source": urlparse(page_url).hostname,
+        "semesters": semesters, "current_semester": None,
+        "current_semester_status": "not_explicitly_identified_by_source", "source": urlparse(page_url).hostname,
         "timezone": TIMEZONE, "coverage": coverage, "parse_complete": complete,
         "unparsed_event_count": len(unparsed), "truncated": False,
         "note": "Coverage describes the fetched page only. Class registration windows are public schedules, not confirmation of personal eligibility."}

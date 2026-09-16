@@ -12,6 +12,13 @@ SOURCE = "https://www.takvim.sis.itu.edu.tr/AkademikTakvim/EN/academic-calendar/
 
 
 class CalendarDateTests(unittest.TestCase):
+    def test_future_start_is_not_declared_current_semester(self):
+        result = extract_academic_calendar(
+            '<table><tr><td><b>21 September 2035: Beginning of fall term</b></td></tr></table>', SOURCE)
+        self.assertEqual(len(result['semesters']), 1)
+        self.assertIsNone(result['current_semester'])
+        self.assertEqual(result['current_semester_status'], 'not_explicitly_identified_by_source')
+
     def test_explicit_time_ranges_and_shared_components(self):
         cases = [
             ("17 September 10:00 - 17 September 2026 13:00", "2026-09-17T10:00:00+03:00", "2026-09-17T13:00:00+03:00"),
