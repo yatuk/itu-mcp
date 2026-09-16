@@ -1,19 +1,26 @@
 # Library service status
 
-Checked on September 13, 2026.
+Updated on September 16, 2026.
 
 The [official ITU Library website](https://kutuphane.itu.edu.tr/) links its catalog search to
 [the current catalog](https://katalog.kutuphane.itu.edu.tr/client/tr_TR/default/),
-which identifies itself as SirsiDynix Portfolio. This differs from the legacy Millennium
-WebPAC platform implemented by `LibraryClient`. Modern records use `SD_ILS` identifiers,
-and their routes and dynamically loaded copy statuses require a separate adapter.
-Changing the base hostname alone is insufficient.
+which identifies itself as Sirsi Portfolio. `LibraryClient` now defaults to that
+platform with a verified public GET adapter for searches, `SD_ILS:` record identity,
+detail pages and copy tables. See [catalog support](library-catalog.md) for the live
+routes, fixture provenance, pagination and remaining limitations.
 
 Live HTTPS requests to the legacy `divit.library.itu.edu.tr` catalog failed certificate
 verification. The current catalog passed TLS verification but returned HTTP 403 from
-the development machine, the deployed server, and a separate browser tab. These checks
-did not use library credentials. Search, item details, availability, and account access
-on the current platform therefore remain unverified. TLS verification stays enabled.
+the ordinary development and deployed-server paths. On September 16, anonymous Pi
+requests using the existing Ethernet source and `mullvad-exclude` together returned
+HTTP 200 and verified search, detail, pagination and an explicit empty result. Source
+binding alone was insufficient. This probe used the SSH user, not the production
+service identity. No network or service configuration was changed.
+
+Current shelf availability is still unknown when the initial HTML contains asynchronous
+loading placeholders. The follow-up public POST was not accepted in the anonymous
+probe. Account and loan flows were not tested and are explicitly unsupported by the
+new adapter. No credentials were read or submitted. TLS verification stays enabled.
 
 The availability fix addresses an independent, reproducible error in the existing client.
 Previously, any copy field containing `available` could count as available, including
@@ -23,6 +30,7 @@ An available copy proves availability, while a negative overall result requires 
 copy to have an explicitly negative status. Existing fields remain present, with
 additional counts for unavailable and unknown copies and warnings for incomplete evidence.
 
-This fix is covered by mocked regression tests. It does not establish that the library
-tools currently work against the migrated live catalog. A new adapter requires accessible
-public catalog pages and verification of the separate library authentication flow.
+These behaviors are covered by fixture and mocked regression tests. Production
+transport needs separate verification in the service's execution context. Successful
+public GETs through the established test route do not establish that the complete
+Library tool group is operational.

@@ -347,11 +347,17 @@ remote HTTP transports.
 ### Library tools
 
 - `library_search` / `library_get_item` / `library_check_availability` are public.
-- `library_get_account` / `library_list_loans` use the separate library variables above.
-- `library_renew_loan` and `library_reserve_item` are dry-run by default and submit only
-  with `confirm=true`. They are not exposed by the remote HTTP transport.
+  The default Sirsi adapter uses `SD_ILS:` record IDs and paginates using `next_offset`.
+  Copy statuses that require asynchronous loading remain unknown.
+- `library_get_account` / `library_list_loans` are unavailable on the current Sirsi
+  platform. Separate library credentials apply only to explicit legacy configuration.
+- `library_renew_loan` and `library_reserve_item` are unavailable on Sirsi. In legacy
+  mode they are dry-run by default and submit only with `confirm=true`. They are not
+  exposed by the remote HTTP transport.
 - If the library host presents an expired or otherwise invalid certificate, the client
   fails closed with a TLS error instead of disabling verification.
+
+See [catalog support and live transport limits](library-catalog.md) for acceptance scope.
 
 ### External-content safety
 
