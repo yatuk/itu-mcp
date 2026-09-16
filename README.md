@@ -262,7 +262,9 @@ export NINOVA_COURSE_CACHE_TTL_SECONDS=60
 export NINOVA_REQUEST_DELAY_MS=120
 export NINOVA_SESSION_PERSIST=1
 export NINOVA_ALLOW_UPLOADS=1
-# Kütüphane hesabı araçları için (public katalog araması bunları istemez):
+# İsteğe bağlı, operatörün önceden kurduğu yerel CONNECT proxy:
+# NINOVA_LIBRARY_PROXY_URL="http://127.0.0.1:18888"
+# Yalnız eski WebPAC uyumluluğu için (yeni katalogda hesap araçları desteklenmiyor):
 # NINOVA_LIBRARY_NAME="Soyad, Ad"
 # NINOVA_LIBRARY_ID="öğrenci-numarası"
 # NINOVA_LIBRARY_PIN="ayrı-kütüphane-pin'i"
@@ -272,6 +274,16 @@ export NINOVA_ALLOW_UPLOADS=1
 ```
 
 Tüm değişkenler için `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
+
+`NINOVA_LIBRARY_PROXY_URL` yalnız yeni kütüphane kataloğunun anonim HTTPS GET
+isteklerini etkiler. `http://127.0.0.1:PORT` veya `http://[::1]:PORT` biçiminde,
+1024–65535 aralığında açık port gerekir. Kullanıcı adı, şifre, sorgu ve ek yol
+kabul edilmez. Proxy önceden çalışıyor olmalıdır; bu ayar servis kurmaz veya VPN
+yapılandırmasını değiştirmez. Ayar yoksa katalog doğrudan bağlanır. Yeni katalog
+istemcisi her iki durumda da `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` ve `.netrc`
+ayarlarını kullanmaz. TLS doğrulaması açıktır; proxy hatasında başka rotaya
+geçilmez. Eski WebPAC hesap araçları ve diğer İTÜ/PaperBridge istemcileri bu
+ayardan etkilenmez. Kapsam ve doğrulama: [docs/library-catalog.md](docs/library-catalog.md).
 
 ---
 

@@ -7,7 +7,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 import requests
 
@@ -25,6 +25,27 @@ from .public_parsing import (
 
 class LibraryError(RuntimeError):
     """İTÜ Library catalog/account error."""
+
+
+def _library_proxy_url(raw: str | None) -> str | None:
+    """Accept only an operator's explicit loopback CONNECT endpoint."""
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = urlsplit(raw)
+        if (any(ord(char) <= 32 or ord(char) == 127 for char in raw)
+                or parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in {"", "/"} or "?" in raw or "#" in raw
+                or parsed.port is None or not 1024 <= parsed.port <= 65535):
+            raise ValueError
+        host = "[::1]" if parsed.hostname == "::1" else "127.0.0.1"
+        return f"http://{host}:{parsed.port}"
+    except (TypeError, ValueError):
+        raise LibraryError(
+            "NINOVA_LIBRARY_PROXY_URL must be an http loopback CONNECT proxy with an explicit "
+            "port from 1024 to 65535 and no credentials, path, query or fragment."
+        ) from None
 
 
 class LibraryClient:
@@ -45,13 +66,27 @@ class LibraryClient:
         parsed = urlparse(self.base_url)
         self._legacy = parsed.hostname == self.LEGACY_HOST
         self._host = self.LEGACY_HOST if self._legacy else self.ALLOWED_HOST
-        self._validate_url(self.base_url)
+        self._validate_origin(self.base_url)
         allowed_paths = {"", "/"} if self._legacy else {"", "/", "/client/tr_TR/default"}
         if parsed.path not in allowed_paths or parsed.query or parsed.fragment:
             raise LibraryError("NINOVA_LIBRARY_BASE_URL must be the official catalog root.")
         if not self._legacy:
             self.base_url = self.BASE_URL
         self.session = session or requests.Session()
+        if not self._legacy:
+            # A supplied session is dedicated to and owned by this client.
+            # Public Sirsi never inherits account identity, .netrc, ambient
+            # proxies, client certs or hooks, even without the proxy opt-in.
+            # Keep later server-issued anonymous cookies for Sirsi redirects.
+            proxy = _library_proxy_url(os.getenv("NINOVA_LIBRARY_PROXY_URL"))
+            self.session.trust_env = False
+            self.session.headers.clear()
+            self.session.params = {}
+            self.session.auth = None
+            self.session.cert = None
+            self.session.hooks = {"response": []}
+            self.session.cookies = requests.cookies.RequestsCookieJar()
+            self.session.proxies = {"https": proxy} if proxy else {}
         self.session.headers.update(DEFAULT_HEADERS)
         self._cache: TtlCache[Any] = TtlCache(
             parse_ttl_seconds(os.getenv("NINOVA_LIBRARY_CACHE_TTL_SECONDS"), 300.0)
@@ -69,15 +104,59 @@ class LibraryClient:
             return str(path)
         return True
 
-    def _validate_url(self, url: str) -> None:
-        parsed = urlparse(url)
+    def _validate_origin(self, url: str) -> None:
         try:
+            parsed = urlsplit(url)
             allowed = (parsed.scheme == "https" and parsed.hostname == self._host
-                       and parsed.port in {None, 443} and not parsed.username and not parsed.password)
+                       and parsed.port in {None, 443}
+                       and parsed.username is None and parsed.password is None
+                       and not any(ord(char) <= 32 or ord(char) == 127 for char in url))
         except ValueError:
             allowed = False
         if not allowed:
             raise LibraryError("Library URL must use the configured official HTTPS catalog host.")
+
+    def _validate_url(self, url: str) -> None:
+        self._validate_origin(url)
+        if self._legacy:
+            return
+        parsed = urlsplit(url)
+        prefix = "/client/tr_TR/default/"
+        root = parsed.path in {prefix.rstrip("/"), prefix}
+        search = parsed.path == prefix + "search/results"
+        detail = parsed.path == prefix + "search/detailnonmodal"
+        # A one-result ISBN query uses this exact public redirect, observed in
+        # Sirsi's Location header. Tapestry component/action paths are excluded.
+        one_result = bool(re.fullmatch(
+            re.escape(prefix) + r"search/detailnonmodal/ent:\$002f\$002fSD_ILS\$002f0\$002fSD_ILS:[0-9]{1,12}/one",
+            parsed.path,
+        ))
+        if parsed.fragment or not (root or search or detail or one_result):
+            raise LibraryError("Only verified public Sirsi catalog paths are allowed.")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError:
+            raise LibraryError("The public catalog query is malformed.") from None
+        values = dict(pairs)
+        permitted = set() if root else {"d", "qu", "rt", "ps", "rw"} if detail else {"qu", "rt", "ps", "rw"}
+        if len(values) != len(pairs) or set(values) - permitted:
+            raise LibraryError("Only public catalog search parameters are allowed.")
+        if any(ord(char) < 32 or ord(char) == 127 for value in values.values() for char in value):
+            raise LibraryError("Control characters are not allowed in public catalog parameters.")
+        if "qu" in values and not 1 <= len(values["qu"]) <= 256:
+            raise LibraryError("The public catalog search query must have at most 256 characters.")
+        if "rt" in values and values["rt"] not in {
+            "false|||" + "|||".join(field) for field in SEARCH_FIELDS.values() if field
+        }:
+            raise LibraryError("The catalog search field is not recognized.")
+        for name, lower, upper in (("ps", 1, 50), ("rw", 0, 10000)):
+            if name in values and (not re.fullmatch(r"[0-9]+", values[name])
+                                   or not lower <= int(values[name]) <= upper):
+                raise LibraryError("The catalog pagination parameter is outside its supported range.")
+        if "d" in values and not re.fullmatch(
+            r"ent://SD_ILS/0/SD_ILS:[0-9]{1,12}(?:~ILS~0|~~0)", values["d"]
+        ):
+            raise LibraryError("The public catalog record parameter is not recognized.")
 
     def _request(
         self,
@@ -89,6 +168,11 @@ class LibraryClient:
     ) -> requests.Response:
         url = urljoin(self.base_url + "/", url_or_path)
         self._validate_url(url)
+        if not self._legacy:
+            if method.upper() != "GET" or data is not None:
+                raise LibraryError("The public Sirsi catalog client permits GET requests without a body only.")
+            # Validate the actual encoded query before requests can send it.
+            self._validate_url(requests.Request("GET", url, params=params).prepare().url)
         remaining = self._min_request_interval - (time.monotonic() - self._last_request_at)
         if remaining > 0:
             time.sleep(remaining)
@@ -99,6 +183,7 @@ class LibraryClient:
                 method,
                 url,
                 validate_url=self._validate_url,
+                max_redirects=10 if self._legacy else 3,
                 params=params,
                 data=data,
                 timeout=35,

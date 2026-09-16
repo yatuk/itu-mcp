@@ -30,6 +30,32 @@ Modern base URLs are restricted to the official root, with TLS verification and
 redirect host validation enabled. HTTP 403, TLS errors, wrong item identity and
 unrecognized search HTML remain errors rather than successful empty results.
 
+## Optional local proxy for public catalog traffic
+
+An operator may set `NINOVA_LIBRARY_PROXY_URL=http://127.0.0.1:18888` to use an
+existing HTTP CONNECT proxy. The URL must use literal `127.0.0.1` or `[::1]`, an
+explicit port from 1024 to 65535, and no credentials, query, fragment or path
+other than an optional trailing slash. The proxy must already permit CONNECT
+to `katalog.kutuphane.itu.edu.tr:443`. This setting does not install a proxy or
+change service privileges, VPN configuration, system routing or TLS checks.
+The client makes one attempt per request and follows at most three redirects.
+Connection failure does not switch to another proxy or a direct route.
+
+Only anonymous public Sirsi GET requests without bodies use this transport.
+Every request and redirect must use the exact official HTTPS host and a verified
+catalog root, search-results or detail path, with bounded public search query
+parameters. Account, login and Tapestry component-action routes are excluded.
+CONNECT carries encrypted HTTPS, so path and method validation occurs in the
+client; the operator's proxy remains responsible for its own destination policy.
+
+The public client owns its session, including any session explicitly supplied
+by embedding code. It clears inherited headers, cookies, authentication, client
+certificates, parameters, hooks and proxy settings before use, and disables
+environment proxy and `.netrc` discovery. This also applies with no proxy option,
+when requests use the system's direct route. Anonymous cookies issued by the
+catalog after initialization are retained for its verified redirects.
+Legacy WebPAC sessions and other MCP clients keep their existing transports.
+
 ## Validation and remaining deployment requirement
 
 On 16 September 2026, anonymous live reads through the already configured Pi
@@ -54,8 +80,10 @@ availability support.
 The default Pi request path returned HTTP 403. A source-address binding alone
 failed to connect, as did `mullvad-exclude` without the source binding. Only their
 existing combination returned HTTP 200. The probe ran as the SSH user, while the
-production service runs as `itu-mcp`. This change adds no transport subprocess,
-source binding, TLS exemption, service restart or network configuration. Production
-access must be separately verified in the service's actual execution context.
+production service runs as `itu-mcp`. The optional loopback proxy adds no transport
+subprocess, source binding or TLS exemption to the library client. Its focused
+offline tests inspect actual prepared requests, anonymous cookies, destination
+checks and failure handling. Production access through an operator-configured
+proxy must be separately verified in the service's actual execution context.
 The adapter's live acceptance is limited to the established working public
 transport. It is not acceptance of the complete Library tool group.
