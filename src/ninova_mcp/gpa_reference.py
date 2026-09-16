@@ -18,6 +18,10 @@ def _number(value: Any) -> float | None:
 def official_term_reference(payload: dict[str, Any], term_code: str | None) -> dict[str, Any]:
     """Do not guess between concurrent programs or substitute another term."""
     candidates = []
+    if not isinstance(payload, dict) or type(payload.get('statusCode')) is not int or payload['statusCode'] != 0:
+        return {'status': 'unavailable', 'gpa': None, 'credits': None,
+                'reason': 'No successful official status response was received.',
+                'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
     programs = [p for p in payload.get('kayitDurumuList') or [] if isinstance(p, dict)]
     if len(programs) > 1:
         return {'status': 'ambiguous', 'gpa': None, 'credits': None,
@@ -56,10 +60,16 @@ def attach_official_reference(result: dict[str, Any], reference: dict[str, Any],
     result['is_projection'] = projection
     # Keep the existing calculator field and course arithmetic intact. Consumers
     # answering an official-average question have an explicit preferred value.
-    result['preferred_term_gpa'] = calculated if projection or official is None else official
-    result['preferred_term_gpa_source'] = 'calculated' if projection or official is None else 'official_obs'
+    projection_complete = result.get('projection_complete', True) and result.get('calculation_complete', True)
+    preferred = calculated if projection or official is None else official
+    if projection and not projection_complete:
+        preferred = None
+    result['preferred_term_gpa'] = preferred
+    result['preferred_term_gpa_source'] = ('unavailable' if preferred is None else
+        'calculated' if projection or official is None else 'official_obs')
     result['comparison_status'] = (
-        'projection' if projection else 'unavailable' if calculated is None or official is None
+        ('projection' if projection_complete and calculated is not None else 'projection_incomplete')
+        if projection else 'unavailable' if calculated is None or official is None
         else 'match' if abs(calculated - official) < 0.005 else 'mismatch'
     )
     result['gpa_difference'] = round(calculated - official, 4) if (

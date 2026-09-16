@@ -7,7 +7,7 @@ from ninova_mcp.server import NinovaMcpApp
 
 
 def status(gpa=3.5, credits=10, term='202620'):
-    return {'kayitDurumuList': [{'akademikProgramAdi': 'Example program',
+    return {'statusCode': 0, 'kayitDurumuList': [{'akademikProgramAdi': 'Example program',
         'kayitDurumuDonemList': [{'akademikDonemKodu': term,
             'donemlikNotOrtalamasi': gpa, 'verilenKredi': credits}]}]}
 
@@ -66,8 +66,9 @@ class OfficialGpaTests(unittest.TestCase):
 
     def test_wrong_term_invalid_number_or_ambiguous_program_cannot_be_preferred(self):
         for payload in [status(term='202610'), status(gpa='NaN'), status(gpa=True),
-                        {'kayitDurumuList': status()['kayitDurumuList'] + status(term='202610')['kayitDurumuList']},
-                        {'kayitDurumuList': status()['kayitDurumuList'] * 2}]:
+                        {'statusCode': 0, 'kayitDurumuList': status()['kayitDurumuList'] + status(term='202610')['kayitDurumuList']},
+                        {'statusCode': 0, 'kayitDurumuList': status()['kayitDurumuList'] * 2},
+                        {**status(), 'statusCode': 1}]:
             with self.subTest(payload=payload):
                 ref = official_term_reference(payload, '202620')
                 self.assertIsNone(ref['gpa'])
@@ -79,6 +80,17 @@ class OfficialGpaTests(unittest.TestCase):
     def test_zero_is_an_explicit_official_value_and_comma_decimal_is_supported(self):
         self.assertEqual(official_term_reference(status(gpa=0), '202620')['gpa'], 0)
         self.assertEqual(official_term_reference(status(gpa='3,5'), '202620')['gpa'], 3.5)
+
+    def test_incomplete_calculation_or_unused_projection_is_not_preferred(self):
+        result = {'gpa': None, 'calculation_complete': False, 'known_courses_gpa': 4}
+        attach_official_reference(result, official_term_reference({}, '202620'), projection=False)
+        self.assertIsNone(result['preferred_term_gpa'])
+        self.assertEqual(result['preferred_term_gpa_source'], 'unavailable')
+        result = {'gpa': 3, 'projection_complete': False}
+        attach_official_reference(result, official_term_reference(status(), '202620'), projection=True)
+        self.assertIsNone(result['preferred_term_gpa'])
+        self.assertEqual(result['official_term_gpa'], 3.5)
+        self.assertEqual(result['comparison_status'], 'projection_incomplete')
 
     def test_server_reads_only_matching_term_and_can_skip_extra_read(self):
         app = NinovaMcpApp.__new__(NinovaMcpApp)
