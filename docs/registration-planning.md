@@ -16,6 +16,8 @@ Call `obs_get_elective_group(group_id)` with the official group ID shown in the 
 
 The result contains the official membership list and matches each exact course code, including its language suffix, to the current undergraduate schedule. Each member includes `offered_this_term`, `crns`, `sections`, and `eligibility`. Sections retain meeting times, capacity, program restrictions, and prerequisite information from the public table. Their individual `eligibility` records contain the authenticated OBS verdict and restriction codes.
 
+`sections` and `crns` contain normal course offerings. Sections marked `Ek Sınav` are listed under `exam_only_sections` and `exam_only_crns`, and do not make `offered_this_term` true. Zero capacity by itself does not identify an exam section. Only normal sections are included in the group's independent eligibility checks.
+
 Membership does not establish registration eligibility. A course can belong to an elective group and have an offered section that excludes the student's program. Missing, unreadable, or mismatched term data remains unknown.
 
 Section eligibility is checked independently, so alternative electives do not create artificial conflicts or exceed a combined credit limit. Up to 24 sections are checked per call. All membership and schedule rows are returned, and unchecked eligibility remains unknown. Check a specific remaining CRN with `obs_validate_registration_plan`. Public membership and schedules remain available if authentication fails.
@@ -36,6 +38,8 @@ The result reports:
 `status` is `valid`, `invalid`, or `incomplete`. `valid` is respectively `true`, `false`, or `null`. A known blocker produces `invalid`, even if other checks are incomplete. Missing evidence never produces an unconditional success.
 
 Courses in this selection do not count as already completed prerequisites for another course in the same selection. Future chains and elective assignments are conditional on registration, passing, required grades, and official credit counting. A chain to a course requiring a minimum BB grade is preserved only if that grade is achieved. Unknown local grade evidence remains separate when the live OBS checker confirms eligibility.
+
+Prerequisite tools share the full İTÜ numeric grade table, including all six `+` grades, and include successful valid unused courses in completed history. A nonnumeric pass does not establish a numeric minimum. Unverified grade evidence appears in `unknown_courses`, separately from known unmet requirements in `missing_courses`.
 
 A valid registration plan does not certify graduation. Unfilled requirements can remain for later terms. Future course offerings, time to graduation, final GPA, and final credit counting are not predicted. Chain analysis covers remaining required courses in the student's official degree plan. It does not infer an exhaustive dependency graph for every possible elective.
 

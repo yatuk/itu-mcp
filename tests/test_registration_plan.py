@@ -175,7 +175,9 @@ class RegistrationPlanTests(unittest.TestCase):
         self.assertTrue(prerequisite["satisfied"])
         self.assertEqual(prerequisite["missing_courses"], [])
         self.assertEqual(prerequisite["history_evaluation"]["status"], "unknown")
-        self.assertEqual(prerequisite["history_evaluation"]["missing_courses"], ["BLG 101"])
+        self.assertEqual(prerequisite["history_evaluation"]["missing_courses"], [])
+        self.assertEqual(prerequisite["history_evaluation"]["unknown_courses"], ["BLG 101"])
+        self.assertEqual(prerequisite["unknown_courses"], [])
 
     def test_known_obs_class_denial_is_a_blocker(self) -> None:
         result = analyze(eligibility={"10001": {"eligible": True, "class_eligible": False}})

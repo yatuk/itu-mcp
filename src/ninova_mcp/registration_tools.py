@@ -9,7 +9,7 @@ import requests
 from .archive import normalize_course_code, split_course_code
 from .client import NinovaError
 from .elective_groups import enrich_elective_group, fetch_elective_group
-from .graduation import FAILING_GRADES, summarize_graduation_plan
+from .graduation import completed_course_history, summarize_graduation_plan
 from .parsing import normalize_lookup_text
 from .obs_client import ObsError
 from .registration_draft import DRAFT_PATH, _now, normalize_crns, require_success
@@ -110,16 +110,7 @@ def _history(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str | N
     plan = info.get('dersPlaniVM') or {}
     summary['english_credits_required'] = plan.get('gerekliIngilizceKredi')
     summary['english_credits_earned'] = info.get('metIngKrediTotal')
-    completed: dict[str, str | None] = {}
-    grade_order = {'AA': 8, 'BA': 7, 'BB': 6, 'CB': 5, 'CC': 4, 'DC': 3, 'DD': 2}
-    rows = [row for row in info['checkMetMezuniyetList'] if row.get('isMet')]
-    rows += [row for row in info.get('unusedSinifOgrenciList') or [] if row.get('isValidAndUnused') is True]
-    for row in rows:
-        code, grade = _canonical(row.get('bransKodu')), str(row.get('harfNotu') or '').strip().upper()
-        if code and grade not in FAILING_GRADES:
-            if code not in completed or grade_order.get(grade, 0) > grade_order.get(completed[code], 0):
-                completed[code] = grade or None
-    return summary, completed
+    return summary, completed_course_history(info)
 
 
 def _rules(public: Any, codes: set[str]) -> tuple[dict[str, Any], list[str]]:

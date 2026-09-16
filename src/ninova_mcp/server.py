@@ -2102,20 +2102,11 @@ class NinovaMcpApp:
 
         obs_credits: float | None = None
         if use_obs_history:
-            failing = {"FF", "FD", "VF", "BZ", "KF", "IA", "NA", ""}
+            from .graduation import completed_course_history
+
             graduation = self.obs.get_graduation_remaining(self.obs.default_program_id())
             info = graduation.get("mezuniyetimeNeKaldiBilgi") or {}
-            for item in info.get("checkMetMezuniyetList") or []:
-                if not item.get("isMet"):
-                    continue
-                grade = str(item.get("harfNotu") or "").upper()
-                if grade in failing:
-                    continue
-                try:
-                    code = split_course_code(str(item.get("bransKodu") or ""))
-                except ValueError:
-                    continue
-                completed[f"{code[0]} {code[1]}"] = grade or None
+            completed.update(completed_course_history(info))
             obs_credits = info.get("metKrediTotal")
             if completed_credits is None:
                 completed_credits = obs_credits
@@ -2249,10 +2240,12 @@ class NinovaMcpApp:
                     )
 
         eligible: bool | None
-        if blockers and credit_met is None and verdict["satisfied"]:
-            eligible = None  # only the unknown credit total stands in the way
+        if verdict["satisfied"] is False or credit_met is False:
+            eligible = False
+        elif verdict["satisfied"] is None or (credit_requirement is not None and credit_met is None):
+            eligible = None
         else:
-            eligible = verdict["satisfied"] and credit_met is not False
+            eligible = True
 
         result.update({
             "prerequisite_status": "has_prerequisites",
@@ -2262,6 +2255,7 @@ class NinovaMcpApp:
             "requirement_tree": rule.get("requirement_tree"),
             "minimum_grades": rule.get("minimum_grades"),
             "missing_courses": verdict.get("missing", []),
+            "unknown_courses": verdict.get("unknown", []),
             "credit_requirement": credit_requirement,
             "credit_requirement_met": credit_met,
         })

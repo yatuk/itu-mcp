@@ -123,6 +123,34 @@ class ElectiveGroupScheduleTests(unittest.TestCase):
                 self.assertIsNone(result["courses"][0]["offered_this_term"])
                 self.assertEqual(result["courses"][0]["schedule_status"], "unknown")
 
+    def test_exam_only_sections_remain_visible_without_claiming_a_normal_offering(self) -> None:
+        for method in ("Ek Sınav", "EK SINAV", "Ek Sınav 1", "Additional Exam", "exam-only"):
+            with self.subTest(method=method):
+                result = enrich_elective_group(self.group, {"UCK": {
+                    "semester": "2026-2027 Fall", "courses": [
+                        {"code": "UCK 358E", "crn": "12345", "capacity": 0, "method": method},
+                    ],
+                }})
+                course = result["courses"][0]
+                self.assertFalse(course["offered_this_term"])
+                self.assertEqual(course["sections"], [])
+                self.assertEqual(course["crns"], [])
+                self.assertEqual(course["exam_only_crns"], ["12345"])
+                self.assertEqual(course["exam_only_sections"][0]["section_kind"], "exam_only")
+                self.assertEqual(result["offered_course_count"], 0)
+
+    def test_zero_capacity_normal_section_is_still_a_normal_offering(self) -> None:
+        result = enrich_elective_group(self.group, {"UCK": {
+            "semester": "2026-2027 Fall", "courses": [
+                {"code": "UCK 358E", "crn": "12345", "capacity": 0, "method": "Ek Sınav"},
+                {"code": "UCK 358E", "crn": "12346", "capacity": 0, "method": "Örgün"},
+            ],
+        }})
+        course = result["courses"][0]
+        self.assertTrue(course["offered_this_term"])
+        self.assertEqual(course["crns"], ["12346"])
+        self.assertEqual(course["exam_only_crns"], ["12345"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
 from .archive import normalize_course_code, split_course_code
-from .parsing import clean_text, make_soup
+from .parsing import clean_text, make_soup, normalize_lookup_text
 
 if TYPE_CHECKING:
     from .obs_client import ObsPublicClient
@@ -130,7 +131,8 @@ def enrich_elective_group(
     A missing schedule, a parsing warning, an empty schedule, or missing term
     metadata leaves ``offered_this_term`` unknown. An empty match is only
     reported as false after reading other sections for that branch and term.
-    Student-specific eligibility must be evaluated separately for each CRN.
+    Exam-only sections are retained separately from normal course offerings.
+    Student-specific eligibility must be evaluated separately for each normal CRN.
     """
     result = deepcopy(group)
     normalized_schedules = {str(branch).strip().upper(): data for branch, data in schedules.items()}
@@ -143,6 +145,7 @@ def enrich_elective_group(
             continue
         schedule = normalized_schedules.get(branch) or {}
         sections = []
+        exam_only_sections = []
         rows = schedule.get("courses")
         malformed_rows = not isinstance(rows, list)
         for section in rows if isinstance(rows, list) else []:
@@ -157,7 +160,10 @@ def enrich_elective_group(
             if not str(section.get("crn") or "").strip().isascii() or not str(section.get("crn") or "").strip().isdigit():
                 malformed_rows = True
             if matches:
-                sections.append(deepcopy(section))
+                method = normalize_lookup_text(str(section.get("method") or ""))
+                exam_only = bool(re.fullmatch(r"ek sinav(?:\s*[12])?|additional exam(?:\s*[12])?|exam[- ]only", method))
+                target_sections = exam_only_sections if exam_only else sections
+                target_sections.append({**deepcopy(section), "section_kind": "exam_only" if exam_only else "regular"})
         term = str(schedule.get("semester") or "").strip()
         has_known_term = bool(term and term.casefold() not in {"unknown", "unknown semester", "bilinmeyen dönem"})
         readable = bool(
@@ -171,6 +177,8 @@ def enrich_elective_group(
         course.update({
             "offered_this_term": offered,
             "sections": sections,
+            "exam_only_sections": exam_only_sections,
+            "exam_only_crns": [str(section["crn"]) for section in exam_only_sections if section.get("crn")],
             "crns": [str(section["crn"]) for section in sections if section.get("crn")],
             "schedule_status": "available" if has_known_term and readable else "unknown",
             "semester": schedule.get("semester"),

@@ -264,6 +264,20 @@ class RegistrationCoordinatorTests(unittest.TestCase):
 
 
 class ElectiveCoordinatorTests(unittest.TestCase):
+    def test_exam_only_section_is_not_checked_as_a_normal_elective(self) -> None:
+        app = make_app()
+        app.obs_public.get_course_schedule.return_value["courses"] = [
+            {**section(), "method": "Ek Sınav", "capacity": 0},
+            section("10002", "BLG 201"),
+        ]
+        app.obs.validate_registration_crns.return_value = {"10002": verdict("10002")}
+        with patch("ninova_mcp.registration_tools.fetch_elective_group", return_value=elective_group(731, ["BLG 201"])):
+            result = get_elective_group(app, 731)
+        app.obs.validate_registration_crns.assert_called_once_with(["10002"])
+        self.assertEqual(result["courses"][0]["exam_only_crns"], ["10001"])
+        self.assertTrue(result["courses"][0]["offered_this_term"])
+        self.assertEqual(result["eligibility_checked_section_count"], 1)
+
     def test_each_section_is_checked_independently_even_if_they_conflict(self) -> None:
         app = make_app()
         app.obs_public.get_course_schedule.return_value["courses"] = [section(), section("10002", "BLG 201")]

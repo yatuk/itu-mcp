@@ -8,42 +8,19 @@ from __future__ import annotations
 
 from typing import Any
 
-# İTÜ lisans harf notu → 4'lük katsayı.
-# None, "kredisi sayılabilir ama GANO'ya katılmaz" demek; 0.00 ise gerçek bir
-# başarısızlık notu ve ortalamayı aşağı çeker.
-LETTER_TO_GRADE: dict[str, float | None] = {
-    "AA": 4.00,
-    "BA+": 3.75,  # İTÜ bağıl değerlendirme yönetmeliği Tablo 1 — ara ("+") notlar
-    "BA": 3.50,
-    "BB+": 3.25,
-    "BB": 3.00,
-    "CB+": 2.75,
-    "CB": 2.50,
-    "CC+": 2.25,
-    "CC": 2.00,
-    "DC+": 1.75,
-    "DC": 1.50,
-    "DD+": 1.25,
-    "DD": 1.00,
-    "FD": 0.50,
-    "FF": 0.00,
-    "VF": 0.00,  # Devamsızlıktan kalma — FF gibi 0.00 sayılır, tekrar gerekir
-    # Yüksek lisans
-    "BL": 0.00,  # Başarısız (lisansüstü)
-    "BZ": 0.00,  # Başarısız (lisansüstü)
-    # Geçer / Kalır (katsayıya dahil edilmez)
-    "GE": None,  # Geçer — kredi sayılır, GANO'ya katılmaz
-    "KF": None,  # Kalır — kredi sayılmaz, GANO'ya katılmaz
-    "IA": None,  # İzinsiz ayrıldı
-    # Devam eden
-    "NA": None,  # Not alınmadı
-    "TR": None,  # Transfer
-    "MU": None,  # Muaf
-    "EK": None,  # Eksik
-}
+from .archive import normalize_course_code
+from .grading import LETTER_TO_GRADE, normalize_grade
 
 # Kredi genelde OBS'te "kredi" alanındadır; AKTS değil.
 # Kayıtlı ders listesinde `kredi` genelde string gelir.
+
+
+def _course_key(value: Any) -> str:
+    try:
+        return normalize_course_code(str(value or ""))
+    except ValueError:
+        # Keep support for callers using display labels instead of OBS codes.
+        return " ".join(str(value or "").upper().split())
 
 
 def calculate_gpa(
@@ -61,17 +38,22 @@ def calculate_gpa(
     ``projected_grades``: ``{"BLG 223E": "AA", ...}`` — henüz notu belli
     olmayan veya beklenen not için elle girilmiş tahmin.
     """
-    projected = {
-        str(code).strip().upper(): str(grade).strip().upper()
-        for code, grade in (projected_grades or {}).items()
-        if str(code).strip() and str(grade).strip()
-    }
+    projected: dict[str, str] = {}
+    for code, grade in (projected_grades or {}).items():
+        key, normalized_grade = _course_key(code), normalize_grade(grade)
+        if not key or normalized_grade not in LETTER_TO_GRADE:
+            raise ValueError("Projected grades require a course code and a recognized İTÜ grade.")
+        if key in projected and projected[key] != normalized_grade:
+            raise ValueError(f"Conflicting projected grades for {key}.")
+        projected[key] = normalized_grade
+    used_projections: set[str] = set()
 
     total_points = 0.0
     total_credits = 0.0
     details: list[dict[str, Any]] = []
     ff_risk: list[dict[str, Any]] = []
     ungraded: list[dict[str, Any]] = []
+    unrecognized_grades: list[dict[str, Any]] = []
 
     for course in courses:
         code = course.get("code") or course.get("dersKodu") or "?"
@@ -90,7 +72,10 @@ def calculate_gpa(
         # A what-if value is an explicit override, including for a course that
         # already has an OBS letter grade.  This matches the public tool's
         # documented behaviour and lets users compare alternative outcomes.
-        projected_grade = projected.get(str(code).strip().upper())
+        course_key = _course_key(code)
+        projected_grade = projected.get(course_key)
+        if projected_grade is not None:
+            used_projections.add(course_key)
         grade_raw = projected_grade or course.get("grade") or course.get("harfNotu")
         grade = str(grade_raw).strip().upper() if grade_raw else None
 
@@ -98,6 +83,10 @@ def calculate_gpa(
 
         if grade is None:
             ungraded.append({**course, "code": code, "name": name, "credit": credit})
+            continue
+
+        if grade not in LETTER_TO_GRADE:
+            unrecognized_grades.append({"code": code, "grade": grade})
             continue
 
         if coefficient is None:
@@ -117,6 +106,9 @@ def calculate_gpa(
             "points": round(points, 2),
             "projected": projected_grade is not None,
         }
+        for field in ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source"):
+            if field in course:
+                detail[field] = course[field]
 
         # Risk flags
         if grade in ("FF", "VF"):
@@ -151,12 +143,14 @@ def calculate_gpa(
         "ungraded_course_count": len(ungraded),
         "courses": details,
         "ungraded": ungraded,
+        "unrecognized_grades": unrecognized_grades,
+        "unused_projected_courses": sorted(set(projected) - used_projections),
         "ff_risk": ff_risk,
         "comment": comment,
         "scale": "4.00",
         "note": (
             "Bu hesaplama bilgi amaçlıdır; resmi GANO için OBS transkriptine bakın. "
-            "GE/KF/IA/MU gibi notlar hesaba katılmaz."
+            "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
         ),
     }
 

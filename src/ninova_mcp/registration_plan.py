@@ -12,14 +12,9 @@ from collections import Counter
 from typing import Any
 
 from .archive import normalize_course_code
+from .grading import GRADE_VALUES, PASS_GRADES, grade_satisfies, normalize_grade
 from .schedule_utils import DAY_ORDER
 
-_GRADE_VALUES = {
-    "AA": 4.0, "BA": 3.5, "BB": 3.0, "CB": 2.5, "CC": 2.0,
-    "DC": 1.5, "DD": 1.0, "FD": 0.5, "FF": 0.0, "VF": 0.0,
-}
-_FAILING_GRADES = {"FD", "FF", "VF", "BZ", "KF", "IA", "NA"}
-_PASS_GRADES = {"BL", "GE", "MU", "TR", "S"}
 _ENGLISH_DAYS = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
     "friday": 4, "saturday": 5, "sunday": 6,
@@ -52,20 +47,6 @@ def _combine(values: list[bool | None], *, either: bool = False) -> bool | None:
     return None if None in values else True
 
 
-def _grade_check(earned: Any, minimum: Any) -> bool | None:
-    grade = str(earned or "").strip().upper()
-    required = str(minimum or "").strip().upper()
-    if grade in _FAILING_GRADES:
-        return False
-    if not required:
-        return True if not grade or grade in _GRADE_VALUES or grade in _PASS_GRADES else None
-    if required not in _GRADE_VALUES:
-        return None
-    if grade not in _GRADE_VALUES:
-        return None
-    return _GRADE_VALUES[grade] >= _GRADE_VALUES[required]
-
-
 def _evaluate(
     tree: Any,
     completed: dict[str, Any] | None,
@@ -73,33 +54,37 @@ def _evaluate(
 ) -> dict[str, Any]:
     """Evaluate exact AND/OR structure with unknown and minimum-grade support."""
     if tree is None:
-        return {"satisfied": True, "missing_courses": []}
+        return {"satisfied": True, "missing_courses": [], "unknown_courses": []}
     if not isinstance(tree, dict):
-        return {"satisfied": None, "missing_courses": []}
+        return {"satisfied": None, "missing_courses": [], "unknown_courses": []}
     kind = tree.get("type")
     if kind == "course":
         code = _code(tree.get("code"))
         if not code:
-            return {"satisfied": None, "missing_courses": []}
+            return {"satisfied": None, "missing_courses": [], "unknown_courses": []}
         if completed is None:
             satisfied = None
         elif code not in completed:
             satisfied = False
         else:
-            satisfied = _grade_check(completed[code], tree.get("min_grade"))
+            satisfied = grade_satisfies(completed[code], tree.get("min_grade"))
         if satisfied is not True and code in (planned or set()):
-            minimum = str(tree.get("min_grade") or "").strip().upper()
-            satisfied = True if not minimum or minimum in _GRADE_VALUES else None
-        return {"satisfied": satisfied, "missing_courses": [] if satisfied is True else [code]}
+            minimum = normalize_grade(tree.get("min_grade"))
+            satisfied = True if not minimum or minimum in GRADE_VALUES or minimum in PASS_GRADES else None
+        return {"satisfied": satisfied, "missing_courses": [code] if satisfied is False else [],
+                "unknown_courses": [code] if satisfied is None else []}
     operands = tree.get("operands")
     if kind not in {"and", "or"} or not isinstance(operands, list):
-        return {"satisfied": None, "missing_courses": []}
+        return {"satisfied": None, "missing_courses": [], "unknown_courses": []}
     results = [_evaluate(child, completed, planned) for child in operands]
     satisfied = _combine([r["satisfied"] for r in results], either=kind == "or")
     return {
         "satisfied": satisfied,
         "missing_courses": [] if satisfied is True else sorted({
             code for result in results for code in result["missing_courses"]
+        }),
+        "unknown_courses": [] if satisfied is True else sorted({
+            code for result in results for code in result["unknown_courses"]
         }),
     }
 
@@ -395,6 +380,7 @@ def _dependency_check(
             "after_plan_prerequisites_met_conditionally": future["satisfied"],
             "planned_prerequisites": relevant,
             "deferred_or_unmet_prerequisites": deferred,
+            "unverified_prerequisites": sorted(set(future["unknown_courses"]) - planned),
             "requirement": _expression(tree),
             "requirement_tree": tree,
             "conditional_grade_requirements": [{
@@ -482,6 +468,7 @@ def validate_registration_plan(
                 evaluation["satisfied"],
                 _expression(rule["requirement_tree"]),
                 missing_courses=evaluation["missing_courses"],
+                unknown_courses=evaluation["unknown_courses"],
                 requirement_tree=rule["requirement_tree"],
             )
         credit, class_check = _threshold_checks(rule, completed_credits, class_year)
@@ -492,6 +479,7 @@ def validate_registration_plan(
                 if field == "prerequisite_eligible":
                     check["history_evaluation"] = dict(check)
                     check["missing_courses"] = []
+                    check["unknown_courses"] = []
                 check.update(_check(True, f"OBS confirms the {field.replace('_', ' ')} check."))
         verdict = official.get("eligible") if isinstance(official.get("eligible"), bool) else None
         program = official.get("program_eligible")
