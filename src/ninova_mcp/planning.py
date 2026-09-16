@@ -17,12 +17,13 @@ def filter_academic_calendar(
     category: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
+    from .academic_calendar import calendar_query_matches
+
     start_filter = date.fromisoformat(date_from) if date_from else None
     end_filter = date.fromisoformat(date_to) if date_to else None
     if start_filter and end_filter and start_filter > end_filter:
         raise ValueError("date_from cannot be after date_to")
     category_key = normalize_lookup_text(category) if category else ""
-    query_key = normalize_lookup_text(query) if query else ""
     events: list[dict[str, Any]] = []
     for event in calendar.get("events") or []:
         start_raw = event.get("start_date")
@@ -38,13 +39,22 @@ def filter_academic_calendar(
                 continue
         if category_key and normalize_lookup_text(event.get("category")) != category_key:
             continue
-        if query_key and query_key not in normalize_lookup_text(
-            f"{event.get('description') or ''} {event.get('date') or ''}"
-        ):
+        if query and not calendar_query_matches(event, query):
             continue
         events.append(event)
+    coverage = calendar.get("coverage") or {}
+    warnings = []
+    if start_filter or end_filter:
+        covered_start, covered_end = coverage.get("start_date"), coverage.get("end_date")
+        if not covered_start or not covered_end:
+            warnings.append("The fetched page does not establish complete date coverage for this request.")
+        elif not start_filter or not end_filter or start_filter < date.fromisoformat(covered_start) or end_filter > date.fromisoformat(covered_end):
+            warnings.append("The requested dates extend beyond the fetched calendar page. An empty result outside its coverage does not establish that no events exist.")
+        if coverage.get("complete") is False:
+            warnings.append("Source coverage or parsing is incomplete. Date-filtered results may omit events.")
     return {
         **calendar,
+        **({"coverage_warning": " ".join(warnings)} if warnings else {}),
         "total_event_count": calendar.get("event_count", len(calendar.get("events") or [])),
         "event_count": len(events),
         "events": events,
