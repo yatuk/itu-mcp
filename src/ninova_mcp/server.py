@@ -1376,7 +1376,13 @@ class NinovaMcpApp:
 
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
-        registered = payload.get("kayitSinifResultList") or []
+        if not isinstance(payload, dict) or (
+            "statusCode" in payload and (type(payload["statusCode"]) is not int or payload["statusCode"] != 0)
+        ):
+            raise NinovaError("Registered courses could not be read successfully; GPA was not calculated.")
+        registered = payload.get("kayitSinifResultList")
+        if not isinstance(registered, list) or any(not isinstance(item, dict) for item in registered):
+            raise NinovaError("Registered-course data has an unrecognized shape; GPA was not calculated.")
 
         # The registered-course endpoint can omit usable credit. Preserve the
         # reported value and identify degree-plan credit used for the estimate.

@@ -13,6 +13,29 @@ def status(gpa=3.5, credits=10, term='202620'):
 
 
 class OfficialGpaTests(unittest.TestCase):
+    def test_malformed_official_collections_do_not_crash_or_prefer_valid_subset(self):
+        good = status()['kayitDurumuList'][0]
+        for programs in (42, 'invalid', [good, 42], [{**good, 'kayitDurumuDonemList': 42}],
+                         [{**good, 'kayitDurumuDonemList': [*good['kayitDurumuDonemList'], 42]}],
+                         [{**good, 'kayitDurumuDonemList': [*good['kayitDurumuDonemList'],
+                             {'akademikDonemKodu': '202620', 'donemlikNotOrtalamasi': 'invalid'}]}]):
+            with self.subTest(programs=programs):
+                self.assertIsNone(official_term_reference({'statusCode': 0, 'kayitDurumuList': programs}, '202620')['gpa'])
+
+    def test_failed_or_malformed_registered_response_is_not_calculated(self):
+        from ninova_mcp.client import NinovaError
+        app = NinovaMcpApp.__new__(NinovaMcpApp)
+        app._obs = Mock()
+        app._obs.resolve_semester.return_value = {'akademikDonemId': 1, 'donemKodu': '202620'}
+        app._fetch_graduation_info = Mock(return_value={})
+        for payload in ({'statusCode': 1, 'kayitSinifResultList': []},
+                        {'statusCode': 0, 'kayitSinifResultList': [42]},
+                        {'statusCode': 0, 'kayitSinifResultList': 42}):
+            app._obs.list_registered_courses.return_value = payload
+            with self.subTest(payload=payload), self.assertRaises(NinovaError):
+                app.obs_calculate_gpa(include_official=False)
+        app._fetch_graduation_info.assert_not_called()
+
     def test_fallback_matches_compact_code_and_requested_attempt_only(self):
         app = NinovaMcpApp.__new__(NinovaMcpApp)
         info = {'checkMetMezuniyetList': [

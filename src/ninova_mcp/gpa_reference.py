@@ -22,7 +22,11 @@ def official_term_reference(payload: dict[str, Any], term_code: str | None) -> d
         return {'status': 'unavailable', 'gpa': None, 'credits': None,
                 'reason': 'No successful official status response was received.',
                 'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
-    programs = [p for p in payload.get('kayitDurumuList') or [] if isinstance(p, dict)]
+    programs = payload.get('kayitDurumuList')
+    if not isinstance(programs, list) or any(not isinstance(p, dict) for p in programs):
+        return {'status': 'unavailable', 'gpa': None, 'credits': None,
+                'reason': 'The official program list has an unrecognized shape.',
+                'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
     if len(programs) > 1:
         return {'status': 'ambiguous', 'gpa': None, 'credits': None,
                 'reason': 'Registered courses do not identify a matching program.',
@@ -30,8 +34,18 @@ def official_term_reference(payload: dict[str, Any], term_code: str | None) -> d
                 'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
     if term_code:
         for program in programs:
-            for term in program.get('kayitDurumuDonemList') or []:
-                if not isinstance(term, dict) or str(term.get('akademikDonemKodu')) != str(term_code):
+            terms = program.get('kayitDurumuDonemList')
+            if not isinstance(terms, list) or any(not isinstance(t, dict) for t in terms):
+                return {'status': 'unavailable', 'gpa': None, 'credits': None,
+                        'reason': 'The official term list has an unrecognized shape.',
+                        'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
+            matching_terms = [t for t in terms if str(t.get('akademikDonemKodu')) == str(term_code)]
+            if len(matching_terms) > 1:
+                return {'status': 'ambiguous', 'gpa': None, 'credits': None,
+                        'candidate_count': len(matching_terms),
+                        'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
+            for term in matching_terms:
+                if str(term.get('akademikDonemKodu')) != str(term_code):
                     continue
                 gpa = _number(term.get('donemlikNotOrtalamasi'))
                 if gpa is None or not 0 <= gpa <= 4:
