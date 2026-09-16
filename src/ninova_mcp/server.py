@@ -928,9 +928,21 @@ class NinovaMcpApp:
         return self.obs.list_semesters()
 
     def obs_get_registration_status(self) -> dict[str, Any]:
+        from requests import RequestException
+        from .registration_status import summarize_registration_status
+
+        registration = self.obs.get_registration_status()
+        lesson_registration = self.obs.get_lesson_registration_status()
+        calendar = None
+        calendar_error = None
+        try:
+            calendar = self.obs_public.get_academic_calendar()
+        except (NinovaError, RequestException, ValueError):
+            calendar_error = "The public academic calendar is unavailable. Official OBS status is retained."
         return {
-            "kayit_durumu": self.obs.get_registration_status(),
-            "ders_kayit_durumu": self.obs.get_lesson_registration_status(),
+            "kayit_durumu": registration,
+            "ders_kayit_durumu": lesson_registration,
+            "summary": summarize_registration_status(registration, lesson_registration, calendar, calendar_error=calendar_error),
         }
 
     def obs_get_registration_draft(self) -> dict[str, Any]:
@@ -4447,7 +4459,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_registration_status",
         "title": "OBS Registration Status",
-        "description": "Read OBS registration and course-registration status (active/class level).",
+        "description": "Read official OBS registration status, class/GPA provenance and published class registration windows. Personal holds and credit limits are reported only when verified.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
