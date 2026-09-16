@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -7,8 +8,19 @@ from pathlib import Path
 from typing import Any
 
 
-TRACKING_STATE_VERSION = 1
+TRACKING_STATE_VERSION = 2
 MAX_UPDATE_HISTORY = 2000
+
+# Metadata follows the fields in overview. Different entity types may share
+# one read, for example the active/past session lists.
+ENTITY_SCOPES = {
+    "announcements": "announcements", "assignments": "assignments",
+    "class_files": "class_files", "lesson_files": "lesson_files",
+    "grades": "grades", "message_topics": "message_board",
+    "attendance_weeks": "attendance", "active_remote_sessions": "remote_learning",
+    "past_remote_sessions": "remote_learning", "course_info": "info",
+}
+SNAPSHOT_SCOPES = tuple(dict.fromkeys((*ENTITY_SCOPES.values(), "sections")))
 
 
 def utc_now_iso() -> str:
@@ -43,6 +55,7 @@ def load_tracking_state(path: Path) -> dict[str, Any]:
         "last_sync_at": document.get("last_sync_at"),
         "courses": document.get("courses", {}),
         "updates": document.get("updates", []),
+        "enrollment_coverage": document.get("enrollment_coverage", {"status": "unknown"}),
     }
 
 
@@ -145,6 +158,55 @@ def snapshot_entities(snapshot: dict[str, Any]) -> dict[str, dict[str, dict[str,
     }
 
 
+def scope_observation(snapshot: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Missing metadata is unknown, including snapshots written by version 1."""
+    return (snapshot.get("coverage") or {}).get(scope) or {"status": "unknown", "reason": "legacy_or_missing_coverage"}
+
+
+def has_complete_baseline(observation: dict[str, Any]) -> bool:
+    return observation.get("status") == "complete" or observation.get("baseline_complete") is True or bool(observation.get("last_complete_at"))
+
+
+def merge_course_snapshot(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    """Keep last-known data whenever the corresponding current read is incomplete.
+
+    The latest attempt's status remains visible alongside last_complete_at. A
+    first complete observation after an unknown/legacy baseline is accepted
+    silently by diff_course_snapshots; it does not claim historical changes.
+    """
+    merged = copy.deepcopy(current)
+    merged["coverage"] = {}
+    for scope in SNAPSHOT_SCOPES:
+        observation = copy.deepcopy(scope_observation(current, scope))
+        if observation["status"] == "complete":
+            observation["baseline_complete"] = True
+            observation["last_complete_at"] = current.get("captured_at") or utc_now_iso()
+            if scope == "assignments" and previous is not None and observation.get("details_included") is False:
+                old_items = {item.get("url"): item for item in previous.get("overview", {}).get("assignments", []) if item.get("url")}
+                for item in merged["overview"].get("assignments", []):
+                    old_item = old_items.get(item.get("url"), {})
+                    for key in ("description", "source_files", "required_files", "upload_items", "upload_url"):
+                        if item.get(key) is None and old_item.get(key) is not None:
+                            item[key] = copy.deepcopy(old_item[key])
+                            observation["details_retained"] = True
+                if observation.get("details_retained"):
+                    old = scope_observation(previous, scope)
+                    observation["details_last_observed_at"] = old.get("details_last_observed_at") or previous.get("captured_at")
+            elif scope == "assignments" and observation.get("details_included"):
+                observation["details_last_observed_at"] = current.get("captured_at")
+        elif previous is not None:
+            old = scope_observation(previous, scope)
+            if scope in previous.get("overview", {}):
+                merged["overview"][scope] = copy.deepcopy(previous["overview"][scope])
+                observation["data_retained"] = True
+            if has_complete_baseline(old):
+                observation["baseline_complete"] = True
+                observation["last_complete_at"] = old.get("last_complete_at") or previous.get("captured_at")
+        merged["coverage"][scope] = observation
+    merged["snapshot_complete"] = all(item["status"] == "complete" for item in merged["coverage"].values())
+    return merged
+
+
 def diff_course_snapshots(
     *,
     course: dict[str, Any],
@@ -161,6 +223,13 @@ def diff_course_snapshots(
     updates: list[dict[str, Any]] = []
 
     for entity_type, current_items in current_entities.items():
+        scope = ENTITY_SCOPES[entity_type]
+        if scope_observation(current_snapshot, scope)["status"] != "complete":
+            continue
+        if not has_complete_baseline(scope_observation(previous_snapshot, scope)):
+            # Version 1 could have stored empty defaults after failed reads.
+            # Re-observing those records must not generate a false re-add.
+            continue
         previous_items = previous_entities.get(entity_type, {})
 
         for entity_id, current_payload in current_items.items():

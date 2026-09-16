@@ -63,7 +63,11 @@ from .text_extract import (
     extract_text_from_path,
     guess_extension,
 )
-from .tracking import diff_course_snapshots, load_tracking_state, merge_updates, save_tracking_state, utc_now_iso
+from .tracking import (
+    TRACKING_STATE_VERSION, diff_course_snapshots, has_complete_baseline,
+    load_tracking_state, merge_course_snapshot, merge_updates, save_tracking_state, utc_now_iso,
+)
+from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 
 SERVER_NAME = "itu-mcp"
 SERVER_VERSION = "0.7.2"
@@ -327,28 +331,32 @@ class NinovaMcpApp:
         }
 
     def get_dashboard(self, compact: bool = False) -> dict[str, Any]:
-        html, response = self.client.get_html("/Kampus1")
-        page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
-        dashboard = summarize_dashboard(page_data, html=html, base_url=self.client.base_url)
-        courses = dashboard.get("courses") or []
-        if courses:
-            self._course_cache.set(COURSES_CACHE_KEY, courses)
-        elif not self._looks_like_authenticated_dashboard(page_data, html):
-            dashboard["parse_warning"] = (
-                "No courses found and the dashboard did not look like a logged-in "
-                "Ninova page. Session may have expired or the HTML layout changed."
-            )
-        else:
-            dashboard["parse_warning"] = (
-                "Dashboard loaded but no course links matching /Sinif/<id>.<id> "
-                "were found. The course list markup may have changed."
-            )
-        # Drop raw link dump by default noise; keep courses + recent tables.
+        dashboard = self._read_dashboard()
+        # Internal enrollment reads always use the full payload, even when
+        # NINOVA_COMPACT_DEFAULT truncates lists in a public tool response.
         if "links" in dashboard and compact is not False:
             dashboard = {**dashboard, "link_count": len(dashboard.get("links") or [])}
             if compact:
                 dashboard.pop("links", None)
         return self._out(dashboard, compact=compact)
+
+    def _read_dashboard(self) -> dict[str, Any]:
+        html, response = self.client.get_html("/Kampus1")
+        page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
+        dashboard = summarize_dashboard(page_data, html=html, base_url=self.client.base_url)
+        courses = dashboard.get("courses") or []
+        observed = enrollment_coverage(html, response.url, self.client.base_url + "/Kampus1", courses)
+        dashboard["enrollment_coverage"] = observed
+        if observed["status"] == "complete":
+            self._course_cache.set(COURSES_CACHE_KEY, courses)
+        else:
+            if courses and observed["status"] != "failed" and self._course_cache.get(COURSES_CACHE_KEY) is None:
+                self._course_cache.set(COURSES_CACHE_KEY, courses)
+            dashboard["parse_warning"] = (
+                f"Course discovery is {observed['status']}: {observed.get('reason')}. "
+                "Missing courses cannot be treated as removed."
+            )
+        return dashboard
 
     def list_courses(self, refresh: bool = False) -> dict[str, Any]:
         if not refresh:
@@ -359,15 +367,19 @@ class NinovaMcpApp:
                     "courses": cached,
                     "source": "cache",
                     "cache_ttl_seconds": self._course_cache_ttl_seconds,
+                    "enrollment_coverage": coverage("unknown", "cached_discovery"),
                 }
 
-        dashboard = self.get_dashboard()
+        dashboard = self._read_dashboard()
         courses = dashboard.get("courses") or []
-        self._course_cache.set(COURSES_CACHE_KEY, courses)
+        observed = dashboard.get("enrollment_coverage") or coverage("unknown", "missing_coverage")
+        if observed["status"] == "complete":
+            self._course_cache.set(COURSES_CACHE_KEY, courses)
         result: dict[str, Any] = {
             "count": len(courses),
             "courses": courses,
             "source": "live",
+            "enrollment_coverage": observed,
         }
         if dashboard.get("parse_warning"):
             result["parse_warning"] = dashboard["parse_warning"]
@@ -566,7 +578,11 @@ class NinovaMcpApp:
         course_limit: int | None = None,
         include_assignment_details: bool = False,
     ) -> dict[str, Any]:
-        courses = self.list_courses(refresh=True)["courses"]
+        enrollment = self.list_courses(refresh=True)
+        courses = enrollment["courses"]
+        observed_enrollment = dict(enrollment.get("enrollment_coverage") or coverage("unknown", "missing_coverage"))
+        if enrollment.get("parse_warning") and observed_enrollment["status"] == "complete":
+            observed_enrollment = coverage("unknown", enrollment["parse_warning"])
         current_course_urls = {course["url"] for course in courses}
         if course_limit is not None:
             courses = courses[: max(1, min(course_limit, len(courses)))]
@@ -577,6 +593,16 @@ class NinovaMcpApp:
         updates: list[dict[str, Any]] = []
         course_results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        previous_enrollment = state.get("enrollment_coverage") or coverage("unknown", "legacy_or_missing_coverage")
+        enrollment_complete = observed_enrollment["status"] == "complete"
+        if not enrollment_complete:
+            errors.append({"scope": "enrollment", "error": observed_enrollment.get("reason") or observed_enrollment["status"]})
+        if enrollment_complete:
+            observed_enrollment["baseline_complete"] = True
+            observed_enrollment["last_complete_at"] = synced_at
+        elif has_complete_baseline(previous_enrollment):
+            observed_enrollment["baseline_complete"] = True
+            observed_enrollment["last_complete_at"] = previous_enrollment.get("last_complete_at") or state.get("last_sync_at")
 
         for course in courses:
             try:
@@ -592,13 +618,15 @@ class NinovaMcpApp:
 
             previous_entry = state["courses"].get(course["url"])
             previous_snapshot = previous_entry.get("snapshot") if previous_entry else None
+            errors.extend({"course": course, **error} for error in snapshot.get("errors", []))
+            snapshot = merge_course_snapshot(previous_snapshot, snapshot)
             course_updates = diff_course_snapshots(
                 course=course,
                 previous_snapshot=None if baseline else previous_snapshot,
                 current_snapshot=snapshot,
                 detected_at=synced_at,
             )
-            if previous_entry is None and not baseline:
+            if previous_entry is None and not baseline and enrollment_complete and has_complete_baseline(previous_enrollment):
                 course_updates.insert(
                     0,
                     {
@@ -624,10 +652,15 @@ class NinovaMcpApp:
                 {
                     "course": course,
                     "update_count": len(course_updates),
+                    "coverage": state["courses"][course["url"]]["snapshot"]["coverage"],
+                    "snapshot_complete": state["courses"][course["url"]]["snapshot"]["snapshot_complete"],
                 }
             )
 
-        removed_course_urls = set(state["courses"]) - current_course_urls
+        removed_course_urls = (
+            set(state["courses"]) - current_course_urls
+            if enrollment_complete and has_complete_baseline(previous_enrollment) else set()
+        )
         for removed_url in sorted(removed_course_urls):
             removed_entry = state["courses"].pop(removed_url)
             if baseline:
@@ -647,6 +680,8 @@ class NinovaMcpApp:
             )
 
         state["last_sync_at"] = synced_at
+        state["version"] = TRACKING_STATE_VERSION
+        state["enrollment_coverage"] = observed_enrollment
         state["updates"] = merge_updates(state["updates"], updates)
         self._save_tracking_state_document(state)
 
@@ -658,6 +693,7 @@ class NinovaMcpApp:
             "courses": course_results,
             "updates": updates[:100],
             "errors": errors,
+            "enrollment_coverage": observed_enrollment,
             "tracking_state_path": str(self.tracking_state_path),
         }
 
@@ -3172,15 +3208,23 @@ class NinovaMcpApp:
             return {"code": None, "title": None, "url": root_url, "context": course}
 
         target = normalize_lookup_text(course)
+        from .archive import normalize_course_code
+
+        def normalized_code(value: str | None) -> str | None:
+            try:
+                return normalize_course_code(value or "")
+            except ValueError:
+                return None
+
+        target_code = normalized_code(course)
         exact_matches = [
             item
             for item in courses
-            if target
-            and target
-            in {
+            if (target_code is not None and target_code in {normalized_code(item.get("code")), normalized_code(item.get("title"))})
+            or (target and target in {
                 normalize_lookup_text(item.get("code")),
                 normalize_lookup_text(item.get("title")),
-            }
+            })
         ]
         if len(exact_matches) == 1:
             return exact_matches[0]
@@ -3191,7 +3235,7 @@ class NinovaMcpApp:
             )
             raise NinovaError(f"Ambiguous course reference: {course}. Matches: {options}")
 
-        fuzzy_matches = [
+        fuzzy_matches = [] if target_code is not None else [
             item
             for item in courses
             if target in normalize_lookup_text(item.get("code"))
@@ -3311,9 +3355,13 @@ class NinovaMcpApp:
         include_assignment_details: bool = False,
     ) -> dict[str, Any]:
         errors: list[dict[str, str]] = []
+        observations: dict[str, dict[str, Any]] = {}
 
         course_html, course_response = self.client.get_html(course["url"])
         sections = extract_course_sections(course_html, course_response.url, base_url=self.client.base_url)
+        observations["sections"] = coverage("complete") if sections else coverage("unknown", "course_sections_not_recognized")
+        if not sections:
+            errors.append({"scope": "sections", "path": course["url"], "error": "course_sections_not_recognized"})
 
         info = self._safe_extract_course_payload(
             course["url"] + "/SinifBilgileri",
@@ -3330,6 +3378,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="info",
+            observations=observations,
         )
 
         announcements = self._safe_extract_course_payload(
@@ -3340,6 +3389,7 @@ class NinovaMcpApp:
             default={"announcements": []},
             errors=errors,
             error_scope="announcements",
+            observations=observations,
         )["announcements"][:200]
         for item in announcements:
             item["published_at_iso"] = ninova_datetime_iso(item.get("published_at"))
@@ -3352,35 +3402,36 @@ class NinovaMcpApp:
             default={"assignments": []},
             errors=errors,
             error_scope="assignments",
+            observations=observations,
         )["assignments"][:200]
         if include_assignment_details:
-            assignments = [self._merge_assignment_detail(item) for item in assignments]
+            detailed = []
+            for item in assignments:
+                try:
+                    detailed.append(self._merge_assignment_detail(item))
+                except Exception as exc:
+                    detailed.append(item)
+                    observations["assignments"] = coverage("partial", "assignment_detail_failed")
+                    errors.append({"scope": "assignments", "path": item.get("url") or course["url"], "error": str(exc)})
+            assignments = detailed
+        observations["assignments"]["details_included"] = include_assignment_details
         for item in assignments:
             item["submission_start_iso"] = ninova_datetime_iso(item.get("submission_start"))
             item["submission_end_iso"] = ninova_datetime_iso(item.get("submission_end"))
 
-        if include_files:
+        files: dict[str, list[dict[str, Any]]] = {"class_files": [], "lesson_files": []}
+        for scope, path in (("class_files", "/SinifDosyalari"), ("lesson_files", "/DersDosyalari")):
+            observations[scope] = coverage("skipped", "include_files_false")
+            if not include_files:
+                continue
             try:
-                class_files = self._walk_file_directory(
-                    course["url"] + "/SinifDosyalari",
-                    recursive=True,
-                    max_depth=file_max_depth,
-                )["entries"]
+                listing = self._walk_file_directory(course["url"] + path, recursive=True, max_depth=file_max_depth)
+                files[scope] = listing["entries"]
+                observations[scope] = listing["coverage"]
+                errors.extend({"scope": scope, **error} for error in listing.get("errors", []))
             except Exception as exc:
-                class_files = []
-                errors.append({"scope": "class_files", "path": course["url"] + "/SinifDosyalari", "error": str(exc)})
-            try:
-                lesson_files = self._walk_file_directory(
-                    course["url"] + "/DersDosyalari",
-                    recursive=True,
-                    max_depth=file_max_depth,
-                )["entries"]
-            except Exception as exc:
-                lesson_files = []
-                errors.append({"scope": "lesson_files", "path": course["url"] + "/DersDosyalari", "error": str(exc)})
-        else:
-            class_files = []
-            lesson_files = []
+                observations[scope] = coverage("failed", "file_listing_failed")
+                errors.append({"scope": scope, "path": course["url"] + path, "error": str(exc)})
 
         grades = self._safe_extract_course_payload(
             course["url"] + "/Notlar",
@@ -3388,6 +3439,7 @@ class NinovaMcpApp:
             default={"url": course["url"] + "/Notlar", "student_name": None, "weighted_average": None, "count": 0, "grades": []},
             errors=errors,
             error_scope="grades",
+            observations=observations,
         )
 
         message_board = self._safe_extract_course_payload(
@@ -3396,6 +3448,7 @@ class NinovaMcpApp:
             default={"url": course["url"] + "/MesajPanosu", "count": 0, "topics": []},
             errors=errors,
             error_scope="message_board",
+            observations=observations,
         )
 
         attendance = self._safe_extract_course_payload(
@@ -3412,6 +3465,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="attendance",
+            observations=observations,
         )
 
         remote_learning = self._safe_extract_course_payload(
@@ -3426,6 +3480,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="remote_learning",
+            observations=observations,
         )
 
         return {
@@ -3436,14 +3491,16 @@ class NinovaMcpApp:
                 "info": info,
                 "announcements": announcements,
                 "assignments": assignments,
-                "class_files": class_files,
-                "lesson_files": lesson_files,
+                "class_files": files["class_files"],
+                "lesson_files": files["lesson_files"],
                 "grades": grades,
                 "message_board": message_board,
                 "attendance": attendance,
                 "remote_learning": remote_learning,
             },
             "errors": errors,
+            "coverage": observations,
+            "snapshot_complete": all(item["status"] == "complete" for item in observations.values()),
         }
 
     def _safe_extract_course_payload(
@@ -3454,12 +3511,19 @@ class NinovaMcpApp:
         default: dict[str, Any],
         errors: list[dict[str, str]],
         error_scope: str,
+        observations: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         try:
             html, response = self.client.get_html(path)
-            return extractor(html, response.url, self.client.base_url)
+            payload = extractor(html, response.url, self.client.base_url)
+            observation = scope_coverage(html, response.url, path, error_scope, payload)
+            observations[error_scope] = observation
+            if observation["status"] != "complete":
+                errors.append({"scope": error_scope, "path": path, "error": observation.get("reason") or observation["status"]})
+            return payload
         except Exception as exc:
             errors.append({"scope": error_scope, "path": path, "error": str(exc)})
+            observations[error_scope] = coverage("failed", "fetch_or_parse_failed")
             return default
 
     def _walk_file_directory(
@@ -3474,6 +3538,8 @@ class NinovaMcpApp:
         visited: set[str] = set()
         entries: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        unvisited_folders: list[str] = []
 
         while queue:
             current_url, depth, current_path = queue.pop(0)
@@ -3482,18 +3548,23 @@ class NinovaMcpApp:
                 continue
             visited.add(normalized)
 
-            html, response = self.client.get_html(current_url)
-            listing = extract_file_directory(
-                html,
-                response.url,
-                base_url=self.client.base_url,
-                current_path=current_path,
-            )
+            try:
+                html, response = self.client.get_html(current_url)
+                listing = extract_file_directory(
+                    html, response.url, base_url=self.client.base_url, current_path=current_path,
+                )
+                observation = scope_coverage(html, response.url, current_url, "class_files", listing)
+            except Exception as exc:
+                errors.append({"path": current_url, "error": str(exc)})
+                continue
+            if observation["status"] != "complete":
+                errors.append({"path": current_url, "error": observation.get("reason") or observation["status"]})
             pages.append(
                 {
                     "url": response.url,
                     "current_path": current_path,
                     "entry_count": len(listing["entries"]),
+                    "coverage": observation,
                 }
             )
 
@@ -3501,6 +3572,16 @@ class NinovaMcpApp:
                 entries.append(entry)
                 if recursive and entry["entry_type"] == "folder" and depth < max_depth:
                     queue.append((entry["url"], depth + 1, entry["path"]))
+                elif entry["entry_type"] == "folder" and self._strip_fragment(entry["url"]) not in visited:
+                    unvisited_folders.append(entry["url"])
+
+        if unvisited_folders:
+            errors.append({"path": start_url, "error": "file_depth_or_recursion_limit"})
+        observation = coverage(
+            "partial" if errors and pages else "failed" if errors else "complete",
+            "incomplete_file_inventory" if errors else None,
+            max_depth=max_depth, recursive=recursive, unvisited_folder_count=len(unvisited_folders),
+        )
 
         return {
             "root_url": start_url,
@@ -3510,6 +3591,8 @@ class NinovaMcpApp:
             "pages": pages,
             "entry_count": len(entries),
             "entries": entries,
+            "coverage": observation,
+            "errors": errors,
         }
 
     def _extract_course_root_path(self, url: str) -> str:

@@ -11,6 +11,9 @@ from ninova_mcp.server import NinovaMcpApp
 
 class ServerCacheTests(unittest.TestCase):
     def setUp(self) -> None:
+        network_guard = patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected HTTP in offline cache test"))
+        network_guard.start()
+        self.addCleanup(network_guard.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.state_dir = Path(self.temp_dir.name)
         self.env_patch = patch.dict(
@@ -41,8 +44,8 @@ class ServerCacheTests(unittest.TestCase):
         ]
         with patch.object(
             app,
-            "get_dashboard",
-            return_value={"courses": courses},
+            "_read_dashboard",
+            return_value={"courses": courses, "enrollment_coverage": {"status": "complete"}},
         ) as get_dashboard:
             first = app.list_courses()
             second = app.list_courses()
@@ -64,8 +67,8 @@ class ServerCacheTests(unittest.TestCase):
         ]
         with patch.object(
             app,
-            "get_dashboard",
-            return_value={"courses": courses},
+            "_read_dashboard",
+            return_value={"courses": courses, "enrollment_coverage": {"status": "complete"}},
         ) as get_dashboard:
             app.list_courses()
             app.list_courses(refresh=True)
