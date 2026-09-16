@@ -1,0 +1,73 @@
+"""Match calculated term averages to explicit official OBS records."""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).replace(',', '.'))
+    except (ValueError, TypeError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def official_term_reference(payload: dict[str, Any], term_code: str | None) -> dict[str, Any]:
+    """Do not guess between concurrent programs or substitute another term."""
+    candidates = []
+    programs = [p for p in payload.get('kayitDurumuList') or [] if isinstance(p, dict)]
+    if len(programs) > 1:
+        return {'status': 'ambiguous', 'gpa': None, 'credits': None,
+                'reason': 'Registered courses do not identify a matching program.',
+                'program_count': len(programs),
+                'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
+    if term_code:
+        for program in programs:
+            for term in program.get('kayitDurumuDonemList') or []:
+                if not isinstance(term, dict) or str(term.get('akademikDonemKodu')) != str(term_code):
+                    continue
+                gpa = _number(term.get('donemlikNotOrtalamasi'))
+                if gpa is None or not 0 <= gpa <= 4:
+                    continue
+                candidates.append({
+                    'term_code': str(term_code),
+                    'program': program.get('akademikProgramAdi') or program.get('akademikBolumAdi'),
+                    'gpa': gpa, 'credits': _number(term.get('verilenKredi')),
+                })
+    if len(candidates) != 1:
+        return {'status': 'ambiguous' if candidates else 'unavailable', 'gpa': None,
+                'credits': None, 'candidate_count': len(candidates),
+                'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'}
+    return {'status': 'reported', **candidates[0],
+            'source': 'obs.itu.edu.tr/api/ogrenci/KayitDurumu',
+            'finality': 'not_reported_by_source'}
+
+
+def attach_official_reference(result: dict[str, Any], reference: dict[str, Any], *, projection: bool) -> None:
+    calculated = result.get('gpa')
+    official = reference.get('gpa')
+    result['calculated_term_gpa'] = calculated
+    result['official_term_gpa'] = official
+    result['official_term_credits'] = reference.get('credits')
+    result['official_reference'] = reference
+    result['is_projection'] = projection
+    # Keep the existing calculator field and course arithmetic intact. Consumers
+    # answering an official-average question have an explicit preferred value.
+    result['preferred_term_gpa'] = calculated if projection or official is None else official
+    result['preferred_term_gpa_source'] = 'calculated' if projection or official is None else 'official_obs'
+    result['comparison_status'] = (
+        'projection' if projection else 'unavailable' if calculated is None or official is None
+        else 'match' if abs(calculated - official) < 0.005 else 'mismatch'
+    )
+    result['gpa_difference'] = round(calculated - official, 4) if (
+        not projection and calculated is not None and official is not None
+    ) else None
+    if result['comparison_status'] == 'mismatch':
+        result['calculation_warning'] = (
+            'The course-credit estimate differs from the official term average. '
+            'Use official_term_gpa for the reported OBS average. Degree-plan counted '
+            'credit has not been assumed to be the GPA weight.'
+        )

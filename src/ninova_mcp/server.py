@@ -1315,8 +1315,9 @@ class NinovaMcpApp:
         self,
         semester: str | None = None,
         projected_grades: dict[str, str] | None = None,
+        include_official: bool = True,
     ) -> dict[str, Any]:
-        """Calculate GPA/GANO from OBS registered courses and grades.
+        """Calculate a term GPA estimate and compare with the official term record.
 
         If ``projected_grades`` is given (e.g. ``{"BLG 223E": "AA", ...}``),
         those override the actual grade — useful for "what-if" scenarios.
@@ -1327,10 +1328,8 @@ class NinovaMcpApp:
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
         registered = payload.get("kayitSinifResultList") or []
 
-        # The registered-course endpoint reports 0 credits for courses whose
-        # grade is not in yet, which silently drops them from the weighted
-        # average and makes what-if projections wrong. The degree-plan endpoint
-        # carries the real credit for the same courses, so use it as a fallback.
+        # The registered-course endpoint can omit usable credit. Preserve the
+        # reported value and identify degree-plan credit used for the estimate.
         #
         # Separately, observed on at least one account: this endpoint's
         # harfNotu comes back None for every course in every term, including
@@ -1339,7 +1338,7 @@ class NinovaMcpApp:
         # time. Fall back to the same graduation-remaining payload for
         # grades too, scoped to this term's donemKodu: a retaken course has
         # one entry per attempt with a different grade each time, so a
-        # code-only lookup (fine for credit, which doesn't vary by attempt)
+        # code-only lookup
         # would risk picking the wrong attempt's grade here.
         graduation_info = self._fetch_graduation_info()
         plan_credits = self._plan_credit_lookup(graduation_info)
@@ -1379,6 +1378,8 @@ class NinovaMcpApp:
                 "code": code,
                 "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
                 "credit": credit,
+                "recorded_credit": item.get("kredi"),
+                "plan_credit": plan_credits.get(normalize_lookup_text(code)),
                 "credit_source": credit_source,
                 "grade": grade,
                 "grade_source": grade_source,
@@ -1386,11 +1387,27 @@ class NinovaMcpApp:
             })
 
         result = calculate_gpa(courses, projected_grades=projected_grades)
+        from .gpa_reference import attach_official_reference, official_term_reference
+
+        official_payload = {}
+        reference_error = None
+        if include_official:
+            try:
+                official_payload = self.obs.get_registration_status()
+            except (NinovaError, ValueError):
+                reference_error = "Official term record could not be read."
+        reference = official_term_reference(official_payload, resolved.get("donemKodu"))
+        if not include_official:
+            reference["status"] = "not_requested"
+        if reference_error:
+            reference["error"] = reference_error
+        attach_official_reference(result, reference, projection=bool(projected_grades))
+        result["semester"] = resolved
         if credit_fallbacks:
             result["credit_fallback_courses"] = credit_fallbacks
             result["credit_fallback_note"] = (
-                "Bu derslerin kredisi kayıt kaydında 0 geldi (notu henüz girilmemiş); "
-                "kredi ders planından alındı."
+                "Bu derslerin kayıt kaydında geçerli kredi bulunamadı; "
+                "hesaplama için kredi ders planından alındı."
             )
         if missing_credits:
             result["credits_unresolved"] = missing_credits
@@ -4636,7 +4653,10 @@ TOOLS: list[dict[str, Any]] = [
         "name": "obs_calculate_gpa",
         "title": "Calculate GPA",
         "description": (
-            "Calculate GPA/GANO from OBS registered courses. "
+            "Calculate a term GPA estimate from OBS registered courses and compare it with "
+            "the official term record. For factual average questions use preferred_term_gpa "
+            "and preferred_term_gpa_source; the legacy gpa field remains the calculated estimate. "
+            "This is a term average, not cumulative GANO. "
             "Supports projected grades for what-if scenarios. "
             "Uses İTÜ 4.00-scale letter grade conversion."
         ),
@@ -4653,6 +4673,10 @@ TOOLS: list[dict[str, Any]] = [
                         "Optional dict of course code → expected letter grade "
                         'for what-if scenarios, e.g. {"BLG 223E": "AA"}.'
                     ),
+                },
+                "include_official": {
+                    "type": "boolean", "default": True,
+                    "description": "Read the matching official OBS term average for comparison.",
                 },
             },
             "additionalProperties": False,
