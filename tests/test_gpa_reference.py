@@ -13,6 +13,38 @@ def status(gpa=3.5, credits=10, term='202620'):
 
 
 class OfficialGpaTests(unittest.TestCase):
+    def test_fallback_matches_compact_code_and_requested_attempt_only(self):
+        app = NinovaMcpApp.__new__(NinovaMcpApp)
+        info = {'checkMetMezuniyetList': [
+            {'bransKodu': 'AAA101', 'donem': '202610', 'kredisiDec': 4, 'harfNotu': 'FF'},
+            {'bransKodu': 'AAA 101', 'donem': '202620', 'kredisiDec': 3, 'harfNotu': 'BA+'},
+            {'bransKodu': 'BBB 101', 'kredisiDec': 2},
+            {'bransKodu': 'CCC 101', 'donem': '202610', 'kredisiDec': 5},
+        ]}
+        self.assertEqual(app._plan_credit_lookup(info, '202620'), {'AAA 101': 3, 'BBB 101': 2})
+        self.assertEqual(app._plan_grade_lookup(info, '202620'), {'AAA 101': 'BA+'})
+        app._obs = Mock()
+        app._obs.resolve_semester.return_value = {'akademikDonemId': 1, 'donemKodu': '202620'}
+        app._obs.list_registered_courses.return_value = {'kayitSinifResultList': [
+            {'bransKodu': 'AAA', 'dersKodu': '101', 'kredi': None, 'harfNotu': None}]}
+        app._fetch_graduation_info = Mock(return_value=info)
+        result = app.obs_calculate_gpa(include_official=False)
+        self.assertEqual(result['gpa'], 3.75)
+        self.assertEqual(result['courses'][0]['credit'], 3)
+
+    def test_conflicting_fallback_attempts_are_not_resolved_by_row_order(self):
+        app = NinovaMcpApp.__new__(NinovaMcpApp)
+        rows = [
+            {'bransKodu': 'AAA101', 'donem': '202620', 'kredisiDec': 4, 'harfNotu': 'FF'},
+            {'bransKodu': 'AAA 101', 'donem': '202620', 'kredisiDec': 3, 'harfNotu': 'BA+'},
+            {'bransKodu': 'BBB 101', 'kredisiDec': 'NaN'},
+            {'bransKodu': 'CCC 101', 'kredisiDec': True},
+        ]
+        for order in (rows, rows[::-1]):
+            info = {'checkMetMezuniyetList': order}
+            self.assertEqual(app._plan_credit_lookup(info, '202620'), {})
+            self.assertEqual(app._plan_grade_lookup(info, '202620'), {})
+
     def test_mismatch_is_explicit_and_does_not_change_estimate_arithmetic(self):
         result = {'gpa': 3.4, 'total_credits': 9.5}
         attach_official_reference(result, official_term_reference(status(), '202620'), projection=False)

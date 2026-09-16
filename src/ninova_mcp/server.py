@@ -4,6 +4,7 @@ import argparse
 import functools
 import inspect
 import json
+import math
 import mimetypes
 import os
 import re
@@ -1371,6 +1372,7 @@ class NinovaMcpApp:
         those override the actual grade — useful for "what-if" scenarios.
         """
         from .gpa import calculate_gpa
+        from .archive import normalize_course_code
 
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
@@ -1389,7 +1391,7 @@ class NinovaMcpApp:
         # code-only lookup
         # would risk picking the wrong attempt's grade here.
         graduation_info = self._fetch_graduation_info()
-        plan_credits = self._plan_credit_lookup(graduation_info)
+        plan_credits = self._plan_credit_lookup(graduation_info, resolved.get("donemKodu"))
         plan_grades = self._plan_grade_lookup(graduation_info, resolved.get("donemKodu"))
 
         courses: list[dict[str, Any]] = []
@@ -1398,14 +1400,18 @@ class NinovaMcpApp:
         grade_fallbacks: list[str] = []
         for item in registered:
             code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
+            try:
+                code_key = normalize_course_code(code)
+            except ValueError:
+                code_key = None
             credit = item.get("kredi")
             credit_source = "registration"
             try:
                 numeric = float(str(credit).replace(",", "."))
             except (TypeError, ValueError):
                 numeric = 0.0
-            if numeric <= 0:
-                fallback = plan_credits.get(normalize_lookup_text(code))
+            if isinstance(credit, bool) or not math.isfinite(numeric) or numeric <= 0:
+                fallback = plan_credits.get(code_key)
                 if fallback:
                     credit = fallback
                     credit_source = "degree_plan"
@@ -1416,7 +1422,7 @@ class NinovaMcpApp:
             grade = item.get("harfNotu")
             grade_source = "registration"
             if not grade:
-                fallback_grade = plan_grades.get(normalize_lookup_text(code))
+                fallback_grade = plan_grades.get(code_key)
                 if fallback_grade:
                     grade = fallback_grade
                     grade_source = "degree_plan"
@@ -1427,7 +1433,7 @@ class NinovaMcpApp:
                 "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
                 "credit": credit,
                 "recorded_credit": item.get("kredi"),
-                "plan_credit": plan_credits.get(normalize_lookup_text(code)),
+                "plan_credit": plan_credits.get(code_key),
                 "credit_source": credit_source,
                 "grade": grade,
                 "grade_source": grade_source,
@@ -1483,16 +1489,21 @@ class NinovaMcpApp:
             return {}
         return graduation.get("mezuniyetimeNeKaldiBilgi") or {}
 
-    def _plan_credit_lookup(self, info: dict[str, Any]) -> dict[str, float]:
-        """Map normalised course code → credit from the student's degree plan.
+    def _plan_credit_lookup(self, info: dict[str, Any], donem_kodu: str | None = None) -> dict[str, float]:
+        """Use unambiguous plan credit for this attempt or an undated plan slot."""
+        from .archive import normalize_course_code
 
-        ``MezuniyetimeNeKaldi`` lists every plan course with ``kredisiDec``,
-        including courses that are registered but not yet graded.
-        """
-        lookup: dict[str, float] = {}
+        exact: dict[str, set[float]] = {}
+        undated: dict[str, set[float]] = {}
         for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
             for item in info.get(bucket) or []:
-                code = str(item.get("bransKodu") or "").strip()
+                try:
+                    code = normalize_course_code(str(item.get("bransKodu") or ""))
+                except ValueError:
+                    continue
+                term = str(item.get("donem") or "")
+                if donem_kodu and term and term != str(donem_kodu):
+                    continue
                 credit = item.get("kredisiDec")
                 if credit is None:
                     credit = item.get("kredisi")
@@ -1500,9 +1511,11 @@ class NinovaMcpApp:
                     numeric = float(str(credit).replace(",", "."))
                 except (TypeError, ValueError):
                     continue
-                if code and numeric > 0:
-                    lookup.setdefault(normalize_lookup_text(code), numeric)
-        return lookup
+                if not isinstance(credit, bool) and math.isfinite(numeric) and numeric > 0:
+                    target = exact if term else undated
+                    target.setdefault(code, set()).add(numeric)
+        return {code: next(iter(values)) for code in exact.keys() | undated.keys()
+                if len(values := exact.get(code, undated.get(code, set()))) == 1}
 
     def _plan_grade_lookup(self, info: dict[str, Any], donem_kodu: str | None) -> dict[str, str]:
         """Map normalised course code → official letter grade for one term.
@@ -1516,16 +1529,21 @@ class NinovaMcpApp:
         """
         if not donem_kodu:
             return {}
-        lookup: dict[str, str] = {}
+        from .archive import normalize_course_code
+
+        grades: dict[str, set[str]] = {}
         for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
             for item in info.get(bucket) or []:
                 if str(item.get("donem") or "") != str(donem_kodu):
                     continue
-                code = str(item.get("bransKodu") or "").strip()
-                grade = str(item.get("harfNotu") or "").strip()
+                try:
+                    code = normalize_course_code(str(item.get("bransKodu") or ""))
+                except ValueError:
+                    continue
+                grade = str(item.get("harfNotu") or "").strip().upper()
                 if code and grade:
-                    lookup[normalize_lookup_text(code)] = grade
-        return lookup
+                    grades.setdefault(code, set()).add(grade)
+        return {code: next(iter(values)) for code, values in grades.items() if len(values) == 1}
 
     def calculate_target_gpa(
         self,
