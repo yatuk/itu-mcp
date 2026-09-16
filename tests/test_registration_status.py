@@ -34,6 +34,22 @@ def records(name="Example Undergraduate Program", level=3, status="Aktif"):
 
 
 class RegistrationStatusTests(unittest.TestCase):
+    def test_university_overall_record_can_only_relate_to_one_named_program(self):
+        registration, lesson = records()
+        aggregate = registration['kayitDurumuList'][0]
+        aggregate.update(akademikProgramAdi='', akademikProgramAdiEN='', fakulteAdi='',
+                         akademikBolumAdi='Üniversite Geneli', akademikBolumAdiEN='University Overall', durum='')
+        row = summarize_registration_status(registration, lesson, CALENDAR, now=NOW)['per_program'][0]
+        self.assertEqual(row['program_match_method'], 'sole_program_with_university_overall_status')
+        self.assertEqual(row['academic_status_scope'], 'university_overall')
+        self.assertEqual(row['registration_window']['class_levels'], [3])
+        self.assertFalse(row['registration_window']['personal_eligibility_verified'])
+        _, other = records('Another Program')
+        lesson['dersKayitDurumuList'].extend(other['dersKayitDurumuList'])
+        row = summarize_registration_status(registration, lesson, CALENDAR, now=NOW)['per_program'][0]
+        self.assertIsNone(row['program_match_method'])
+        self.assertIsNone(row['registration_window'])
+
     def test_blank_status_uses_explicit_activity_from_exact_matching_program(self):
         registration, lesson = records()
         registration['kayitDurumuList'][0]['durum'] = ''

@@ -62,6 +62,13 @@ def _active(row: dict[str, Any]) -> bool | None:
     return None
 
 
+def _university_overall(row: dict[str, Any]) -> bool:
+    labels = {normalize_lookup_text(str(row.get(field) or '')) for field in
+              ('akademikBolumAdi', 'akademikBolumAdiEN')}
+    return bool(labels & {'universite geneli', 'university overall'}) and not any(
+        row.get(field) for field in ('akademikProgramAdi', 'akademikProgramAdiEN', 'fakulteAdi', 'fakulteAdiEN'))
+
+
 def _choose_window(events: list[dict[str, Any]], now: datetime) -> tuple[dict[str, Any] | None, str | None]:
     candidates = []
     for event in events:
@@ -117,6 +124,14 @@ def summarize_registration_status(
         key = _program_key(program)
         matches = [item for item in lesson_programs or [] if key is not None and _program_key(item) == key]
         matching = matches[0] if len(matches) == 1 else None
+        match_method = 'exact_program_labels' if matching else None
+        overall = _university_overall(program)
+        if matching is None and overall and len(programs or []) == 1 and len(lesson_programs or []) == 1:
+            # The actual status API can return a University Overall row, with
+            # the named degree present only in DersKayitDurumu. Relate it only
+            # to a sole program and keep its aggregate source explicit.
+            matching = lesson_programs[0]
+            match_method = 'sole_program_with_university_overall_status'
         lesson_latest, lesson_error = _latest(matching.get("dersKayitDurumuDonemList")) if matching else (None, "The corresponding course-registration program is missing or ambiguous.")
         source_term, target_term = _term(latest), _term(lesson_latest)
         # KayitDurumu may leave the label blank while the exactly matched
@@ -124,7 +139,8 @@ def summarize_registration_status(
         # another undocumented code, and preserve disagreement as unknown.
         activity = {_active(row) for row in (program, matching) if row is not None} - {None}
         is_active = next(iter(activity)) if len(activity) == 1 else None
-        program_labels = " ".join(str(program.get(field) or "") for field in ("akademikProgramAdi", "akademikProgramAdiEN"))
+        display_program = matching if overall and matching else program
+        program_labels = " ".join(str(display_program.get(field) or "") for field in ("akademikProgramAdi", "akademikProgramAdiEN"))
         graduate = bool(re.search(r"\b(?:lisansustu|yuksek lisans|master|masters|doctoral|doctorate|phd|doktora|hazirlik|preparatory)\b", normalize_lookup_text(program_labels)))
         window = reopening = None
         window_reason = None
@@ -148,13 +164,16 @@ def summarize_registration_status(
             reopening, _ = _choose_window([event for event in matching_events
                 if event.get("registration_kind") == "all_students_reopening"], now)
         results.append({
-            "program_index": index, "program_name": program.get("akademikProgramAdi"),
-            "program_name_en": program.get("akademikProgramAdiEN"), "department": program.get("akademikBolumAdi"),
+            "program_index": index, "program_name": display_program.get("akademikProgramAdi"),
+            "program_name_en": display_program.get("akademikProgramAdiEN"), "department": display_program.get("akademikBolumAdi"),
+            "program_match_method": match_method,
+            "academic_status_scope": "university_overall" if overall else "program",
             "enrollment_status": program.get("durum"), "enrollment_status_code": program.get("durumKodu"), "active": is_active,
             "enrollment_status_evidence": [{"value": row.get("durum"), "source_url": source}
                 for row, source in ((program, _STATUS_SOURCE), (matching, _LESSON_SOURCE)) if row is not None],
             "class_level": level, "class_label": label or None,
-            "class_level_source": {"url": _STATUS_SOURCE, "term": source_term, "selection": "latest_reported_term"},
+            "class_level_source": {"url": _STATUS_SOURCE, "term": source_term, "selection": "latest_reported_term",
+                                   "scope": "university_overall" if overall else "program"},
             "latest_academic_term": source_term,
             "official_term_gpa": (latest or {}).get("donemlikNotOrtalamasi"),
             "official_cumulative_gpa": (latest or {}).get("genelNotOrtalamasi"),
