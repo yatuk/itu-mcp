@@ -119,7 +119,11 @@ def summarize_registration_status(
         matching = matches[0] if len(matches) == 1 else None
         lesson_latest, lesson_error = _latest(matching.get("dersKayitDurumuDonemList")) if matching else (None, "The corresponding course-registration program is missing or ambiguous.")
         source_term, target_term = _term(latest), _term(lesson_latest)
-        is_active = _active(program)
+        # KayitDurumu may leave the label blank while the exactly matched
+        # DersKayitDurumu program explicitly says Aktif. Do not infer AS or
+        # another undocumented code, and preserve disagreement as unknown.
+        activity = {_active(row) for row in (program, matching) if row is not None} - {None}
+        is_active = next(iter(activity)) if len(activity) == 1 else None
         program_labels = " ".join(str(program.get(field) or "") for field in ("akademikProgramAdi", "akademikProgramAdiEN"))
         graduate = bool(re.search(r"\b(?:lisansustu|yuksek lisans|master|masters|doctoral|doctorate|phd|doktora|hazirlik|preparatory)\b", normalize_lookup_text(program_labels)))
         window = reopening = None
@@ -147,6 +151,8 @@ def summarize_registration_status(
             "program_index": index, "program_name": program.get("akademikProgramAdi"),
             "program_name_en": program.get("akademikProgramAdiEN"), "department": program.get("akademikBolumAdi"),
             "enrollment_status": program.get("durum"), "enrollment_status_code": program.get("durumKodu"), "active": is_active,
+            "enrollment_status_evidence": [{"value": row.get("durum"), "source_url": source}
+                for row, source in ((program, _STATUS_SOURCE), (matching, _LESSON_SOURCE)) if row is not None],
             "class_level": level, "class_label": label or None,
             "class_level_source": {"url": _STATUS_SOURCE, "term": source_term, "selection": "latest_reported_term"},
             "latest_academic_term": source_term,

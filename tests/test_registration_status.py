@@ -34,6 +34,25 @@ def records(name="Example Undergraduate Program", level=3, status="Aktif"):
 
 
 class RegistrationStatusTests(unittest.TestCase):
+    def test_blank_status_uses_explicit_activity_from_exact_matching_program(self):
+        registration, lesson = records()
+        registration['kayitDurumuList'][0]['durum'] = ''
+        registration['kayitDurumuList'][0]['durumKodu'] = 'AS'
+        row = summarize_registration_status(registration, lesson, CALENDAR, now=NOW)['per_program'][0]
+        self.assertTrue(row['active'])
+        self.assertEqual(row['registration_window']['class_levels'], [3])
+        self.assertTrue(row['enrollment_status_evidence'][1]['source_url'].endswith('/DersKayitDurumu'))
+        lesson['dersKayitDurumuList'][0]['durum'] = ''
+        self.assertIsNone(summarize_registration_status(registration, lesson, CALENDAR, now=NOW)['per_program'][0]['active'])
+
+    def test_conflicting_activity_does_not_choose_one_source(self):
+        registration, lesson = records()
+        lesson['dersKayitDurumuList'][0]['durum'] = 'Pasif'
+        result = summarize_registration_status(registration, lesson, CALENDAR, now=NOW)
+        self.assertIsNone(result['per_program'][0]['active'])
+        self.assertIsNone(result['per_program'][0]['registration_window'])
+        self.assertIsNone(result['selected_program_index'])
+
     def test_latest_official_class_and_term_are_order_independent_and_sourced(self):
         registration, lesson = records()
         result = summarize_registration_status(registration, lesson, CALENDAR, now=NOW)
