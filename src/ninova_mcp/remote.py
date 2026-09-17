@@ -22,12 +22,14 @@ from .remote_security import (
 )
 from .server import (
     MAIL_TOOL_NAMES,
+    OBS_REGISTRATION_WRITE_TOOL_NAMES,
     REMOTE_TOOL_NAMES,
     SERVER_INSTRUCTIONS,
     SERVER_NAME,
     SERVER_VERSION,
     NinovaMcpApp,
     apply_server_version,
+    obs_registration_writes_enabled,
     register_prompts,
     register_resources,
     register_tools,
@@ -50,8 +52,13 @@ def _selected_remote_tool_names() -> list[str]:
     available = [
         name
         for name in REMOTE_TOOL_NAMES
-        if _env_flag("NINOVA_REMOTE_ENABLE_MAIL", default=False)
-        or name not in MAIL_TOOL_NAMES
+        if (
+            _env_flag("NINOVA_REMOTE_ENABLE_MAIL", default=False)
+            or name not in MAIL_TOOL_NAMES
+        ) and (
+            obs_registration_writes_enabled()
+            or name not in OBS_REGISTRATION_WRITE_TOOL_NAMES
+        )
     ]
     configured = _split_csv_env("NINOVA_REMOTE_ALLOWED_TOOLS")
     if not configured:
