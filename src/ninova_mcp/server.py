@@ -1699,6 +1699,9 @@ class NinovaMcpApp:
         program_type: str,
         department_code: str,
         crn: str | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """Read the public OBS course schedule for a department (no login needed).
 
@@ -1706,12 +1709,24 @@ class NinovaMcpApp:
         ``"ÖL"`` / ``"Önlisans"``, ``"LUİ"``.
         ``department_code``: e.g. ``"BLG"``, ``"BBF"``, ``"EHB"``.
         ``crn``: optional CRN to filter a single course.
+        ``query``: case/accent-insensitive course name or code fragment.
+        Filtered/paged calls default to 50 sections. Unfiltered calls are unchanged.
         """
+        from .planning import filter_course_schedule
+
+        paging = query is not None or limit is not None or offset != 0
+        if paging:
+            # Validate before issuing any OBS requests.
+            filter_course_schedule({}, query=query, limit=limit, offset=offset)
         if crn:
-            return self.obs_public.get_course_schedule_by_crn(
+            schedule = self.obs_public.get_course_schedule_by_crn(
                 program_type, department_code, crn
             )
-        return self.obs_public.get_course_schedule(program_type, department_code)
+        else:
+            schedule = self.obs_public.get_course_schedule(program_type, department_code)
+        if paging:
+            return filter_course_schedule(schedule, query=query, limit=limit, offset=offset)
+        return schedule
 
     def get_public_course_prerequisites(
         self,
@@ -4656,6 +4671,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read the public OBS course schedule for a department. "
             "No login required — reads the open DersProgram page. "
+            "Use query for a course name/code fragment, including full sections. "
+            "Filtered/paged calls return at most 50 sections by default (limit up to 100). "
+            "Follow next_offset with the same filters to read more. "
             "Returns structured course list with CRN, instructor, sessions "
             "(day/time/room), capacity, enrolled count, and prerequisite links."
         ),
@@ -4676,6 +4694,23 @@ TOOLS: list[dict[str, Any]] = [
                 "crn": {
                     "type": "string",
                     "description": "Optional CRN to filter a single course.",
+                },
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional course name/code fragment, case/accent-insensitive. Combined with crn when both are supplied.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Page size. Defaults to 50 for filtered/paged calls; omitted unfiltered calls return the full schedule.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Offset into matching sections. Use next_offset from the previous page.",
                 },
             },
             "required": ["program_type", "department_code"],

@@ -257,6 +257,16 @@ the published tool set.
 
 - `obs_search_courses` / `obs_get_course_prerequisites`
 - `get_public_course_schedule` / `get_public_course_prerequisites`
+  - Schedule queries accept an optional course name/code fragment, such as
+    `query="Differential Equations"` or `query="MAT201E"`. Matching ignores case,
+    accents and code spacing, and includes full sections. Filtering happens in
+    the MCP server after reading the official department schedule.
+  - Filtered or paged calls return 50 sections by default, with `limit` from 1 to
+    100 and a non-negative `offset`. Results include `matched_count`,
+    `total_course_count`, and `next_offset`. Continue with the same department,
+    query, CRN and limit. Pages reflect the current schedule and may change if
+    OBS updates it between calls. A CRN and query together select their
+    intersection. Calls without the new options retain the full schedule.
 - `get_public_exam_schedule(department_code)` — official current final timetable
 - `get_academic_calendar(date_from, date_to, category, query)`
 - `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
