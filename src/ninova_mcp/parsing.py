@@ -1841,37 +1841,10 @@ def extract_help_tickets(
     html: str,
     page_url: str,
 ) -> dict[str, Any]:
-    """Parse the İTÜ Portal help tickets widget.
+    """Parse all help widget rows before applying tool filters and limits."""
+    from .help_tickets import parse_widget
 
-    Selectors:
-    - List: ``ul[data-placement="yardim-list"] li.help__list-item``
-    """
-    soup = make_soup(html)
-    items: list[dict[str, Any]] = []
-
-    container = soup.select_one('ul[data-placement="yardim-list"]')
-    if container:
-        for li in container.select("li.help__list-item"):
-            anchor = li.find("a", href=True)
-            title_span = anchor.find("span", class_="pull-left") if anchor else None
-            date_span = anchor.find("span", class_="pull-right") if anchor else None
-            title = clean_text(title_span.get_text(" ", strip=True)) if title_span else None
-            date = clean_text(date_span.get_text(" ", strip=True)) if date_span else None
-            url = anchor.get("href") if anchor else None
-            is_archived = bool(title_span and title_span.find("span", class_="panel-red"))
-            if title:
-                items.append({
-                    "title": title,
-                    "date": date,
-                    "archived": is_archived,
-                    "url": url,
-                })
-
-    return {
-        "url": page_url,
-        "count": len(items),
-        "tickets": items[:20],
-    }
+    return parse_widget(html, page_url)
 
 
 def extract_cloud_quota(
