@@ -292,7 +292,7 @@ class DashboardEnrollmentTests(unittest.TestCase):
             result = self.app.list_courses(refresh=True)
         self.assertEqual(result["count"], 25)
         self.assertTrue(all("url" in c for c in result["courses"]))
-        self.assertEqual(result["enrollment_coverage"]["status"], "unknown")
+        self.assertEqual(result["enrollment_coverage"]["status"], "complete")
 
     def test_unknown_dashboard_does_not_overwrite_good_cached_courses(self):
         self.app._course_cache.set("courses", [COURSE])

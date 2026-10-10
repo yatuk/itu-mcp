@@ -82,7 +82,11 @@ def enrollment_coverage(html: str, page_url: str, expected_url: str, courses: li
     soup = make_soup(html)
     text = normalize_lookup_text(soup.get_text(" ", strip=True))
     if courses:
-        return coverage("unknown", "enrollment_container_not_verified")
+        # page_coverage already rejected redirects, login pages, access
+        # denials and unfinished paging, so a parsed course list on the
+        # dashboard is the full list. Treating it as unknown would switch
+        # off course added/removed detection for every real account.
+        return coverage("complete", "course_list_parsed", observed_count=len(courses))
     if _explicit_empty(text, "enrollment"):
         return coverage("complete", "explicit_empty_enrollment")
     return coverage("unknown", "course_list_not_recognized")
