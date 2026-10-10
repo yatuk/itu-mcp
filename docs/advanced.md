@@ -242,7 +242,25 @@ the published tool set.
 - `get_cafeteria_menu(date, meal, vegan)` — dated menu, calories and allergens
 - `obs_get_notifications(notification_id, limit)` — list/detail when Portal API permits;
   falls back to the server-rendered widget when the Portal WebMethod is unavailable
-- `obs_get_help_tickets(query, limit)` / `obs_get_cloud_quota`
+- `obs_get_help_tickets(query, limit, include_details=true)` — search the Portal list by
+  ticket ID, title or status, then read details only for the selected rows. Each row
+  returns `id`, `title`, `unit`, `category`, `status`, `created_at`, `updated_at`,
+  `url` and `has_reply`. `total_matching_count` is measured before the limit.
+  Set `include_details=false` for a quick Portal-only read. Relative `age` is not
+  an exact creation date. Unavailable metadata stays `null` and appears in
+  `missing_fields`. A failed detail read preserves the Portal row and adds
+  `detail_warning`. The list covers tickets supplied by the Portal widget.
+- `get_help_ticket(ticket_id)` — read one numeric ticket ID directly from the
+  authenticated help desk, including its description, subcategory, operation
+  history, institutional replies and attachment links. Attachments are listed,
+  without downloading. `has_reply` compares operation authors with the original
+  requester. It is `null` when history or authors are unavailable. Creation and
+  update dates come from the oldest and latest history rows when not stated in
+  the information table. Returned messages are in chronological order. The
+  help desk uses month/day/year for slash-separated history dates. Parsed timestamps use the source's local time without
+  assuming a timezone. Detail reads share the configured course-cache TTL
+  (60 seconds by default).
+- `obs_get_cloud_quota`
 - `obs_calculate_gpa(projected_grades)` — projected values override existing grades
 - `calculate_target_gpa` — aggregate target-GPA estimate without reading OBS
 - `estimate_relative_grade(class_scores, my_score)` — likely letter grade under İTÜ's

@@ -1718,49 +1718,77 @@ class NinovaMcpApp:
         notifications = notifications[: max(1, min(limit, 100))]
         return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
 
-    def obs_get_help_tickets(self, query: str | None = None, limit: int = 20) -> dict[str, Any]:
-        """Read İTÜ Portal help tickets (requires login)."""
+    def get_help_ticket(self, ticket_id: str) -> dict[str, Any]:
+        """Read a help ticket, its history and attachment links without mutations."""
+        from .help_tickets import help_url, parse_detail, ticket_id as valid_id, ticket_url
+
+        identifier = valid_id(ticket_id)
+        if identifier is None:
+            raise NinovaError("Help ticket ID must contain only decimal digits (1–20 characters).")
+        cache_key = f"help_ticket:{identifier}"
+        cached = self._course_cache.get(cache_key)
+        if cached is not None:
+            return {"ticket": cached, "untrusted_external_content": True}
+        from requests import RequestException
+
+        try:
+            html, response = self.client.get_html(ticket_url(identifier))
+        except RequestException as exc:
+            raise NinovaError("Help ticket HTTP read failed.") from exc
+        if help_url(response.url) is None:
+            raise NinovaError("Help ticket read did not reach the authenticated help desk.")
+        ticket = parse_detail(html, response.url, identifier)
+        if ticket.get("id") != identifier:
+            raise NinovaError(ticket.get("parse_warning") or "Help ticket was not found or is inaccessible.")
+        self._course_cache.set(cache_key, ticket)
+        return {"ticket": ticket, "untrusted_external_content": True}
+
+    def obs_get_help_tickets(
+        self, query: str | None = None, limit: int = 20, include_details: bool = True,
+    ) -> dict[str, Any]:
+        """List help tickets, enriching selected rows from the help desk by default."""
+        from .help_tickets import SUMMARY_FIELDS, summary
+        from .parsing import extract_help_tickets
+
         try:
             data = self._get_portal_json("GetYardim")
         except (NinovaError, ValueError):
-            html, url = self._get_portal_page()
-            from .parsing import extract_help_tickets
-
-            fallback = extract_help_tickets(html, url)
-            tickets = fallback.get("tickets") or []
-            if query:
-                target = normalize_lookup_text(query)
-                tickets = [item for item in tickets if target in normalize_lookup_text(str(item.get("title") or ""))]
-            fallback["tickets"] = tickets[: max(1, min(limit, 100))]
-            fallback["count"] = len(fallback["tickets"])
-            fallback["api_fallback"] = True
-            fallback["untrusted_external_content"] = True
-            return fallback
+            data = {}
         raw_items = data.get("YardimInformationList") or data.get("HelpInformationList") or []
-        tickets = []
-        for item in raw_items:
-            if not isinstance(item, dict):
-                continue
-            ticket = {
-                "id": item.get("ObjectId") or item.get("Id"),
-                "title": item.get("Title") or item.get("Subject"),
-                "status": item.get("Status") or item.get("StatusName"),
-                "age": item.get("BeforeCreateDate"),
-                "url": item.get("Url") or item.get("Link"),
-            }
-            tickets.append(ticket)
-        if not tickets:
-            # Portal deployments may omit the JSON list; keep the stable HTML
-            # parser as a compatibility fallback.
+        tickets = [summary(item) for item in raw_items if isinstance(item, dict)]
+        if tickets:
+            payload = {"source": "portal.itu.edu.tr/GetYardim"}
+        else:
             html, url = self._get_portal_page()
-            from .parsing import extract_help_tickets
-
-            return extract_help_tickets(html, url)
+            payload = extract_help_tickets(html, url)
+            tickets = payload["tickets"]
+            payload["api_fallback"] = True
         if query:
             target = normalize_lookup_text(query)
-            tickets = [item for item in tickets if target in normalize_lookup_text(f"{item.get('title') or ''} {item.get('status') or ''}")]
-        tickets = tickets[: max(1, min(limit, 100))]
-        return {"count": len(tickets), "tickets": tickets, "source": "portal.itu.edu.tr/GetYardim", "untrusted_external_content": True}
+            tickets = [item for item in tickets if target in normalize_lookup_text(
+                " ".join(str(item.get(key) or "") for key in ("id", "title", "status")))]
+        payload["total_matching_count"] = len(tickets)
+        selected = tickets[:max(1, min(limit, 100))]
+        for item in selected:
+            if include_details and item["id"]:
+                try:
+                    detail = self.get_help_ticket(item["id"])["ticket"]
+                except (NinovaError, ValueError):
+                    item["detail_available"] = False
+                    item["detail_warning"] = "Help ticket details were unavailable. Portal fields are retained."
+                else:
+                    for key in SUMMARY_FIELDS:
+                        if detail.get(key) is not None:
+                            item[key] = detail[key]
+                    item["detail_available"] = True
+                    if detail.get("parse_warning"):
+                        item["detail_warning"] = detail["parse_warning"]
+            item["missing_fields"] = [key for key in SUMMARY_FIELDS if item.get(key) is None]
+        payload["tickets"] = selected
+        payload["count"] = len(selected)
+        payload["metadata_complete"] = all(not item["missing_fields"] for item in selected)
+        payload["untrusted_external_content"] = True
+        return payload
 
     def obs_get_cloud_quota(self) -> dict[str, Any]:
         """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""
@@ -4694,13 +4722,25 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_help_tickets",
         "title": "Portal Help Tickets",
-        "description": "Read İTÜ Portal help desk tickets (requires login).",
+        "description": "List the user's help tickets. Search by ID, title or status. Returns id, title, unit, category, status, created_at, updated_at, url and has_reply. Selected rows are enriched from the help desk by default. Set include_details=false for a quick Portal-only read. Unavailable fields are null with missing_fields. Requires login.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
+                "query": {"type": "string", "description": "Match ticket ID, title or status."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "include_details": {"type": "boolean", "default": True, "description": "Read details only for the selected matching tickets."},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_help_ticket",
+        "title": "Help Ticket Detail",
+        "description": "Read one help ticket by numeric ID: title, description, unit, category, subcategory, status, dates, messages, institutional replies and attachment links. Does not download attachments. Reply detection compares history authors with the original requester. Missing fields are null. Dates are local to the source with no assumed timezone. Requires login.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"ticket_id": {"type": "string", "pattern": "^[0-9]{1,20}$", "description": "Numeric İTÜ help ticket ID."}},
+            "required": ["ticket_id"],
             "additionalProperties": False,
         },
     },
