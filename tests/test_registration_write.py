@@ -141,6 +141,8 @@ class RegistrationWriteTests(unittest.TestCase):
 
     def test_business_rejection_is_distinct_and_messages_are_not_echoed(self):
         reply = response({"statusCode": 1, "resultCode": "ERRMaxIstekTaslakOlustur", "resultMessage": "synthetic-private-message"})
+        # A real rejection leaves the draft as it was before the request.
+        self.obs.get_registration_draft = Mock(side_effect=[draft(), draft()])
         with patch.object(requests.Session, "request", return_value=reply) as request:
             result = save_registration_draft(self.obs, ["12345", "12346"])
         request.assert_called_once()
@@ -148,6 +150,59 @@ class RegistrationWriteTests(unittest.TestCase):
         self.assertFalse(result["saved"])
         self.assertEqual(result["submission"]["result_code"], "ERRMaxIstekTaslakOlustur")
         self.assertNotIn("synthetic-private-message", json.dumps(result))
+
+    def test_removing_draft_courses_needs_allow_replace_and_sends_nothing(self):
+        self.obs.get_registration_draft = Mock(side_effect=[draft(["11111", "22222", "12345"])])
+        with patch.object(requests.Session, "request") as request:
+            result = save_registration_draft(self.obs, ["12345", "12346"])
+        request.assert_not_called()
+        self.assertEqual(result["status"], "needs_allow_replace")
+        self.assertFalse(result["saved"])
+        self.assertEqual(result["previous_crns"], ["11111", "22222", "12345"])
+        self.assertEqual(result["removed_crns"], ["11111", "22222"])
+        self.assertEqual(result["added_crns"], ["12346"])
+
+    def test_allow_replace_sends_and_reports_what_was_replaced(self):
+        self.obs.get_registration_draft = Mock(side_effect=[draft(["11111"]), draft(["12345"])])
+        with patch.object(requests.Session, "request", return_value=response({"statusCode": 0})) as request:
+            result = save_registration_draft(self.obs, ["12345"], allow_replace=True)
+        request.assert_called_once()
+        self.assertEqual(result["status"], "saved")
+        self.assertEqual(result["previous_crns"], ["11111"])
+        self.assertEqual(result["removed_crns"], ["11111"])
+
+    def test_unreadable_existing_draft_is_not_overwritten_without_allow_replace(self):
+        self.obs.get_registration_draft = Mock(side_effect=[{**draft(), "draft_exists": True, "courses": None}])
+        with patch.object(requests.Session, "request") as request:
+            result = save_registration_draft(self.obs, ["12345"])
+        request.assert_not_called()
+        self.assertEqual(result["reason"], "existing_draft_unreadable")
+
+    def test_adding_to_a_draft_or_first_save_needs_no_allow_replace(self):
+        self.obs.get_registration_draft = Mock(side_effect=[draft(["12345"]), draft(["12345", "12346"])])
+        with patch.object(requests.Session, "request", return_value=response({"statusCode": 0})) as request:
+            result = save_registration_draft(self.obs, ["12345", "12346"])
+        request.assert_called_once()
+        self.assertEqual(result["status"], "saved")
+        self.assertEqual(result["removed_crns"], [])
+
+    def test_draft_that_already_matches_is_not_sent_again(self):
+        self.obs.get_registration_draft = Mock(side_effect=[draft(["12346", "12345"])])
+        with patch.object(requests.Session, "request") as request:
+            result = save_registration_draft(self.obs, ["12345", "12346"])
+        request.assert_not_called()
+        self.assertEqual(result["status"], "unchanged")
+        self.assertTrue(result["saved"])
+
+    def test_rejection_with_a_changed_draft_is_uncertain_not_unsaved(self):
+        reply = response({"statusCode": 1, "resultCode": "VAL99"})
+        self.obs.get_registration_draft = Mock(side_effect=[draft(["11111"]), draft(["12345"])])
+        with patch.object(requests.Session, "request", return_value=reply):
+            result = save_registration_draft(self.obs, ["11111", "12345"])
+        self.assertEqual(result["status"], "uncertain")
+        self.assertIsNone(result["saved"])
+        self.assertEqual(result["reason"], "draft_changed_despite_rejection")
+        self.assertEqual(result["current_crns"], ["12345"])
 
     def test_success_requires_matching_complete_same_term_readback(self):
         cases = [draft(["12345"]), draft(["12345", "12346"], term="202720"),
@@ -175,7 +230,7 @@ class RegistrationWriteTests(unittest.TestCase):
         client = ObsClient(ninova_client=Mock())
         with patch("ninova_mcp.registration_write.save_registration_draft", return_value={"status": "saved"}) as write:
             self.assertEqual(client.save_registration_draft(["12345"]), {"status": "saved"})
-        write.assert_called_once_with(client, ["12345"])
+        write.assert_called_once_with(client, ["12345"], allow_replace=False)
 
 
 if __name__ == "__main__":

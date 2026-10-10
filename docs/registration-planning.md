@@ -20,7 +20,7 @@ The result contains the official membership list and matches each exact course c
 
 Membership does not establish registration eligibility. A course can belong to an elective group and have an offered section that excludes the student's program. Missing, unreadable, or mismatched term data remains unknown.
 
-Section eligibility is checked independently, so alternative electives do not create artificial conflicts or exceed a combined credit limit. Up to 24 sections are checked per call. All membership and schedule rows are returned, and unchecked eligibility remains unknown. Check a specific remaining CRN with `obs_validate_registration_plan`. Public membership and schedules remain available if authentication fails.
+Section eligibility is checked independently, so alternative electives do not create artificial conflicts or exceed a combined credit limit. Up to 8 sections are checked per call, because each check is an authenticated request followed by a two second pause and counts against the OBS draft-check quota. All membership and schedule rows are returned, and unchecked eligibility remains unknown. Check a specific remaining CRN with `obs_validate_registration_plan`. Public membership and schedules remain available if authentication fails.
 
 ## Validate a proposed plan
 

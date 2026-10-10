@@ -219,10 +219,10 @@ class ObsClient:
         from .registration_draft import read_registration_draft
         return read_registration_draft(self)
 
-    def save_registration_draft(self, crns: list[str]) -> dict[str, Any]:
+    def save_registration_draft(self, crns: list[str], *, allow_replace: bool = False) -> dict[str, Any]:
         """Save a draft once and reconcile its contents; this does not enroll."""
         from .registration_write import save_registration_draft
-        return save_registration_draft(self, crns)
+        return save_registration_draft(self, crns, allow_replace=allow_replace)
 
     def validate_registration_crns(self, crns: list[str]) -> dict[str, Any]:
         """Run OBS's independent CRN check without saving or registering courses."""

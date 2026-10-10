@@ -23,8 +23,9 @@ class FakeObs:
         self.reads = 0
         self.result = {"status": "saved", "saved": True, "readback_status": "matched"}
 
-    def save_registration_draft(self, crns):
+    def save_registration_draft(self, crns, *, allow_replace=False):
         self.writes.append(crns)
+        self.allow_replace = allow_replace
         return copy.deepcopy(self.result)
 
     def get_registration_draft(self):
@@ -120,7 +121,7 @@ class DraftWriteToolTests(unittest.TestCase):
         with patch.object(self.obs, "save_registration_draft", side_effect=ObsError("Save failed")) as save:
             with self.assertRaisesRegex(ObsError, "Save failed"):
                 self.app.obs_save_registration_draft(["10001"], True)
-            save.assert_called_once_with(["10001"])
+            save.assert_called_once_with(["10001"], allow_replace=False)
 
     def test_draft_read_remains_uncached_and_does_not_write(self):
         self.assertEqual(self.app.obs_get_registration_draft(), {"read_number": 1})

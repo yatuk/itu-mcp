@@ -318,9 +318,9 @@ class ElectiveCoordinatorTests(unittest.TestCase):
         app.obs.validate_registration_crns.side_effect = lambda crns: {crns[0]: verdict(crns[0])}
         with patch("ninova_mcp.registration_tools.fetch_elective_group", return_value=elective_group(731, ["BLG 201"])):
             result = get_elective_group(app, 731)
-        self.assertEqual(app.obs.validate_registration_crns.call_count, 24)
+        self.assertEqual(app.obs.validate_registration_crns.call_count, 8)
         self.assertIsNone(result["courses"][0]["sections"][-1]["eligibility"]["eligible"])
-        self.assertTrue(any("24" in error for error in result["errors"]))
+        self.assertTrue(any("8" in error for error in result["errors"]))
 
     def test_mismatched_public_term_is_not_presented_as_a_current_offering(self) -> None:
         app = make_app()

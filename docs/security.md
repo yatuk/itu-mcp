@@ -57,7 +57,15 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
   Both resolve opaque identifiers from the current account/catalog page before a
   POST and are excluded from remote HTTP transport. These legacy operations are
   unavailable on the current Sirsi platform and fail before any account request.
-- Course registration/CRN submission is intentionally not implemented.
+- Course registration and course dropping are intentionally not implemented.
+- `obs_validate_registration_plan` and `obs_get_elective_group` send CRNs to the OBS
+  draft-check endpoint. They save nothing, but OBS holds a short transaction lock and
+  counts each check against a quota, so both are annotated as non-read-only.
+- `obs_save_registration_draft` replaces the saved registration draft. It is off unless
+  `NINOVA_OBS_REGISTRATION_WRITES=1`, needs `confirm=true`, is never exposed on the
+  remote HTTP transport, and refuses to drop courses from an existing draft unless
+  `allow_replace=true`. The refusal lists what would be removed and sends nothing.
+  It has not yet been confirmed against a successful live save.
 
 ## Prompt-injection boundary
 

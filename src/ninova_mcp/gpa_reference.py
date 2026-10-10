@@ -50,6 +50,10 @@ def official_term_reference(payload: dict[str, Any], term_code: str | None) -> d
                 gpa = _number(term.get('donemlikNotOrtalamasi'))
                 if gpa is None or not 0 <= gpa <= 4:
                     continue
+                # OBS can report 0 for a term that has no awarded credit yet.
+                # That is an unfinished term, not an official average of zero.
+                if gpa == 0 and not _number(term.get('verilenKredi')):
+                    continue
                 candidates.append({
                     'term_code': str(term_code),
                     'program': program.get('akademikProgramAdi') or program.get('akademikBolumAdi'),

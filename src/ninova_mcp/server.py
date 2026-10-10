@@ -966,7 +966,7 @@ class NinovaMcpApp:
         return self.obs.get_registration_draft()
 
     def obs_save_registration_draft(
-        self, crns: RegistrationDraftCrns, confirm: StrictBool,
+        self, crns: RegistrationDraftCrns, confirm: StrictBool, allow_replace: StrictBool = False,
     ) -> dict[str, Any]:
         """Replace a saved draft only with explicitly confirmed CRNs."""
         from .registration_draft import normalize_crns
@@ -978,7 +978,7 @@ class NinovaMcpApp:
         selected = normalize_crns(crns)
         # Draft reads are uncached. The client reconciles the attempted write
         # against a fresh readback; retain its saved/rejected/uncertain result.
-        return self.obs.save_registration_draft(selected)
+        return self.obs.save_registration_draft(selected, allow_replace=allow_replace is True)
 
     def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
         from .registration_tools import get_elective_group
@@ -4592,8 +4592,11 @@ TOOLS: list[dict[str, Any]] = [
             "This changes the user's saved draft and can replace its existing contents. Requires "
             "the user's explicit confirmation of the exact CRNs and replacement, confirm=true, "
             "and the operator's NINOVA_OBS_REGISTRATION_WRITES=1 opt-in. Does not register or "
-            "drop courses. Reports saved, rejected or uncertain based on the submission and "
-            "fresh draft readback. An uncertain result is not proof that the draft was saved."
+            "drop courses. If the save would remove courses already in the draft, nothing is "
+            "sent and the result lists previous_crns and removed_crns; call again with "
+            "allow_replace=true only after the user accepts losing them. Reports saved, "
+            "unchanged, rejected or uncertain based on the submission and fresh draft readback. "
+            "An uncertain result is not proof that the draft was saved. Local stdio only."
         ),
         "inputSchema": {
             "type": "object",
@@ -4606,6 +4609,10 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": "True only after the user explicitly confirms replacing the draft with these exact CRNs.",
                 },
+                "allow_replace": {
+                    "type": "boolean", "default": False,
+                    "description": "True only after the user has seen which draft courses would be removed and accepts it.",
+                },
             },
             "required": ["crns", "confirm"],
             "additionalProperties": False,
@@ -4617,7 +4624,7 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read any official elective group by group_id, including eligible course membership, "
             "current undergraduate offerings, CRNs, meeting times and student-specific section "
-            "eligibility. Each section is checked independently, up to 24 sections per call. "
+            "eligibility. Each section is checked independently, up to 8 sections per call. "
             "Membership and schedules are public; eligibility requires an OBS session. "
             "Unknown source data stays unknown. Does not change the saved draft or registration."
         ),
@@ -5624,6 +5631,9 @@ REMOTE_EXCLUDED_TOOLS = {
     # download_resource/snapshot_page above — belongs in the same exclusion
     # for the same reason.
     "obs_download_transcript",
+    # Changes the student's saved registration draft. Like submit_assignment
+    # it stays on the local stdio transport, whatever the opt-in flag says.
+    "obs_save_registration_draft",
 }
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS
@@ -5639,6 +5649,11 @@ STATEFUL_TOOL_NAMES = {
     "library_renew_loan",
     "library_reserve_item",
     "obs_save_registration_draft",
+    # These POST to the OBS draft-check endpoint. Nothing is saved, but OBS
+    # takes a short transaction lock and counts each call against a quota,
+    # so they are not advertised as free, repeatable reads.
+    "obs_validate_registration_plan",
+    "obs_get_elective_group",
 }
 DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft"}
 

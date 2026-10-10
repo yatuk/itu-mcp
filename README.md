@@ -234,7 +234,7 @@ Ders seçimini kayıt öncesinde gözden geçirmek için dört araç:
 
 Bu araçlar taslağını veya ders kayıtlarını değiştirmez. Kesin bir engel bulunmasa bile eksik bilgiler varsa plan sonucu `incomplete` olur. Sonraki derslere geçiş, ön şart derslerini gereken notlarla tamamlamana bağlıdır. Not dağılımı herkese açıktır. `year`, akademik yılın bittiği yılı belirtir (2026 = 2025–2026). Yıl ve dönem filtresi isteğe bağlıdır. Örnekler ve sınırlar: [Kayıt planlama](docs/registration-planning.md) ve [Not dağılımları](docs/grade-distribution.md).
 
-Taslağı kaydetmek için ayrıca `obs_save_registration_draft(crns, confirm=true)` kullanılabilir. Bu araç mevcut taslağı verilen CRN listesiyle değiştirir; önce tam listeyi ve değişikliği açıkça onaylamalısın. Varsayılan olarak kapalıdır; etkinleştirmek için sunucu ortamında `NINOVA_OBS_REGISTRATION_WRITES=1` ayarlanmalıdır. Uzak sunucuda ayrıca bir araç izin listesi kullanıyorsan bu aracı da listeye ekle. Araç sonucu taslağı yeniden okuyarak kontrol eder; belirsiz bir sonuçta kaydetme isteğini otomatik tekrarlamaz. Ders kaydı veya ders bırakma işlemi yapmaz.
+Taslağı kaydetmek için ayrıca `obs_save_registration_draft(crns, confirm=true)` kullanılabilir. Varsayılan olarak kapalıdır, açmak için sunucu ortamında `NINOVA_OBS_REGISTRATION_WRITES=1` ayarlanmalıdır. Yalnızca yerel stdio sunucusunda çalışır, uzak HTTP sunucusunda hiçbir ayarla açılmaz. Kaydetme mevcut taslağın tamamını değiştirir. Taslaktan ders silinecekse araç hiçbir şey göndermez, silinecek CRN'leri listeler ve ancak `allow_replace=true` ile tekrar çağrılırsa kaydeder. Sonuçta önceki taslağın CRN'leri her zaman yer alır. Belirsiz bir sonuçta isteği kendiliğinden tekrarlamaz. Ders kaydı veya ders bırakma işlemi yapmaz. Bu araç gerçek OBS üzerinde henüz başarılı bir kayıtla doğrulanmadı, ilk kullanımda sonucu OBS'nin kendi sayfasından kontrol et.
 
 Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 
@@ -281,7 +281,7 @@ Tüm değişkenler için `.env.example` ve [docs/advanced.md](docs/advanced.md) 
 
 `NINOVA_LIBRARY_PROXY_URL` yalnız yeni kütüphane kataloğunun anonim HTTPS GET
 isteklerini etkiler. `http://127.0.0.1:PORT` veya `http://[::1]:PORT` biçiminde,
-1024–65535 aralığında açık port gerekir. Kullanıcı adı, şifre, sorgu ve ek yol
+1024-65535 aralığında açık port gerekir. Kullanıcı adı, şifre, sorgu ve ek yol
 kabul edilmez. Proxy önceden çalışıyor olmalıdır; bu ayar servis kurmaz veya VPN
 yapılandırmasını değiştirmez. Ayar yoksa katalog doğrudan bağlanır. Yeni katalog
 istemcisi her iki durumda da `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` ve `.netrc`

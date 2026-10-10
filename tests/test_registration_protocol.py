@@ -130,9 +130,12 @@ class RegistrationProtocolTests(unittest.TestCase):
         for name in REGISTRATION_TOOLS:
             with self.subTest(tool=name):
                 metadata = self.result["tools"][name]
-                self.assertTrue(metadata["annotations"]["readOnlyHint"])
+                # The two tools that POST to the OBS draft-check endpoint take a
+                # server lock and use quota, so they are not advertised as reads.
+                checks_obs = name in {"obs_validate_registration_plan", "obs_get_elective_group"}
+                self.assertEqual(metadata["annotations"]["readOnlyHint"], not checks_obs)
                 self.assertFalse(metadata["annotations"]["destructiveHint"])
-                self.assertTrue(metadata["annotations"]["idempotentHint"])
+                self.assertEqual(metadata["annotations"]["idempotentHint"], not checks_obs)
 
     def test_actual_protocol_argument_schemas_match_registration_methods(self) -> None:
         tools = self.result["tools"]

@@ -49,18 +49,16 @@ class RemoteToolAllowlistTests(unittest.TestCase):
             os.environ["NINOVA_REMOTE_ENABLE_MAIL"] = "1"
             self.assertEqual(_selected_remote_tool_names(), ["auth_status", "mail_status"])
 
-    def test_registration_write_requires_exact_opt_in_even_in_explicit_allowlist(self) -> None:
+    def test_registration_write_is_never_served_remotely_even_when_requested(self) -> None:
         with patch.dict(os.environ, {"NINOVA_REMOTE_ALLOWED_TOOLS": "obs_save_registration_draft"}):
-            for value in (None, "", "0", "true", "yes", "on", " 1 ", "01"):
+            for value in (None, "", "0", "true", "1"):
                 with self.subTest(value=value):
                     if value is None:
                         os.environ.pop("NINOVA_OBS_REGISTRATION_WRITES", None)
                     else:
                         os.environ["NINOVA_OBS_REGISTRATION_WRITES"] = value
-                    with self.assertRaisesRegex(RuntimeError, "disabled"):
+                    with self.assertRaisesRegex(RuntimeError, "remote-excluded"):
                         _selected_remote_tool_names()
-            os.environ["NINOVA_OBS_REGISTRATION_WRITES"] = "1"
-            self.assertEqual(_selected_remote_tool_names(), ["obs_save_registration_draft"])
 
     def test_registration_opt_in_respects_existing_remote_allowlist(self) -> None:
         with patch.dict(os.environ, {
@@ -69,7 +67,7 @@ class RemoteToolAllowlistTests(unittest.TestCase):
         }):
             self.assertEqual(_selected_remote_tool_names(), ["auth_status"])
             os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS")
-            self.assertIn("obs_save_registration_draft", _selected_remote_tool_names())
+            self.assertNotIn("obs_save_registration_draft", _selected_remote_tool_names())
 
 
 if __name__ == "__main__":

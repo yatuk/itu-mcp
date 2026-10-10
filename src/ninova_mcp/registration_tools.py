@@ -16,7 +16,9 @@ from .registration_draft import DRAFT_PATH, _now, normalize_crns, require_succes
 from .registration_plan import validate_registration_plan
 
 _READ_ERRORS = (NinovaError, requests.RequestException)
-_MAX_ELECTIVE_VALIDATIONS = 24
+# Every check is an authenticated POST followed by a two second pause and
+# counts against the OBS draft-check quota. Eight keeps one call near 20 s.
+_MAX_ELECTIVE_VALIDATIONS = 8
 
 
 def _canonical(value: Any) -> str | None:
