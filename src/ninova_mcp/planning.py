@@ -9,6 +9,42 @@ from .parsing import normalize_lookup_text
 from .schedule_utils import DAY_ORDER, parse_time_range
 
 
+def filter_course_schedule(
+    schedule: dict[str, Any],
+    *,
+    query: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Filter names/codes and page sections without altering the cached schedule."""
+    key = normalize_lookup_text(query) if query is not None else None
+    if key == "":
+        raise ValueError("query must contain a course name or code")
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= 100):
+        raise ValueError("limit must be an integer from 1 to 100")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset must be a non-negative integer")
+    courses = schedule.get("courses") or []
+    matches = courses if key is None else [
+        course for course in courses
+        if key in normalize_lookup_text(course.get("name"))
+        or key.replace(" ", "") in normalize_lookup_text(course.get("code")).replace(" ", "")
+    ]
+    page_limit = limit if limit is not None else 50
+    page = matches[offset:offset + page_limit]
+    return {
+        **schedule,
+        "courses": page,
+        "count": len(page),
+        "total_course_count": len(courses),
+        "matched_count": len(matches),
+        "filters": {"query": query},
+        "limit": page_limit,
+        "offset": offset,
+        "next_offset": offset + len(page) if offset + len(page) < len(matches) else None,
+    }
+
+
 def filter_academic_calendar(
     calendar: dict[str, Any],
     *,
