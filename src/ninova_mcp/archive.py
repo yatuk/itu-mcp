@@ -8,6 +8,7 @@ named fields and the summaries a student actually asks for.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 # Branch codes run 2-4 letters; course numbers are 3 digits for normal courses
@@ -402,3 +403,382 @@ def recommend_course_timing(
         )
 
     return " ".join(parts)
+
+
+# -- extra datasets: grades, catalog, term-wide search, exams, status --------
+
+# OBS term ids end in 10/20/30 for Güz/Bahar/Yaz and carry the *ending* year of
+# the academic year: 202410 is 2023-2024 Güz.
+_DONEM_SEASONS = {"10": "guz", "20": "bahar", "30": "yaz"}
+
+# Positional layout of terms/<slug>/search.json rows, taken from the archive
+# site's own reader (assets/views/courses.js) and checked field by field against
+# terms/<slug>/branches/<BRANCH>.json. ``when`` is "Day HH:MM/HH:MM" sessions
+# joined by " | "; ``where`` is the matching "BUILDING ROOM" list. Dumps older
+# than the live scraper stop after ``programs`` (11 columns), so everything past
+# ``enrolled`` is optional.
+SEARCH_ROW_FIELDS = (
+    "crn", "code", "name", "branch", "instructor", "when",
+    "capacity", "enrolled", "level", "method", "programs", "where",
+)
+_SEARCH_ROW_REQUIRED = 8
+
+# Folded day names as they appear in ``when``, plus the English names people type.
+_DAY_ALIASES = {
+    "pazartesi": "pazartesi", "monday": "pazartesi",
+    "sali": "sali", "tuesday": "sali",
+    "carsamba": "carsamba", "wednesday": "carsamba",
+    "persembe": "persembe", "thursday": "persembe",
+    "cuma": "cuma", "friday": "cuma",
+    "cumartesi": "cumartesi", "saturday": "cumartesi",
+    "pazar": "pazar", "sunday": "pazar",
+}
+
+
+def _code_key(course_code: Any) -> str:
+    """Compare course codes ignoring case and spacing only, never the suffix."""
+    return re.sub(r"\s+", "", str(course_code or "")).upper()
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def term_slug_from_donem(donem: Any) -> str | None:
+    """Turn an OBS term id like ``"202410"`` into ``"2023-2024-guz"``."""
+    text = str(donem or "").strip()
+    if not re.fullmatch(r"\d{6}", text):
+        return None
+    season = _DONEM_SEASONS.get(text[4:])
+    if season is None:
+        return None
+    year = int(text[:4])
+    return f"{year - 1}-{year}-{season}"
+
+
+def related_course_codes(course_code: str, known_codes: Any) -> list[str]:
+    """Other codes with the same branch and number but a different suffix.
+
+    ``BLG 212`` and ``BLG 212E`` are recorded separately by the archive. They
+    are surfaced side by side, never folded into one another.
+    """
+    match = COURSE_CODE_PATTERN.fullmatch(course_code or "")
+    if not match:
+        return []
+    base = (match.group(1).upper(), match.group(2))
+    own = _code_key(course_code)
+    related = []
+    for code in known_codes or []:
+        other = COURSE_CODE_PATTERN.fullmatch(str(code))
+        if not other or _code_key(code) == own:
+            continue
+        if (other.group(1).upper(), other.group(2)) == base:
+            related.append(str(code))
+    return sorted(set(related))
+
+
+def _grade_term_entry(record: dict[str, Any]) -> dict[str, Any]:
+    raw = record.get("grades")
+    grades = dict(raw) if isinstance(raw, dict) else {}
+    counted = sum(value for value in grades.values() if _is_count(value))
+    total = record.get("total")
+    entry: dict[str, Any] = {
+        "term": term_slug_from_donem(record.get("donem")),
+        "term_label": record.get("term"),
+        "donem": record.get("donem"),
+        "total": total,
+        "counted_total": counted,
+        "total_mismatch": not _is_count(total) or total != counted,
+        "grades": grades,
+        # Shares of the counted grades, so they add up to 100 even when the
+        # published total disagrees with the counts.
+        "percentages": {
+            label: round(value * 100 / counted, 1)
+            for label, value in grades.items()
+            if _is_count(value)
+        } if counted > 0 else {},
+        "source_url": record.get("sourceUrl"),
+    }
+    if entry["total_mismatch"] and _is_count(total):
+        entry["total_difference"] = total - counted
+    return entry
+
+
+def grade_distribution(
+    records: Any,
+    course_code: str,
+    *,
+    term: str | None = None,
+) -> dict[str, Any]:
+    """Shape one course's letter grade records out of a branch grades file.
+
+    Only records whose code matches exactly are used. Grade labels are passed
+    through as published (including the ``+`` grades and anything unexpected
+    like ``BL``); a label missing from a term is left missing, not zero-filled.
+    """
+    target = _code_key(course_code)
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for record in records or []:
+        if isinstance(record, dict) and record.get("code"):
+            by_code.setdefault(str(record["code"]).strip(), []).append(record)
+
+    own = [r for code, rows in by_code.items() if _code_key(code) == target for r in rows]
+    related = related_course_codes(course_code, by_code)
+
+    entries = []
+    for record in own:
+        entry = _grade_term_entry(record)
+        # The archive has been seen to store the very same OBS distribution
+        # under both language variants. Say so, so nobody adds them together.
+        twins = sorted({
+            code
+            for code in related
+            for other in by_code[code]
+            if other.get("donem") == record.get("donem")
+            and other.get("grades") == record.get("grades")
+            and other.get("total") == record.get("total")
+        })
+        if twins:
+            entry["same_counts_as"] = twins
+        entries.append(entry)
+    entries.sort(key=lambda e: str(e.get("donem") or ""), reverse=True)
+
+    available = [e["term"] for e in entries if e["term"]]
+    if term is not None:
+        entries = [e for e in entries if e["term"] == term]
+
+    if not own:
+        coverage = "course_absent_from_grades"
+    elif not entries:
+        coverage = "term_absent_for_course"
+    else:
+        coverage = "covered"
+
+    return {
+        "course_code": course_code,
+        "term_filter": term,
+        "coverage": coverage,
+        "term_count": len(entries),
+        "available_terms": available,
+        "mismatch_term_count": sum(1 for e in entries if e["total_mismatch"]),
+        "terms": entries,
+        "related_codes": [
+            {"course_code": code, "term_count": len(by_code[code])} for code in related
+        ],
+        "branch_terms": sorted(
+            {
+                slug
+                for rows in by_code.values()
+                for slug in (term_slug_from_donem(r.get("donem")) for r in rows)
+                if slug
+            },
+            key=_term_sort_key,
+        ),
+    }
+
+
+def catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Rename one catalog record's fields; values are passed through untouched.
+
+    Some records have no outcomes or weekly topics at all. Those come back as
+    published (``None`` or absent) and are named in ``missing_fields``.
+    """
+    fields = {
+        "course_name": "name",
+        "course_name_en": "nameEn",
+        "language": "language",
+        "credits": "credits",
+        "description": "description",
+        "outcomes": "outcomes",
+        "weekly_topics": "weeklyTopics",
+        "textbooks": "textbooks",
+        "source_url": "sourceUrl",
+    }
+    result: dict[str, Any] = {"course_code": entry.get("code")}
+    missing = []
+    for out_key, source_key in fields.items():
+        value = entry.get(source_key)
+        result[out_key] = value
+        if value is None or value == "" or value == []:
+            missing.append(out_key)
+    result["missing_fields"] = missing
+    return result
+
+
+def normalize_day(day: str) -> str:
+    """Resolve a Turkish or English day name to its folded Turkish form."""
+    from .parsing import normalize_lookup_text
+
+    key = _DAY_ALIASES.get(normalize_lookup_text(day))
+    if key is None:
+        raise ValueError(
+            f"Gün çözümlenemedi: {day!r}. Pazartesi, Salı, Çarşamba, Perşembe, Cuma, "
+            "Cumartesi veya Pazar olmalı."
+        )
+    return key
+
+
+def _split_sessions(when: Any, where: Any) -> list[dict[str, Any]]:
+    slots = [part.strip() for part in str(when or "").split("|") if part.strip()]
+    places = [part.strip() for part in str(where or "").split("|")]
+    sessions = []
+    for index, slot in enumerate(slots):
+        day, _, time_range = slot.partition(" ")
+        place = places[index] if index < len(places) else ""
+        sessions.append({
+            "day": day or None,
+            "time": time_range.strip() or None,
+            # Building and room arrive as one string; not split, because the
+            # boundary between them is not marked in the data.
+            "location": place or None,
+        })
+    return sessions
+
+
+def summarize_search_row(row: list[Any]) -> dict[str, Any]:
+    """Name the columns of one term-wide ``search.json`` row."""
+    cell = dict(zip(SEARCH_ROW_FIELDS, row, strict=False))
+    return {
+        "crn": cell.get("crn"),
+        "course_code": cell.get("code"),
+        "course_name": cell.get("name"),
+        "branch": cell.get("branch"),
+        "instructor": cell.get("instructor"),
+        "level": cell.get("level") or None,
+        "capacity": cell.get("capacity"),
+        "enrolled": cell.get("enrolled"),
+        "fill_ratio": _fill_ratio(cell.get("capacity"), cell.get("enrolled")),
+        "sessions": _split_sessions(cell.get("when"), cell.get("where")),
+        "programs": cell.get("programs"),
+        "method": cell.get("method") or None,
+    }
+
+
+def search_sections(
+    rows: Any,
+    *,
+    course_code: str | None = None,
+    course_name: str | None = None,
+    instructor: str | None = None,
+    day: str | None = None,
+    limit: int = 40,
+) -> dict[str, Any]:
+    """Filter one term's ``search.json`` rows; every given filter must match.
+
+    Text filters are case-insensitive substring matches after Turkish-aware
+    folding, so "sahin" finds "Şahin" and "isletme" finds "İşletme". The code
+    filter also ignores spaces ("blg22" matches "BLG 223E"). ``day`` matches a
+    section that meets on that day in any of its sessions.
+    """
+    from .parsing import normalize_lookup_text
+
+    def fold(value: Any) -> str:
+        return normalize_lookup_text(str(value)) if value is not None else ""
+
+    code_target = fold(course_code).replace(" ", "")
+    name_target = fold(course_name)
+    instructor_target = fold(instructor)
+    day_target = normalize_day(day) if day else ""
+
+    usable = 0
+    matched = []
+    for row in rows or []:
+        if not isinstance(row, list) or len(row) < _SEARCH_ROW_REQUIRED:
+            continue
+        usable += 1
+        if code_target and code_target not in fold(row[1]).replace(" ", ""):
+            continue
+        if name_target and name_target not in fold(row[2]):
+            continue
+        if instructor_target and instructor_target not in fold(row[4]):
+            continue
+        if day_target:
+            days = {
+                fold(part.strip().partition(" ")[0])
+                for part in str(row[5] or "").split("|")
+            }
+            if day_target not in days:
+                continue
+        matched.append(row)
+
+    return {
+        "term_section_count": usable,
+        "match_count": len(matched),
+        "sections": [summarize_search_row(row) for row in matched[:limit]],
+        "truncated": len(matched) > limit,
+    }
+
+
+def summarize_exam(exam: dict[str, Any]) -> dict[str, Any]:
+    """Rename one exam record's fields to match the other archive tools."""
+    return {
+        "crn": exam.get("crn"),
+        "course_code": exam.get("code"),
+        "course_name": exam.get("name"),
+        "branch": exam.get("branch"),
+        "instructor": exam.get("instructor"),
+        "exam_type": exam.get("type"),
+        "date": exam.get("date"),
+        "day": exam.get("day"),
+        "time": exam.get("time"),
+        "place": exam.get("place"),
+    }
+
+
+def filter_exams(
+    exams: Any,
+    *,
+    branch: str | None = None,
+    course_code: str | None = None,
+) -> list[dict[str, Any]]:
+    """Keep exam records for one branch and/or one exact course code."""
+    branch_target = (branch or "").strip().upper()
+    code_target = _code_key(course_code) if course_code else ""
+    out = []
+    for exam in exams or []:
+        if not isinstance(exam, dict):
+            continue
+        if branch_target and str(exam.get("branch") or "").strip().upper() != branch_target:
+            continue
+        if code_target and _code_key(exam.get("code")) != code_target:
+            continue
+        out.append(summarize_exam(exam))
+    return out
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def status_summary(status: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Shape ``status.json``. Purely descriptive: an old date is not a fault.
+
+    The archive stops scraping outside registration and add/drop weeks, so
+    ``data_age_days`` is reported as a plain number with no threshold attached.
+    """
+    last_success = _parse_utc_timestamp(status.get("lastSuccessAt"))
+    age_days = None
+    if last_success is not None:
+        moment = now or datetime.now(timezone.utc)
+        age_days = round((moment - last_success).total_seconds() / 86400, 1)
+    failed = status.get("failedBranches")
+    return {
+        "last_run_at": status.get("lastRunAt"),
+        "last_success_at": status.get("lastSuccessAt"),
+        "data_age_days": age_days,
+        "sections": status.get("sections"),
+        "previous_sections": status.get("prevSections"),
+        "partial": status.get("partial"),
+        "failed_branches": failed if isinstance(failed, list) else [],
+        "mode": status.get("mode"),
+        "duration_sec": status.get("durationSec"),
+        "schema_version": status.get("schemaVersion"),
+        "sources": status.get("sources"),
+    }
