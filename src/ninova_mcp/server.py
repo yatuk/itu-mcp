@@ -18,6 +18,7 @@ from .client import NinovaAuthError, NinovaClient, NinovaError
 from .compact import maybe_compact
 from .env import load_ninova_env
 from .archive_client import ItuArchiveClient, ItuArchiveError
+from .archive_tools import ARCHIVE_DATASET_TOOLS, ArchiveDatasetToolsMixin
 from .community_data import CrossCheckDataClient, CrossCheckDataError
 from .graduation import summarize_graduation_plan
 from .prompts import PROMPT_NAMES, PROMPTS
@@ -120,7 +121,7 @@ SERVER_INSTRUCTIONS = (
 )
 
 
-class NinovaMcpApp:
+class NinovaMcpApp(ArchiveDatasetToolsMixin):
     def __init__(self) -> None:
         load_ninova_env()
         self._client: NinovaClient | None = None
@@ -5157,6 +5158,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+TOOLS.extend(ARCHIVE_DATASET_TOOLS)
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",

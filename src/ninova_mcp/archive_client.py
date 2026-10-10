@@ -11,6 +11,7 @@ plain cached HTTPS reader with the same host-allowlist discipline as
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -185,3 +186,95 @@ class ItuArchiveClient:
         if not isinstance(payload, dict):
             raise ItuArchiveError(f"Archive quota file has an unexpected shape: {slug}")
         return payload
+
+    # -- extra datasets ----------------------------------------------------
+    #
+    # These return ``None`` for a 404 instead of an empty container: the tools
+    # built on them must tell "the archive never recorded this file" apart from
+    # "the file exists and holds nothing that matches".
+
+    def get_grades(self, branch: str) -> list[dict[str, Any]] | None:
+        """Letter grade distribution records for every course in one branch."""
+        segment = branch_path_segment(branch)
+        payload = self._get_json(f"/grades/{segment}.json", optional=True)
+        if payload is None:
+            return None
+        if not isinstance(payload, list):
+            raise ItuArchiveError(f"Archive grades file has an unexpected shape: {segment}")
+        return payload
+
+    def get_catalog(self, branch: str) -> dict[str, Any] | None:
+        """Catalog entries (description, outcomes, weekly topics) for one branch."""
+        segment = branch_path_segment(branch)
+        payload = self._get_json(f"/catalog/{segment}.json", optional=True)
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ItuArchiveError(f"Archive catalog file has an unexpected shape: {segment}")
+        return payload
+
+    def get_prereq_reverse(self) -> dict[str, Any]:
+        """Course code -> courses that list it as a prerequisite.
+
+        Deliberately the small reverse index: ``prereq/graph.json`` is several
+        megabytes and is never fetched by this client.
+        """
+        payload = self._get_json("/prereq/reverse.json")
+        if not isinstance(payload, dict):
+            raise ItuArchiveError("Archive prereq/reverse.json has an unexpected shape")
+        return payload
+
+    def get_term_search(self, slug: str) -> list[list[Any]] | None:
+        """Positional section rows for every branch of one term."""
+        segment = term_path_segment(slug)
+        payload = self._get_json(f"/terms/{segment}/search.json", optional=True)
+        if payload is None:
+            return None
+        if not isinstance(payload, list):
+            raise ItuArchiveError(f"Archive search.json has an unexpected shape: {segment}")
+        return payload
+
+    def get_exams(self, slug: str) -> dict[str, Any] | None:
+        """Exam schedule for one term; most terms have no such file."""
+        segment = term_path_segment(slug)
+        payload = self._get_json(f"/exams/{segment}.json", optional=True)
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ItuArchiveError(f"Archive exams file has an unexpected shape: {segment}")
+        return payload
+
+    def get_status(self) -> dict[str, Any]:
+        """Last scrape run: timestamps, section count, partial/failed flags."""
+        payload = self._get_json("/status.json")
+        if not isinstance(payload, dict):
+            raise ItuArchiveError("Archive status.json has an unexpected shape")
+        return payload
+
+
+_BRANCH_SEGMENT_PATTERN = re.compile(r"[A-Z]{2,4}")
+_TERM_SEGMENT_PATTERN = re.compile(r"\d{4}-\d{4}-(?:guz|bahar|yaz)")
+
+
+def branch_path_segment(branch: str) -> str:
+    """Return ``branch`` as a safe URL path segment, or raise.
+
+    A branch code is interpolated into the request path, so anything that is
+    not 2-4 ASCII letters (slashes, dots, percent escapes, query strings) is
+    rejected before a URL is ever built.
+    """
+    candidate = str(branch or "").strip().upper()
+    if not _BRANCH_SEGMENT_PATTERN.fullmatch(candidate):
+        raise ItuArchiveError(f"Branş kodu geçersiz: {branch!r}. 'BLG' gibi 2-4 harf olmalı.")
+    return candidate
+
+
+def term_path_segment(slug: str) -> str:
+    """Return ``slug`` as a safe URL path segment, or raise."""
+    candidate = str(slug or "").strip().lower()
+    if not _TERM_SEGMENT_PATTERN.fullmatch(candidate):
+        raise ItuArchiveError(
+            f"Dönem kodu geçersiz: {slug!r}. '2025-2026-guz' biçiminde olmalı "
+            "(guz, bahar veya yaz)."
+        )
+    return candidate
