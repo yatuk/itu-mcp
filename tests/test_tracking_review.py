@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import unittest
 
 import test_tracking_completeness as fixtures
+from ninova_mcp.tracking_coverage import page_coverage
 
 COURSE, ROOT, snapshot = fixtures.COURSE, fixtures.ROOT, fixtures.snapshot
-from ninova_mcp.tracking_coverage import page_coverage
 
 
 class TrackingReviewTests(unittest.TestCase):

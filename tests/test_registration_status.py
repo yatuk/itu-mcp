@@ -15,7 +15,7 @@ from ninova_mcp.registration_status import summarize_registration_status
 from ninova_mcp.server import NinovaMcpApp
 
 NOW = datetime.fromisoformat("2026-09-16T12:00:00+03:00")
-CALENDAR = extract_academic_calendar((Path(__file__).parent / "fixtures/academic_calendar_month_public.html").read_text(), "https://www.takvim.sis.itu.edu.tr/AkademikTakvim/EN/academic-calendar/index.php")
+CALENDAR = extract_academic_calendar((Path(__file__).parent / "fixtures/academic_calendar_month_public.html").read_text(encoding="utf-8"), "https://www.takvim.sis.itu.edu.tr/AkademikTakvim/EN/academic-calendar/index.php")
 
 
 def records(name="Example Undergraduate Program", level=3, status="Aktif"):

@@ -110,10 +110,13 @@ class TicketFallbackTests(unittest.TestCase):
                     self.assertEqual(result['total_matching_count'], 30)
 
     def test_json_and_html_ticket_limits_have_same_contract(self):
-        rows = [{'Id': str(i), 'Title': f'Example {i}', 'Status': 'Open', 'Url': f'/ticket/{i}'} for i in range(3)]
+        rows = [{'Id': str(i), 'Title': f'Example {i}', 'Status': 'Open',
+                 'URL': f'/itubilet.aspx?id={i}', 'UnitName': 'Example Office',
+                 'CategoryName': 'Example Category', 'CreateDate': '2026-10-03T12:00:00',
+                 'UpdateDate': '2026-10-03T12:00:00', 'HasReply': False} for i in range(3)]
         with patch.object(self.app, '_get_portal_json', return_value={'YardimInformationList': rows}):
-            result = self.app.obs_get_help_tickets(query='Open', limit=1)
+            result = self.app.obs_get_help_tickets(query='Open', limit=1, include_details=False)
         self.assertEqual(result['count'], 1)
         self.assertEqual(result['total_matching_count'], 3)
         self.assertTrue(result['metadata_complete'])
-        self.assertEqual(result['tickets'][0]['url'], 'https://portal.itu.edu.tr/ticket/0')
+        self.assertEqual(result['tickets'][0]['url'], 'https://yardim.itu.edu.tr/itubilet.aspx?id=0')

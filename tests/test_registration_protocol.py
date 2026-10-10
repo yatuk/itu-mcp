@@ -14,6 +14,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from test_grade_distribution import OFFICIAL_HTML
+from ninova_mcp.server import LOCAL_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRATION_TOOLS = (
@@ -31,7 +32,15 @@ def deny_network(*args, **kwargs):
     raise AssertionError("Offline protocol test attempted an HTTP request.")
 
 requests.sessions.Session.request = deny_network
-socket.socket.connect = deny_network
+_real_connect = socket.socket.connect
+
+def loopback_only(sock, address, *args, **kwargs):
+    # asyncio on Windows builds its wakeup channel from a loopback socket pair.
+    if isinstance(address, tuple) and address and address[0] in ("127.0.0.1", "::1"):
+        return _real_connect(sock, address, *args, **kwargs)
+    return deny_network()
+
+socket.socket.connect = loopback_only
 socket.getaddrinfo = deny_network
 from ninova_mcp.obs_client import ObsPublicClient
 
@@ -116,8 +125,8 @@ class RegistrationProtocolTests(unittest.TestCase):
     def test_real_stdio_discovery_advertises_the_four_feature_tools(self) -> None:
         self.assertEqual(self.result["server_name"], "itu-mcp")
         self.assertTrue(self.result["protocol_version"])
-        self.assertEqual(self.result["tool_count"], 95)
-        self.assertEqual(len(self.result["tools"]), 95)
+        self.assertEqual(self.result["tool_count"], len(LOCAL_TOOL_NAMES))
+        self.assertEqual(set(self.result["tools"]), set(LOCAL_TOOL_NAMES))
         for name in REGISTRATION_TOOLS:
             with self.subTest(tool=name):
                 metadata = self.result["tools"][name]

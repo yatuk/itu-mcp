@@ -61,8 +61,8 @@ class CalendarDateTests(unittest.TestCase):
 class CalendarSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.calendar = extract_academic_calendar((FIXTURES / "academic_calendar_month_public.html").read_text(), SOURCE)
-        cls.registration = extract_academic_calendar((FIXTURES / "academic_calendar_registration_public.html").read_text(), "https://www.sis.itu.edu.tr/registration-fixture")
+        cls.calendar = extract_academic_calendar((FIXTURES / "academic_calendar_month_public.html").read_text(encoding="utf-8"), SOURCE)
+        cls.registration = extract_academic_calendar((FIXTURES / "academic_calendar_registration_public.html").read_text(encoding="utf-8"), "https://www.sis.itu.edu.tr/registration-fixture")
 
     def test_real_month_has_four_distinct_class_windows_and_reopening(self):
         windows = [x for x in self.calendar["events"] if x.get("registration_kind") == "class_window"]

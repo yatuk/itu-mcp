@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
+import socket
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -42,8 +43,18 @@ class DraftWriteToolTests(unittest.TestCase):
         stack.enter_context(patch("ninova_mcp.server.load_ninova_env"))
         # Detect accidental HTTP and lower-level connections, not merely a
         # missing mock. There are no local network dependencies in these tests.
-        for target in ("requests.sessions.Session.request", "socket.socket.connect", "socket.getaddrinfo"):
+        for target in ("requests.sessions.Session.request", "socket.getaddrinfo"):
             stack.enter_context(patch(target, side_effect=AssertionError("Network forbidden in draft wrapper test")))
+        # asyncio on Windows builds its wakeup channel from a loopback socket pair,
+        # so loopback connects stay allowed while everything else is refused.
+        real_connect = socket.socket.connect
+
+        def loopback_only(sock, address, *args, **kwargs):
+            if isinstance(address, tuple) and address and address[0] in ("127.0.0.1", "::1"):
+                return real_connect(sock, address, *args, **kwargs)
+            raise AssertionError("Network forbidden in draft wrapper test")
+
+        stack.enter_context(patch("socket.socket.connect", loopback_only))
         self.app = NinovaMcpApp()
         self.obs = FakeObs()
         self.app._obs = self.obs
