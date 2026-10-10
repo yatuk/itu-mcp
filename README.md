@@ -208,7 +208,10 @@ codex mcp add itu \
     <td>
       <code>archive_who_taught</code> · <code>archive_course_history</code><br/>
       <code>archive_fill_rate</code> · <code>archive_term_sections</code><br/>
-      <code>archive_search_courses</code> · <code>plan_remaining_courses</code>
+      <code>archive_search_courses</code> · <code>plan_remaining_courses</code><br/>
+      <code>archive_grade_distribution</code> · <code>archive_course_catalog</code><br/>
+      <code>archive_course_unlocks</code> · <code>archive_search_sections</code><br/>
+      <code>archive_exam_schedule</code> · <code>archive_status</code>
     </td>
   </tr>
   <tr>

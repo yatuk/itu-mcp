@@ -302,11 +302,40 @@ from 2016-2017 onward. OBS publishes only the active term, so these answer what 
   required courses with archive seasonality and `archive_who_taught` history, producing one
   scheduling recommendation per course (e.g. "only offered in Güz, usually taught by X,
   average fill 0.95") instead of requiring a manual `archive_course_history` call per course
+- `archive_grade_distribution(course_code, term?)`: letter grade counts, published total and
+  percentages per term (from 2023-2024 on), with the OBS source URL. Only the exact code is
+  read: `BLG 212` and `BLG 212E` are never merged, the sibling is listed under `related_codes`,
+  and `same_counts_as` marks terms where the archive holds identical numbers under both codes.
+  Grade labels are passed through as published (including the `+` grades) and a label missing
+  from a term is not zero-filled. `total_mismatch` flags a published total that differs from
+  the sum of the counts; both numbers are kept
+- `archive_course_catalog(course_code)`: names, language, credits, description, learning
+  outcomes, weekly topics, textbooks and source URL. Fields the catalog lacks are named in
+  `missing_fields`
+- `archive_course_unlocks(course_code)`: courses that list the course as a prerequisite. Direct
+  next level only. Prerequisite rules have AND/OR alternatives and minimum grades that this
+  flat list does not express, so use `explain_course_eligibility` for the real rule
+- `archive_search_sections(term?, course_code?, course_name?, instructor?, day?, limit?)`:
+  searches one whole term across all branches. Turkish-aware matching ("sahin" finds "Şahin"),
+  defaults to the archive's current term, reports `match_count` and `truncated`
+- `archive_exam_schedule(term, branch?, course_code?, limit?)`: the exam schedule recorded for
+  a term. Most terms have none, and that comes back as `exam_schedule_not_recorded`, not as an
+  empty schedule
+- `archive_status`: last run, last success, section count, partial flag, failed branches and
+  data age in days. Informational only: the archive stops scraping outside registration and
+  add/drop weeks, so an old date is expected
 
 Every result carries a `coverage` field. An empty result means one of three different things
 — the term was never captured (`term_missing`), the branch is absent from that term's dump
 (`branch_absent_from_term`), or the filters matched nothing (`covered`) — and the tool always
 says which. Quota data refreshes daily and is not live; check OBS before registering.
+
+The dataset tools above use the same field with their own values, so "the archive never
+recorded this file" stays distinct from "nothing matched": `branch_grades_missing`,
+`course_absent_from_grades`, `term_absent_for_course`, `branch_catalog_missing`,
+`course_absent_from_catalog`, `not_listed_as_prerequisite`, `search_index_missing` and
+`exam_schedule_not_recorded`. They never download `prereq/graph.json` (several MB); only the
+small reverse index is read. Branch codes and term slugs are validated before a URL is built.
 
 `explain_course_eligibility` also carries `archive_seasonality` when the archive has the
 course: a course can be prerequisite-eligible right now and still only ever open in one term

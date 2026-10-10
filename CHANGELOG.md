@@ -1,5 +1,39 @@
 # Changelog
 
+## Yayınlanmamış
+
+### Arşiv: altı yeni salt okunur araç
+
+Arşiv sitesinin yayınladığı ama sunucunun okumadığı veri setleri için araçlar eklendi.
+Hepsi kimlik gerektirmez ve mevcut `ItuArchiveClient` üzerinden çalışır (tek host izin
+listesi, önbellek, güvenli yönlendirme).
+
+- `archive_grade_distribution(course_code, term?)`: dersin dönem dönem harf notu dağılımı
+  (2023-2024'ten itibaren), yayınlanan toplam, yüzdeler ve OBS kaynak adresi. Yalnızca tam
+  kod okunur; `BLG 212` ile `BLG 212E` birleştirilmez, kardeş kod `related_codes` altında
+  listelenir, arşivin iki kod altında da aynı sayıları tuttuğu dönemler `same_counts_as` ile
+  işaretlenir. `+` notları dahil etiketler yayınlandığı gibi kalır, veride olmayan not için
+  sıfır uydurulmaz. Yayınlanan toplam ile sayıların toplamı tutmuyorsa ikisi de korunur ve
+  `total_mismatch` ile işaretlenir
+- `archive_course_catalog(course_code)`: ders adı (TR/EN), dil, krediler, tanım, öğrenme
+  çıktıları, haftalık konular, kaynak kitaplar ve kaynak adresi
+- `archive_course_unlocks(course_code)`: dersi ön şart olarak anan dersler. Yalnızca bir
+  sonraki düzeyi verir; Ve/Veya seçeneklerini ve en düşük notu göstermez, gerçek kural için
+  `explain_course_eligibility` aracına yönlendirir
+- `archive_search_sections(term?, course_code?, course_name?, instructor?, day?, limit?)`:
+  bir dönemin tüm branşlarında tek seferde arama. Türkçe karakterlere duyarlı eşleşme,
+  varsayılan olarak arşivin güncel dönemi, toplam eşleşme sayısı ve `truncated` bilgisi
+- `archive_exam_schedule(term, branch?, course_code?, limit?)`: dönemin arşive kaydedilmiş
+  sınav programı. Dosyası olmayan dönem "sınav yok" olarak değil
+  `exam_schedule_not_recorded` olarak döner
+- `archive_status`: son tarama, son başarılı tarama, şube sayısı, kısmi tarama bilgisi,
+  başarısız branşlar ve gün cinsinden veri yaşı. Yalnızca bilgi amaçlıdır; arşiv kayıt ve
+  ekle-bırak haftaları dışında taramayı bilerek durdurduğu için eski tarih uyarı üretmez
+
+Yeni kod `archive_tools.py` içinde; `server.py` yalnızca araçları kaydeden birkaç satır
+aldı. URL yoluna giren branş kodu ve dönem kodu, adres kurulmadan önce doğrulanıyor.
+9.3 MB'lık `prereq/graph.json` hiçbir araç tarafından indirilmiyor.
+
 ## v0.7.2
 
 Gerçek bir kullanım raporundan bulunan OBS oturum kırıklığı düzeltildi:
