@@ -190,7 +190,7 @@ codex mcp add itu \
     <td>
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
       <code>obs_list_registered_courses</code><br/>
-      <code>obs_get_registration_draft</code><br/>
+      <code>obs_get_registration_draft</code> · <code>obs_save_registration_draft</code><br/>
       <code>obs_get_elective_group</code> · <code>obs_validate_registration_plan</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
       <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
@@ -233,6 +233,8 @@ Ders seçimini kayıt öncesinde gözden geçirmek için dört araç:
 | `obs_get_grade_distribution(course_code, year, term_code)` | Önceki dönemlerde her harf notunu kaç kişinin aldığını ve yüzdelerini, OBS’nin birlikte raporladığı ders kodlarıyla gösterir. |
 
 Bu araçlar taslağını veya ders kayıtlarını değiştirmez. Kesin bir engel bulunmasa bile eksik bilgiler varsa plan sonucu `incomplete` olur. Sonraki derslere geçiş, ön şart derslerini gereken notlarla tamamlamana bağlıdır. Not dağılımı herkese açıktır. `year`, akademik yılın bittiği yılı belirtir (2026 = 2025–2026). Yıl ve dönem filtresi isteğe bağlıdır. Örnekler ve sınırlar: [Kayıt planlama](docs/registration-planning.md) ve [Not dağılımları](docs/grade-distribution.md).
+
+Taslağı kaydetmek için ayrıca `obs_save_registration_draft(crns, confirm=true)` kullanılabilir. Bu araç mevcut taslağı verilen CRN listesiyle değiştirir; önce tam listeyi ve değişikliği açıkça onaylamalısın. Varsayılan olarak kapalıdır; etkinleştirmek için sunucu ortamında `NINOVA_OBS_REGISTRATION_WRITES=1` ayarlanmalıdır. Uzak sunucuda ayrıca bir araç izin listesi kullanıyorsan bu aracı da listeye ekle. Araç sonucu taslağı yeniden okuyarak kontrol eder; belirsiz bir sonuçta kaydetme isteğini otomatik tekrarlamaz. Ders kaydı veya ders bırakma işlemi yapmaz.
 
 Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 

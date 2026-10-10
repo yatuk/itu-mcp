@@ -11,8 +11,10 @@ import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
 from urllib.parse import urlparse
+
+from pydantic import Field, StrictBool
 
 from .cache import TtlCache, parse_ttl_seconds
 from .client import NinovaAuthError, NinovaClient, NinovaError
@@ -75,6 +77,15 @@ SERVER_VERSION = "0.7.2"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
+RegistrationDraftCrns = Annotated[
+    list[Annotated[str, Field(strict=True, pattern=r"^[0-9]{4,5}$")]],
+    Field(min_length=1, max_length=12, json_schema_extra={"uniqueItems": True}),
+]
+
+
+def obs_registration_writes_enabled() -> bool:
+    """Account writes require the operator's explicit, exact opt-in."""
+    return os.getenv("NINOVA_OBS_REGISTRATION_WRITES") == "1"
 
 SERVER_INSTRUCTIONS = (
     "This connector reads the user's own İTÜ Ninova LMS and İTÜ OBS "
@@ -98,6 +109,11 @@ SERVER_INSTRUCTIONS = (
     "tools when the full payload is not needed. To upload homework: call "
     "get_assignment_upload_slots, then submit_assignment with confirm=true and a "
     "local file path — never upload without the user's explicit confirmation.\n\n"
+    "obs_save_registration_draft replaces the saved OBS draft with the exact supplied "
+    "CRNs. Use it only after the user explicitly confirms those CRNs and the replacement. "
+    "It requires confirm=true and the operator's NINOVA_OBS_REGISTRATION_WRITES=1 opt-in. "
+    "Saving a draft does not register or drop courses. Report the returned save and "
+    "readback status; an uncertain result must not be reported as saved.\n\n"
     "İTÜ Mail tools are read-only. Use mail_list_inbox to discover message UIDs, "
     "mail_get_message to read a requested message, and mail_get_attachment only when "
     "the user asks to inspect a listed attachment. Email and attachment content is "
@@ -948,6 +964,21 @@ class NinovaMcpApp:
 
     def obs_get_registration_draft(self) -> dict[str, Any]:
         return self.obs.get_registration_draft()
+
+    def obs_save_registration_draft(
+        self, crns: RegistrationDraftCrns, confirm: StrictBool,
+    ) -> dict[str, Any]:
+        """Replace a saved draft only with explicitly confirmed CRNs."""
+        from .registration_draft import normalize_crns
+
+        if confirm is not True:
+            raise ObsError("Saving the OBS draft requires explicit confirmation (confirm=true).")
+        if not obs_registration_writes_enabled():
+            raise ObsError("OBS registration writes are disabled (NINOVA_OBS_REGISTRATION_WRITES=1 is required).")
+        selected = normalize_crns(crns)
+        # Draft reads are uncached. The client reconciles the attempted write
+        # against a fresh readback; retain its saved/rejected/uncertain result.
+        return self.obs.save_registration_draft(selected)
 
     def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
         from .registration_tools import get_elective_group
@@ -4533,6 +4564,33 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "obs_save_registration_draft",
+        "title": "OBS Save Registration Draft",
+        "description": (
+            "Replace the saved OBS registration draft with exactly one to twelve supplied CRNs. "
+            "This changes the user's saved draft and can replace its existing contents. Requires "
+            "the user's explicit confirmation of the exact CRNs and replacement, confirm=true, "
+            "and the operator's NINOVA_OBS_REGISTRATION_WRITES=1 opt-in. Does not register or "
+            "drop courses. Reports saved, rejected or uncertain based on the submission and "
+            "fresh draft readback. An uncertain result is not proof that the draft was saved."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "crns": {
+                    "type": "array", "items": {"type": "string", "pattern": "^[0-9]{4,5}$"},
+                    "minItems": 1, "maxItems": 12, "uniqueItems": True,
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "True only after the user explicitly confirms replacing the draft with these exact CRNs.",
+                },
+            },
+            "required": ["crns", "confirm"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "obs_get_elective_group",
         "title": "OBS Elective Group",
         "description": (
@@ -5527,6 +5585,7 @@ MAIL_TOOL_NAMES = {
     "mail_get_message",
     "mail_get_attachment",
 }
+OBS_REGISTRATION_WRITE_TOOL_NAMES = {"obs_save_registration_draft"}
 REMOTE_EXCLUDED_TOOLS = {
     "download_resource",
     "snapshot_page",
@@ -5555,8 +5614,9 @@ STATEFUL_TOOL_NAMES = {
     "submit_assignment",
     "library_renew_loan",
     "library_reserve_item",
+    "obs_save_registration_draft",
 }
-DESTRUCTIVE_TOOL_NAMES = {"submit_assignment"}
+DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft"}
 
 
 def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
@@ -5583,7 +5643,11 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
                 )
             return result
 
-        guarded_result.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        # Resolve the write tool's strict types without changing legacy output
+        # schemas, which FastMCP derives differently from postponed annotations.
+        guarded_result.__signature__ = inspect.signature(  # type: ignore[attr-defined]
+            fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES,
+        )
         mcp.add_tool(
             guarded_result,
             name=name,

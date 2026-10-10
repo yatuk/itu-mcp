@@ -25,11 +25,14 @@ REGISTRATION_TOOLS = (
 OFFLINE_BOOTSTRAP = """
 import os
 import requests
+import socket
 
 def deny_network(*args, **kwargs):
     raise AssertionError("Offline protocol test attempted an HTTP request.")
 
 requests.sessions.Session.request = deny_network
+socket.socket.connect = deny_network
+socket.getaddrinfo = deny_network
 from ninova_mcp.obs_client import ObsPublicClient
 
 grade_html = os.environ.pop("REGISTRATION_GRADE_FIXTURE")
@@ -78,6 +81,10 @@ async def exchange() -> dict:
                         ("invalid_group", "obs_get_elective_group", {"group_id": 0}),
                         ("missing_argument", "obs_validate_registration_plan", {}),
                         ("draft_without_credentials", "obs_get_registration_draft", {}),
+                        ("save_draft_disabled", "obs_save_registration_draft", {"crns": ["10001"], "confirm": True}),
+                        ("save_draft_unconfirmed", "obs_save_registration_draft", {"crns": ["10001"], "confirm": False}),
+                        ("save_draft_missing_confirmation", "obs_save_registration_draft", {"crns": ["10001"]}),
+                        ("save_draft_truthy_confirmation", "obs_save_registration_draft", {"crns": ["10001"], "confirm": "true"}),
                         ("plan_without_credentials", "obs_validate_registration_plan", {"crns": ["10001"]}),
                         ("invalid_grade_course", "obs_get_grade_distribution", {"course_code": "UZB"}),
                         ("invalid_grade_year", "obs_get_grade_distribution", {"course_code": "UZB438E", "year": 1800}),
@@ -109,8 +116,8 @@ class RegistrationProtocolTests(unittest.TestCase):
     def test_real_stdio_discovery_advertises_the_four_feature_tools(self) -> None:
         self.assertEqual(self.result["server_name"], "itu-mcp")
         self.assertTrue(self.result["protocol_version"])
-        self.assertEqual(self.result["tool_count"], 94)
-        self.assertEqual(len(self.result["tools"]), 94)
+        self.assertEqual(self.result["tool_count"], 95)
+        self.assertEqual(len(self.result["tools"]), 95)
         for name in REGISTRATION_TOOLS:
             with self.subTest(tool=name):
                 metadata = self.result["tools"][name]
@@ -134,6 +141,20 @@ class RegistrationProtocolTests(unittest.TestCase):
         self.assertEqual({option["type"] for option in distribution["properties"]["year"]["anyOf"]}, {"integer", "null"})
         self.assertEqual({option["type"] for option in distribution["properties"]["term_code"]["anyOf"]}, {"string", "null"})
         self.assertEqual(distribution["required"], ["course_code"])
+
+    def test_draft_write_is_disabled_by_default_over_real_stdio(self) -> None:
+        metadata = self.result["tools"]["obs_save_registration_draft"]
+        self.assertFalse(metadata["annotations"]["readOnlyHint"])
+        self.assertTrue(metadata["annotations"]["destructiveHint"])
+        self.assertFalse(metadata["annotations"]["idempotentHint"])
+        self.assertEqual(set(metadata["inputSchema"]["required"]), {"crns", "confirm"})
+        for name in ("save_draft_disabled", "save_draft_unconfirmed", "save_draft_missing_confirmation", "save_draft_truthy_confirmation"):
+            with self.subTest(name=name):
+                response = self.result["calls"][name]
+                self.assertTrue(response["is_error"])
+                self.assertNotIn("must both be set", response["text"])
+        self.assertIn("disabled", self.result["calls"]["save_draft_disabled"]["text"])
+        self.assertIn("explicit confirmation", self.result["calls"]["save_draft_unconfirmed"]["text"])
 
     def test_invalid_calls_are_rejected_before_authentication_or_network(self) -> None:
         messages = {
