@@ -141,6 +141,9 @@ class ExplainEligibilityCrossCheckTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.app = NinovaMcpApp()
+        archive = patch.object(self.app.archive, "get_course_history", return_value={})
+        archive.start()
+        self.addCleanup(archive.stop)
         self.branch_rules = extract_branch_prerequisites(
             fixture("onsart_ara_cen.html"), "https://obs.itu.edu.tr/x", "CEN"
         )

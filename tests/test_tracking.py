@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ninova_mcp.tracking import diff_course_snapshots, merge_updates
+from ninova_mcp.tracking import SNAPSHOT_SCOPES, diff_course_snapshots, merge_updates
 
 
 COURSE = {
@@ -50,6 +50,7 @@ def _snapshot(*, announcement_title: str = "Quiz", assignment_uploaded: int = 0)
             "remote_learning": {"active_sessions": [], "past_sessions": []},
         },
         "errors": [],
+        "coverage": {scope: {"status": "complete"} for scope in SNAPSHOT_SCOPES},
     }
 
 

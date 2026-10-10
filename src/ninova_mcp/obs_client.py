@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,8 @@ class ObsClient:
         self._ninova = ninova_client
         self._jwt: str | None = None
         self._jwt_obtained_at: float | None = None
+        self._registration_check_lock = threading.Lock()
+        self._last_registration_check: float | None = None
         self._jwt_ttl_seconds = float(os.getenv("NINOVA_OBS_JWT_TTL_SECONDS") or "1500")
 
     @property
@@ -144,15 +147,24 @@ class ObsClient:
         }
 
     def api_get(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
+        return self._api_request("GET", path, params=params)
+
+    def _api_request(
+        self, method: str, path: str, *, params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        request_options: dict[str, Any] = {"params": params}
+        if json_body is not None:
+            request_options["json"] = json_body
         if not path.startswith("/"):
             path = "/" + path
         url = self.base_url + path
         self.ninova._throttle()
         response = self._safe_request(
-            "GET",
+            method,
             url,
             headers=self._headers(),
-            params=params,
+            **request_options,
             timeout=45,
         )
         if response.status_code in {401, 403} or self._looks_like_obs_login_page(response):
@@ -164,10 +176,10 @@ class ObsClient:
             self._get_jwt(force=True)
             self.ninova._throttle()
             response = self._safe_request(
-                "GET",
+                method,
                 url,
                 headers=self._headers(),
-                params=params,
+                **request_options,
                 timeout=45,
             )
             if self._looks_like_obs_login_page(response):
@@ -202,6 +214,32 @@ class ObsClient:
 
     def get_lesson_registration_status(self) -> dict[str, Any]:
         return self.api_get("/api/ogrenci/DersKayitDurumu")
+
+    def get_registration_draft(self) -> dict[str, Any]:
+        from .registration_draft import read_registration_draft
+        return read_registration_draft(self)
+
+    def validate_registration_crns(self, crns: list[str]) -> dict[str, Any]:
+        """Run OBS's independent CRN check without saving or registering courses."""
+        from .registration_draft import VALIDATION_PATH, normalize_crns, normalize_validation
+        selected = normalize_crns(crns)
+        # OBS retains a short transaction lock after a check completes. Space
+        # independent section checks and serialize calls sharing this client.
+        with self._registration_check_lock:
+            for attempt in range(2):
+                if self._last_registration_check is not None:
+                    delay = 2.0 - (time.monotonic() - self._last_registration_check)
+                    if delay > 0:
+                        time.sleep(delay)
+                try:
+                    payload = self._api_request("POST", VALIDATION_PATH, json_body={"ecrn": selected})
+                finally:
+                    self._last_registration_check = time.monotonic()
+                if (attempt == 0 and isinstance(payload, dict)
+                        and payload.get("resultCode") in ("VAL16", "ERRMaxIstekTaslakKontrol")):
+                    continue
+                return normalize_validation(payload, selected)
+        raise ObsError("OBS CRN validation remained busy.")
 
     def get_advisor(self) -> dict[str, Any]:
         return self.api_get("/api/ogrenci/DanismanBilgi")

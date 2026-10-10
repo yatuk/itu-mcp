@@ -232,15 +232,20 @@ def _extract_links(soup: BeautifulSoup, base_url: str, page_url: str) -> list[di
 
 
 def _table_to_rows(table: Tag) -> dict[str, Any]:
-    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.select("th")]
+    # Nested date/layout tables belong to their enclosing cell, not this table.
+    own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    headers = []
     rows: list[list[str]] = []
-    for row in table.find_all("tr"):
-        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["td", "th"])]
+    for row in own_rows:
+        nodes = row.find_all(["td", "th"], recursive=False)
+        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
         if cells:
+            if not rows and all(cell.name == "th" for cell in nodes):
+                headers = cells
             rows.append(cells)
 
     structured_rows: list[dict[str, Any] | list[str]] = []
-    if headers and len(headers) == len(rows[0]):
+    if headers and rows and len(headers) == len(rows[0]):
         body_rows = rows[1:]
         for row in body_rows:
             structured_rows.append(dict(zip(headers, row, strict=False)))
@@ -1224,20 +1229,32 @@ def _table_after_heading(soup: BeautifulSoup, heading_text: str) -> Tag | None:
 
 def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
+    own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    headers = [clean_text(cell.get_text(" ", strip=True)) for row in own_rows
+               for cell in row.find_all("th", recursive=False)]
+    def empty_state(text: str) -> bool:
+        normalized = normalize_lookup_text(text)
+        return not normalized or any(marker in normalized for marker in (
+            "herhangi bir uzaktan egitim oturumu bulunmamaktadir",
+            "no remote learning sessions", "no sessions found",
+        ))
     if not headers:
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
+        for row in own_rows:
+            cells = row.find_all("td", recursive=False)
             if len(cells) != 1:
                 continue
             text = clean_text(cells[0].get_text(" ", strip=True))
-            if text and "herhangi bir uzaktan eğitim oturumu bulunmamaktadır" not in normalize_lookup_text(text):
-                rows.append({"text": text})
+            if not empty_state(text):
+                item = {"text": text, "title": text}
+                anchor = cells[0].find("a", href=True)
+                if anchor is not None:
+                    item["meeting_url"] = urljoin(page_url, str(anchor["href"]))
+                rows.append(item)
         return rows
 
-    for row in table.find_all("tr")[1:]:
-        cells = row.find_all("td")
-        if not cells:
+    for row in own_rows:
+        cells = row.find_all("td", recursive=False)
+        if not cells or empty_state(row.get_text(" ", strip=True)):
             continue
         item: dict[str, Any] = {}
         for header, cell in zip(headers, cells, strict=False):
@@ -1245,6 +1262,15 @@ def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, An
             anchor = cell.find("a", href=True)
             if anchor is not None:
                 item[f"{header}_url"] = urljoin(page_url, anchor["href"])
+                if any(word in normalize_lookup_text(header) for word in ("baglanti", "link", "katil")):
+                    item["meeting_url"] = item[f"{header}_url"]
+            key = normalize_lookup_text(header)
+            if key in {"baslik", "oturum", "title", "session"}:
+                item["title"] = item[header]
+            elif key in {"baslangic", "baslangic tarihi", "start", "start time"}:
+                item["start_at"] = ninova_datetime_iso(item[header])
+            elif key in {"bitis", "bitis tarihi", "end", "end time"}:
+                item["end_at"] = ninova_datetime_iso(item[header])
         rows.append(item)
     return rows
 
@@ -1610,139 +1636,11 @@ def extract_course_schedule_table(
     }
 
 
-def extract_academic_calendar(
-    html: str,
-    page_url: str,
-) -> dict[str, Any]:
-    """Parse the İTÜ academic calendar page (takvim.sis.itu.edu.tr).
+def extract_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
+    """Parse official calendar events while retaining source coverage and times."""
+    from .academic_calendar import parse_academic_calendar
 
-    Extracts key date events from the calendar grid.
-    """
-    import re as _re
-    soup = make_soup(html)
-
-    events: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    # Calendar events are in <td> cells with <b>date : description</b> format
-    for td in soup.find_all("td"):
-        # Look for bold date:description patterns
-        for b_tag in td.find_all("b"):
-            text = clean_text(b_tag.get_text(" ", strip=True))
-            if not text or len(text) < 10:
-                continue
-            # Pattern: "31 July 2026 : End of Summer Term..."
-            m = _re.match(
-                r"(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*:\s*(.+)",
-                text,
-            )
-            if not m:
-                # Pattern: "09 - 14 July 2026 : Description"
-                m = _re.match(
-                    r"(\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*:\s*(.+)",
-                    text,
-                )
-            if m:
-                date_str = m.group(1)
-                desc = m.group(2)
-                dedup = f"{date_str}:{desc[:60]}"
-                if dedup not in seen:
-                    seen.add(dedup)
-                    events.append({"date": date_str, "description": desc})
-
-    # Also extract list-based events from <li> items
-    for li in soup.find_all("li"):
-        text = clean_text(li.get_text(" ", strip=True))
-        if not text or len(text) < 15:
-            continue
-        m = _re.match(
-            r"(\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*(.+)",
-            text,
-        )
-        if not m:
-            m = _re.match(
-                r"(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4})\s*(.+)",
-                text,
-            )
-        if m:
-            date_str = m.group(1)
-            desc = m.group(2).strip()
-            dedup = f"{date_str}:{desc[:60]}"
-            if dedup not in seen:
-                seen.add(dedup)
-                events.append({"date": date_str, "description": desc})
-
-    # Add machine-friendly dates and categories while preserving the official
-    # display string.  Range events use inclusive start/end dates.
-    month_numbers = {
-        "january": 1, "ocak": 1,
-        "february": 2, "subat": 2, "şubat": 2,
-        "march": 3, "mart": 3,
-        "april": 4, "nisan": 4,
-        "may": 5, "mayis": 5, "mayıs": 5,
-        "june": 6, "haziran": 6,
-        "july": 7, "temmuz": 7,
-        "august": 8, "agustos": 8, "ağustos": 8,
-        "september": 9, "eylul": 9, "eylül": 9,
-        "october": 10, "ekim": 10,
-        "november": 11, "kasim": 11, "kasım": 11,
-        "december": 12, "aralik": 12, "aralık": 12,
-    }
-    for event in events:
-        date_match = _re.match(
-            r"(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?\s+([^\s]+)\s+(\d{4})",
-            event["date"],
-        )
-        if date_match:
-            start_day = int(date_match.group(1))
-            end_day = int(date_match.group(2) or start_day)
-            month = month_numbers.get(normalize_lookup_text(date_match.group(3)))
-            year = int(date_match.group(4))
-            if month:
-                try:
-                    event["start_date"] = datetime(year, month, start_day).date().isoformat()
-                    event["end_date"] = datetime(year, month, end_day).date().isoformat()
-                except ValueError:
-                    pass
-
-        description_key = normalize_lookup_text(event["description"])
-        if any(word in description_key for word in ("exam", "sinav", "final", "midterm", "butunleme")):
-            event["category"] = "exam"
-        elif any(word in description_key for word in ("registration", "kayit", "add drop", "course selection")):
-            event["category"] = "registration"
-        elif any(word in description_key for word in ("holiday", "tatil", "bayram")):
-            event["category"] = "holiday"
-        elif any(word in description_key for word in ("term", "semester", "donem", "classes")):
-            event["category"] = "semester"
-        else:
-            event["category"] = "other"
-
-    # Extract semester boundaries
-    semesters: list[dict[str, str]] = []
-    current_semester = None
-    for event in events:
-        desc_lower = event["description"].lower()
-        for sem_name, sem_label in [
-            ("fall term", "Fall (Güz)"),
-            ("spring term", "Spring (Bahar)"),
-            ("summer term", "Summer (Yaz)"),
-            ("summer school", "Summer School (Yaz Okulu)"),
-        ]:
-            if sem_name in desc_lower and "beginning of" in desc_lower:
-                current_semester = sem_label
-                semesters.append({"semester": sem_label, "start": event["date"], "type": "start"})
-            elif sem_name in desc_lower and "end of" in desc_lower:
-                semesters.append({"semester": sem_label, "end": event["date"], "type": "end"})
-
-    return {
-        "url": page_url,
-        "event_count": len(events),
-        "events": events[:100],
-        "semesters": semesters,
-        "current_semester": current_semester,
-        "source": "takvim.sis.itu.edu.tr",
-        "note": "Detaylı takvim için https://www.takvim.sis.itu.edu.tr adresini ziyaret edin.",
-    }
+    return parse_academic_calendar(html, page_url)
 
 
 def extract_campus_card_info(

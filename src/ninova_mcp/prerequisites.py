@@ -19,6 +19,9 @@ import html as html_module
 import re
 from typing import Any
 
+from .archive import normalize_course_code
+from .grading import grade_satisfies
+
 # Course codes here run 3-4 digits with up to two trailing letters (FIZ 101EL).
 _CODE_RE = re.compile(r"^[A-ZÇĞİÖŞÜ]{2,4}\s+\d{3,4}[A-Z]{0,2}$")
 _TOKEN_RE = re.compile(
@@ -245,41 +248,6 @@ def extract_branch_prerequisites(html: str, page_url: str, branch: str) -> dict[
 
 # -- evaluation ------------------------------------------------------------
 
-# İTÜ 4.00 scale, ordered so "at least DD" is a numeric comparison. Grades that
-# carry no numeric value (BL/GE pass grades) are handled as a pass separately.
-_GRADE_VALUES = {
-    "AA": 4.00, "BA": 3.50, "BB": 3.00, "CB": 2.50, "CC": 2.00,
-    "DC": 1.50, "DD": 1.00, "FD": 0.50, "FF": 0.00, "VF": 0.00,
-}
-_PASSING_NON_NUMERIC = {"BL", "GE", "MU", "TR", "S"}
-
-
-def _grade_value(grade: str | None) -> float | None:
-    if not grade:
-        return None
-    cleaned = str(grade).strip().upper().rstrip("+-")
-    return _GRADE_VALUES.get(cleaned)
-
-
-def _grade_satisfies(earned: str | None, minimum: str | None) -> bool:
-    """Does ``earned`` meet a ``MIN. XX`` bar?
-
-    An unknown earned grade counts as satisfied when no minimum is demanded,
-    since the caller has already asserted the course was completed.
-    """
-    if minimum is None:
-        return True
-    if earned and str(earned).strip().upper().rstrip("+-") in _PASSING_NON_NUMERIC:
-        return True
-    earned_value = _grade_value(earned)
-    minimum_value = _grade_value(minimum)
-    if minimum_value is None:
-        return True
-    if earned_value is None:
-        return False
-    return earned_value >= minimum_value
-
-
 def evaluate_tree(
     tree: dict[str, Any] | None,
     completed: dict[str, str | None],
@@ -290,11 +258,16 @@ def evaluate_tree(
     ``None`` when only completion is known. Returns the node's verdict plus a
     readable reason, so an ineligible result can say which branch failed.
     """
-    if not tree:
+    if tree is None:
         return {"satisfied": True, "reason": "Ön şart yok."}
+    if not isinstance(tree, dict):
+        return {"satisfied": None, "reason": "Ön şart ifadesi okunamadı."}
 
     if tree.get("type") == "course":
-        code = str(tree.get("code") or "").upper()
+        try:
+            code = normalize_course_code(str(tree.get("code") or ""))
+        except ValueError:
+            return {"satisfied": None, "reason": "Ön şart ders kodu okunamadı."}
         minimum = tree.get("min_grade")
         if code not in completed:
             return {
@@ -303,35 +276,50 @@ def evaluate_tree(
                 "missing": [code],
             }
         earned = completed[code]
-        if not _grade_satisfies(earned, minimum):
+        satisfied = grade_satisfies(earned, minimum)
+        if satisfied is None:
+            return {
+                "satisfied": None,
+                "reason": f"{code} için {earned or '?'} notu ile {minimum or 'başarı'} şartı doğrulanamıyor.",
+                "unknown": [code],
+            }
+        if satisfied is False:
             return {
                 "satisfied": False,
-                "reason": f"{code} notu {earned or '?'}, en az {minimum} gerekiyor.",
+                "reason": (f"{code} notu {earned or '?'}, en az {minimum} gerekiyor."
+                           if minimum else f"{code} notu {earned or '?'}, ders başarıyla tamamlanmamış."),
                 "missing": [code],
             }
         return {"satisfied": True, "reason": f"{code} tamamlandı."}
 
-    results = [evaluate_tree(operand, completed) for operand in tree.get("operands") or []]
-    if not results:
+    kind, operands = tree.get("type"), tree.get("operands")
+    if kind not in {"and", "or"} or not isinstance(operands, list):
+        return {"satisfied": None, "reason": "Ön şart ifadesi okunamadı."}
+    if kind == "and" and not operands:
         return {"satisfied": True, "reason": "Ön şart yok."}
+    if not operands:
+        return {"satisfied": None, "reason": "Ön şart seçenekleri okunamadı."}
+    results = [evaluate_tree(operand, completed) for operand in operands]
 
-    if tree.get("type") == "or":
-        met = [r for r in results if r["satisfied"]]
+    if kind == "or":
+        met = [r for r in results if r["satisfied"] is True]
         if met:
             return {"satisfied": True, "reason": met[0]["reason"], "alternatives_met": len(met)}
         missing = sorted({code for r in results for code in r.get("missing", [])})
         return {
-            "satisfied": False,
-            "reason": "Şu seçeneklerden hiçbiri karşılanmadı: " + describe_tree(tree),
+            "satisfied": None if any(r["satisfied"] is None for r in results) else False,
+            "reason": "Ön şart seçeneklerinin sağlandığı doğrulanamadı: " + describe_tree(tree),
             "missing": missing,
+            "unknown": sorted({code for r in results for code in r.get("unknown", [])}),
         }
 
-    unmet = [r for r in results if not r["satisfied"]]
+    unmet = [r for r in results if r["satisfied"] is not True]
     if unmet:
         return {
-            "satisfied": False,
+            "satisfied": False if any(r["satisfied"] is False for r in unmet) else None,
             "reason": " ".join(r["reason"] for r in unmet),
             "missing": sorted({code for r in unmet for code in r.get("missing", [])}),
+            "unknown": sorted({code for r in unmet for code in r.get("unknown", [])}),
         }
     return {"satisfied": True, "reason": "Tüm zorunlu ön şartlar karşılandı."}
 

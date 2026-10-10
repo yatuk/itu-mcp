@@ -104,7 +104,7 @@ class LibraryAvailabilityTests(unittest.TestCase):
 
 
 class LibraryConnectionTests(unittest.TestCase):
-    def test_certificate_failure_keeps_verification_and_does_not_retry_new_platform(self) -> None:
+    def test_certificate_failure_keeps_verification_and_does_not_fall_back(self) -> None:
         session = Mock(spec=requests.Session)
         session.headers = {}
         session.request.side_effect = requests.exceptions.SSLError("certificate has expired")
@@ -114,7 +114,7 @@ class LibraryConnectionTests(unittest.TestCase):
                 client.search("python")
         self.assertIn("TLS verification remains enabled", str(raised.exception))
         self.assertIn("https://katalog.kutuphane.itu.edu.tr/client/tr_TR/default/", str(raised.exception))
-        self.assertIn("different catalog platform", str(raised.exception))
+        self.assertIn("not an empty catalog result", str(raised.exception))
         session.request.assert_called_once()
         self.assertIs(session.request.call_args.kwargs["verify"], True)
         self.assertIs(session.request.call_args.kwargs["allow_redirects"], False)
@@ -127,10 +127,12 @@ class LibraryConnectionTests(unittest.TestCase):
                 client = LibraryClient()
                 self.assertEqual(client._verify_value(), str(bundle.resolve()))
 
-    def test_modern_catalog_does_not_silently_accept_legacy_routes(self) -> None:
+    def test_modern_catalog_uses_the_verified_public_root(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(LibraryError):
-                LibraryClient(base_url="https://katalog.kutuphane.itu.edu.tr")
+            client = LibraryClient(base_url="https://katalog.kutuphane.itu.edu.tr")
+            self.assertEqual(client.base_url, "https://katalog.kutuphane.itu.edu.tr/client/tr_TR/default")
+            with self.assertRaisesRegex(LibraryError, "Legacy b"):
+                client.get_item("b1179767")
 
 
 if __name__ == "__main__":

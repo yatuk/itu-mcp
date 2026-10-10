@@ -48,8 +48,11 @@ class GpaFallbackTests(unittest.TestCase):
         )
         self.env_patch.start()
         self.app = NinovaMcpApp()
+        self.official_patch = patch.object(self.app.obs, "get_registration_status", return_value={})
+        self.official_patch.start()
 
     def tearDown(self) -> None:
+        self.official_patch.stop()
         self.env_patch.stop()
         self.temp_dir.cleanup()
 

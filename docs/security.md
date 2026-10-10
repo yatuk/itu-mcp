@@ -37,9 +37,11 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
 - `ItuPublicClient` uses an exact host allowlist for OBS, Rehber, SKS, ÖDEK, İKM,
   Erasmus and the main İTÜ site. It owns a fresh `requests.Session`; SSO cookies are
   never copied into the public client.
-- `LibraryClient` accepts only `https://divit.library.itu.edu.tr`. It validates TLS
-  and fails closed. A custom CA can be supplied with `NINOVA_LIBRARY_CA_BUNDLE`;
-  there is no insecure `verify=false` switch.
+- `LibraryClient` defaults to `https://katalog.kutuphane.itu.edu.tr` and retains
+  explicit legacy configuration for `https://divit.library.itu.edu.tr`. Each instance
+  permits only its configured exact host and normal HTTPS port, with no URL credentials.
+  It validates TLS and fails closed. A custom CA can be supplied with
+  `NINOVA_LIBRARY_CA_BUNDLE`; there is no insecure `verify=false` switch.
 - `ItuMailClient` uses verified IMAPS, selects only `INBOX` in read-only mode, and
   fetches bodies and attachments with `BODY.PEEK` so unread state is preserved.
 - Public and library clients apply the same pre-request redirect validation, so an
@@ -53,7 +55,8 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
   `NINOVA_ALLOW_UPLOADS=0` and is local-stdio only.
 - `library_renew_loan` and `library_reserve_item` are dry-run unless `confirm=true`.
   Both resolve opaque identifiers from the current account/catalog page before a
-  POST and are excluded from remote HTTP transport.
+  POST and are excluded from remote HTTP transport. These legacy operations are
+  unavailable on the current Sirsi platform and fail before any account request.
 - Course registration/CRN submission is intentionally not implemented.
 
 ## Prompt-injection boundary

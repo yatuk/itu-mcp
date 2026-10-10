@@ -4,6 +4,7 @@ import argparse
 import functools
 import inspect
 import json
+import math
 import mimetypes
 import os
 import re
@@ -63,7 +64,11 @@ from .text_extract import (
     extract_text_from_path,
     guess_extension,
 )
-from .tracking import diff_course_snapshots, load_tracking_state, merge_updates, save_tracking_state, utc_now_iso
+from .tracking import (
+    TRACKING_STATE_VERSION, diff_course_snapshots, has_complete_baseline,
+    load_tracking_state, merge_course_snapshot, merge_updates, save_tracking_state, utc_now_iso,
+)
+from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 
 SERVER_NAME = "itu-mcp"
 SERVER_VERSION = "0.7.2"
@@ -327,28 +332,32 @@ class NinovaMcpApp:
         }
 
     def get_dashboard(self, compact: bool = False) -> dict[str, Any]:
-        html, response = self.client.get_html("/Kampus1")
-        page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
-        dashboard = summarize_dashboard(page_data, html=html, base_url=self.client.base_url)
-        courses = dashboard.get("courses") or []
-        if courses:
-            self._course_cache.set(COURSES_CACHE_KEY, courses)
-        elif not self._looks_like_authenticated_dashboard(page_data, html):
-            dashboard["parse_warning"] = (
-                "No courses found and the dashboard did not look like a logged-in "
-                "Ninova page. Session may have expired or the HTML layout changed."
-            )
-        else:
-            dashboard["parse_warning"] = (
-                "Dashboard loaded but no course links matching /Sinif/<id>.<id> "
-                "were found. The course list markup may have changed."
-            )
-        # Drop raw link dump by default noise; keep courses + recent tables.
+        dashboard = self._read_dashboard()
+        # Internal enrollment reads always use the full payload, even when
+        # NINOVA_COMPACT_DEFAULT truncates lists in a public tool response.
         if "links" in dashboard and compact is not False:
             dashboard = {**dashboard, "link_count": len(dashboard.get("links") or [])}
             if compact:
                 dashboard.pop("links", None)
         return self._out(dashboard, compact=compact)
+
+    def _read_dashboard(self) -> dict[str, Any]:
+        html, response = self.client.get_html("/Kampus1")
+        page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
+        dashboard = summarize_dashboard(page_data, html=html, base_url=self.client.base_url)
+        courses = dashboard.get("courses") or []
+        observed = enrollment_coverage(html, response.url, self.client.base_url + "/Kampus1", courses)
+        dashboard["enrollment_coverage"] = observed
+        if observed["status"] == "complete":
+            self._course_cache.set(COURSES_CACHE_KEY, courses)
+        else:
+            if courses and observed["status"] != "failed" and self._course_cache.get(COURSES_CACHE_KEY) is None:
+                self._course_cache.set(COURSES_CACHE_KEY, courses)
+            dashboard["parse_warning"] = (
+                f"Course discovery is {observed['status']}: {observed.get('reason')}. "
+                "Missing courses cannot be treated as removed."
+            )
+        return dashboard
 
     def list_courses(self, refresh: bool = False) -> dict[str, Any]:
         if not refresh:
@@ -359,15 +368,19 @@ class NinovaMcpApp:
                     "courses": cached,
                     "source": "cache",
                     "cache_ttl_seconds": self._course_cache_ttl_seconds,
+                    "enrollment_coverage": coverage("unknown", "cached_discovery"),
                 }
 
-        dashboard = self.get_dashboard()
+        dashboard = self._read_dashboard()
         courses = dashboard.get("courses") or []
-        self._course_cache.set(COURSES_CACHE_KEY, courses)
+        observed = dashboard.get("enrollment_coverage") or coverage("unknown", "missing_coverage")
+        if observed["status"] == "complete":
+            self._course_cache.set(COURSES_CACHE_KEY, courses)
         result: dict[str, Any] = {
             "count": len(courses),
             "courses": courses,
             "source": "live",
+            "enrollment_coverage": observed,
         }
         if dashboard.get("parse_warning"):
             result["parse_warning"] = dashboard["parse_warning"]
@@ -566,7 +579,11 @@ class NinovaMcpApp:
         course_limit: int | None = None,
         include_assignment_details: bool = False,
     ) -> dict[str, Any]:
-        courses = self.list_courses(refresh=True)["courses"]
+        enrollment = self.list_courses(refresh=True)
+        courses = enrollment["courses"]
+        observed_enrollment = dict(enrollment.get("enrollment_coverage") or coverage("unknown", "missing_coverage"))
+        if enrollment.get("parse_warning") and observed_enrollment["status"] == "complete":
+            observed_enrollment = coverage("unknown", enrollment["parse_warning"])
         current_course_urls = {course["url"] for course in courses}
         if course_limit is not None:
             courses = courses[: max(1, min(course_limit, len(courses)))]
@@ -577,6 +594,16 @@ class NinovaMcpApp:
         updates: list[dict[str, Any]] = []
         course_results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        previous_enrollment = state.get("enrollment_coverage") or coverage("unknown", "legacy_or_missing_coverage")
+        enrollment_complete = observed_enrollment["status"] == "complete"
+        if not enrollment_complete:
+            errors.append({"scope": "enrollment", "error": observed_enrollment.get("reason") or observed_enrollment["status"]})
+        if enrollment_complete:
+            observed_enrollment["baseline_complete"] = True
+            observed_enrollment["last_complete_at"] = synced_at
+        elif has_complete_baseline(previous_enrollment):
+            observed_enrollment["baseline_complete"] = True
+            observed_enrollment["last_complete_at"] = previous_enrollment.get("last_complete_at") or state.get("last_sync_at")
 
         for course in courses:
             try:
@@ -592,13 +619,15 @@ class NinovaMcpApp:
 
             previous_entry = state["courses"].get(course["url"])
             previous_snapshot = previous_entry.get("snapshot") if previous_entry else None
+            errors.extend({"course": course, **error} for error in snapshot.get("errors", []))
+            snapshot = merge_course_snapshot(previous_snapshot, snapshot)
             course_updates = diff_course_snapshots(
                 course=course,
                 previous_snapshot=None if baseline else previous_snapshot,
                 current_snapshot=snapshot,
                 detected_at=synced_at,
             )
-            if previous_entry is None and not baseline:
+            if previous_entry is None and not baseline and enrollment_complete and has_complete_baseline(previous_enrollment):
                 course_updates.insert(
                     0,
                     {
@@ -624,10 +653,15 @@ class NinovaMcpApp:
                 {
                     "course": course,
                     "update_count": len(course_updates),
+                    "coverage": state["courses"][course["url"]]["snapshot"]["coverage"],
+                    "snapshot_complete": state["courses"][course["url"]]["snapshot"]["snapshot_complete"],
                 }
             )
 
-        removed_course_urls = set(state["courses"]) - current_course_urls
+        removed_course_urls = (
+            set(state["courses"]) - current_course_urls
+            if enrollment_complete and has_complete_baseline(previous_enrollment) else set()
+        )
         for removed_url in sorted(removed_course_urls):
             removed_entry = state["courses"].pop(removed_url)
             if baseline:
@@ -647,6 +681,8 @@ class NinovaMcpApp:
             )
 
         state["last_sync_at"] = synced_at
+        state["version"] = TRACKING_STATE_VERSION
+        state["enrollment_coverage"] = observed_enrollment
         state["updates"] = merge_updates(state["updates"], updates)
         self._save_tracking_state_document(state)
 
@@ -658,6 +694,7 @@ class NinovaMcpApp:
             "courses": course_results,
             "updates": updates[:100],
             "errors": errors,
+            "enrollment_coverage": observed_enrollment,
             "tracking_state_path": str(self.tracking_state_path),
         }
 
@@ -892,10 +929,39 @@ class NinovaMcpApp:
         return self.obs.list_semesters()
 
     def obs_get_registration_status(self) -> dict[str, Any]:
+        from requests import RequestException
+        from .registration_status import summarize_registration_status
+
+        registration = self.obs.get_registration_status()
+        lesson_registration = self.obs.get_lesson_registration_status()
+        calendar = None
+        calendar_error = None
+        try:
+            calendar = self.obs_public.get_academic_calendar()
+        except (NinovaError, RequestException, ValueError):
+            calendar_error = "The public academic calendar is unavailable. Official OBS status is retained."
         return {
-            "kayit_durumu": self.obs.get_registration_status(),
-            "ders_kayit_durumu": self.obs.get_lesson_registration_status(),
+            "kayit_durumu": registration,
+            "ders_kayit_durumu": lesson_registration,
+            "summary": summarize_registration_status(registration, lesson_registration, calendar, calendar_error=calendar_error),
         }
+
+    def obs_get_registration_draft(self) -> dict[str, Any]:
+        return self.obs.get_registration_draft()
+
+    def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
+        from .registration_tools import get_elective_group
+        return get_elective_group(self, group_id)
+
+    def obs_validate_registration_plan(self, crns: list[str]) -> dict[str, Any]:
+        from .registration_tools import validate_plan
+        return validate_plan(self, crns)
+
+    def obs_get_grade_distribution(
+        self, course_code: str, year: int | None = None, term_code: str | None = None,
+    ) -> dict[str, Any]:
+        from .grade_distribution import get_grade_distribution
+        return get_grade_distribution(self.obs_public, course_code, year, term_code)
 
     def obs_get_advisor(self) -> dict[str, Any]:
         return self.obs.get_advisor()
@@ -1298,22 +1364,28 @@ class NinovaMcpApp:
         self,
         semester: str | None = None,
         projected_grades: dict[str, str] | None = None,
+        include_official: bool = True,
     ) -> dict[str, Any]:
-        """Calculate GPA/GANO from OBS registered courses and grades.
+        """Calculate a term GPA estimate and compare with the official term record.
 
         If ``projected_grades`` is given (e.g. ``{"BLG 223E": "AA", ...}``),
         those override the actual grade — useful for "what-if" scenarios.
         """
         from .gpa import calculate_gpa
+        from .archive import normalize_course_code
 
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
-        registered = payload.get("kayitSinifResultList") or []
+        if not isinstance(payload, dict) or (
+            "statusCode" in payload and (type(payload["statusCode"]) is not int or payload["statusCode"] != 0)
+        ):
+            raise NinovaError("Registered courses could not be read successfully; GPA was not calculated.")
+        registered = payload.get("kayitSinifResultList")
+        if not isinstance(registered, list) or any(not isinstance(item, dict) for item in registered):
+            raise NinovaError("Registered-course data has an unrecognized shape; GPA was not calculated.")
 
-        # The registered-course endpoint reports 0 credits for courses whose
-        # grade is not in yet, which silently drops them from the weighted
-        # average and makes what-if projections wrong. The degree-plan endpoint
-        # carries the real credit for the same courses, so use it as a fallback.
+        # The registered-course endpoint can omit usable credit. Preserve the
+        # reported value and identify degree-plan credit used for the estimate.
         #
         # Separately, observed on at least one account: this endpoint's
         # harfNotu comes back None for every course in every term, including
@@ -1322,10 +1394,10 @@ class NinovaMcpApp:
         # time. Fall back to the same graduation-remaining payload for
         # grades too, scoped to this term's donemKodu: a retaken course has
         # one entry per attempt with a different grade each time, so a
-        # code-only lookup (fine for credit, which doesn't vary by attempt)
+        # code-only lookup
         # would risk picking the wrong attempt's grade here.
         graduation_info = self._fetch_graduation_info()
-        plan_credits = self._plan_credit_lookup(graduation_info)
+        plan_credits = self._plan_credit_lookup(graduation_info, resolved.get("donemKodu"))
         plan_grades = self._plan_grade_lookup(graduation_info, resolved.get("donemKodu"))
 
         courses: list[dict[str, Any]] = []
@@ -1334,14 +1406,18 @@ class NinovaMcpApp:
         grade_fallbacks: list[str] = []
         for item in registered:
             code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
+            try:
+                code_key = normalize_course_code(code)
+            except ValueError:
+                code_key = None
             credit = item.get("kredi")
             credit_source = "registration"
             try:
                 numeric = float(str(credit).replace(",", "."))
             except (TypeError, ValueError):
                 numeric = 0.0
-            if numeric <= 0:
-                fallback = plan_credits.get(normalize_lookup_text(code))
+            if isinstance(credit, bool) or not math.isfinite(numeric) or numeric <= 0:
+                fallback = plan_credits.get(code_key)
                 if fallback:
                     credit = fallback
                     credit_source = "degree_plan"
@@ -1352,7 +1428,7 @@ class NinovaMcpApp:
             grade = item.get("harfNotu")
             grade_source = "registration"
             if not grade:
-                fallback_grade = plan_grades.get(normalize_lookup_text(code))
+                fallback_grade = plan_grades.get(code_key)
                 if fallback_grade:
                     grade = fallback_grade
                     grade_source = "degree_plan"
@@ -1362,6 +1438,8 @@ class NinovaMcpApp:
                 "code": code,
                 "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
                 "credit": credit,
+                "recorded_credit": item.get("kredi"),
+                "plan_credit": plan_credits.get(code_key),
                 "credit_source": credit_source,
                 "grade": grade,
                 "grade_source": grade_source,
@@ -1369,17 +1447,33 @@ class NinovaMcpApp:
             })
 
         result = calculate_gpa(courses, projected_grades=projected_grades)
+        from .gpa_reference import attach_official_reference, official_term_reference
+
+        official_payload = {}
+        reference_error = None
+        if include_official:
+            try:
+                official_payload = self.obs.get_registration_status()
+            except (NinovaError, ValueError):
+                reference_error = "Official term record could not be read."
+        reference = official_term_reference(official_payload, resolved.get("donemKodu"))
+        if not include_official:
+            reference["status"] = "not_requested"
+        if reference_error:
+            reference["error"] = reference_error
+        attach_official_reference(result, reference, projection=bool(projected_grades))
+        result["semester"] = resolved
         if credit_fallbacks:
             result["credit_fallback_courses"] = credit_fallbacks
             result["credit_fallback_note"] = (
-                "Bu derslerin kredisi kayıt kaydında 0 geldi (notu henüz girilmemiş); "
-                "kredi ders planından alındı."
+                "Bu derslerin kayıt kaydında geçerli kredi bulunamadı; "
+                "hesaplama için kredi ders planından alındı."
             )
         if missing_credits:
             result["credits_unresolved"] = missing_credits
             result["credits_unresolved_note"] = (
-                "Bu dersler için hiçbir kaynakta kredi bulunamadı; ortalamaya 0 kredi "
-                "ile girdiler."
+                "Bu dersler için güvenilir kredi belirlenemedi. "
+                "Hesaplama kapsamı ve bilinen derslerin ortalaması ayrı değerlendirilmelidir."
             )
         if grade_fallbacks:
             result["grade_fallback_courses"] = grade_fallbacks
@@ -1401,16 +1495,21 @@ class NinovaMcpApp:
             return {}
         return graduation.get("mezuniyetimeNeKaldiBilgi") or {}
 
-    def _plan_credit_lookup(self, info: dict[str, Any]) -> dict[str, float]:
-        """Map normalised course code → credit from the student's degree plan.
+    def _plan_credit_lookup(self, info: dict[str, Any], donem_kodu: str | None = None) -> dict[str, float]:
+        """Use unambiguous plan credit for this attempt or an undated plan slot."""
+        from .archive import normalize_course_code
 
-        ``MezuniyetimeNeKaldi`` lists every plan course with ``kredisiDec``,
-        including courses that are registered but not yet graded.
-        """
-        lookup: dict[str, float] = {}
+        exact: dict[str, set[float]] = {}
+        undated: dict[str, set[float]] = {}
         for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
             for item in info.get(bucket) or []:
-                code = str(item.get("bransKodu") or "").strip()
+                try:
+                    code = normalize_course_code(str(item.get("bransKodu") or ""))
+                except ValueError:
+                    continue
+                term = str(item.get("donem") or "")
+                if donem_kodu and term and term != str(donem_kodu):
+                    continue
                 credit = item.get("kredisiDec")
                 if credit is None:
                     credit = item.get("kredisi")
@@ -1418,9 +1517,11 @@ class NinovaMcpApp:
                     numeric = float(str(credit).replace(",", "."))
                 except (TypeError, ValueError):
                     continue
-                if code and numeric > 0:
-                    lookup.setdefault(normalize_lookup_text(code), numeric)
-        return lookup
+                if not isinstance(credit, bool) and math.isfinite(numeric) and numeric > 0:
+                    target = exact if term else undated
+                    target.setdefault(code, set()).add(numeric)
+        return {code: next(iter(values)) for code in exact.keys() | undated.keys()
+                if len(values := exact.get(code, undated.get(code, set()))) == 1}
 
     def _plan_grade_lookup(self, info: dict[str, Any], donem_kodu: str | None) -> dict[str, str]:
         """Map normalised course code → official letter grade for one term.
@@ -1434,16 +1535,21 @@ class NinovaMcpApp:
         """
         if not donem_kodu:
             return {}
-        lookup: dict[str, str] = {}
+        from .archive import normalize_course_code
+
+        grades: dict[str, set[str]] = {}
         for bucket in ("checkMetMezuniyetList", "unusedSinifOgrenciList"):
             for item in info.get(bucket) or []:
                 if str(item.get("donem") or "") != str(donem_kodu):
                     continue
-                code = str(item.get("bransKodu") or "").strip()
-                grade = str(item.get("harfNotu") or "").strip()
+                try:
+                    code = normalize_course_code(str(item.get("bransKodu") or ""))
+                except ValueError:
+                    continue
+                grade = str(item.get("harfNotu") or "").strip().upper()
                 if code and grade:
-                    lookup[normalize_lookup_text(code)] = grade
-        return lookup
+                    grades.setdefault(code, set()).add(grade)
+        return {code: next(iter(values)) for code, values in grades.items() if len(values) == 1}
 
     def calculate_target_gpa(
         self,
@@ -1926,9 +2032,10 @@ class NinovaMcpApp:
         query: str,
         search_type: str = "keyword",
         limit: int = 20,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """Search the public İTÜ Library catalog."""
-        return self.library.search(query, search_type=search_type, limit=limit)
+        return self.library.search(query, search_type=search_type, limit=limit, offset=offset)
 
     def library_get_item(self, record_id: str) -> dict[str, Any]:
         """Read a public library catalog record."""
@@ -2102,20 +2209,11 @@ class NinovaMcpApp:
 
         obs_credits: float | None = None
         if use_obs_history:
-            failing = {"FF", "FD", "VF", "BZ", "KF", "IA", "NA", ""}
+            from .graduation import completed_course_history
+
             graduation = self.obs.get_graduation_remaining(self.obs.default_program_id())
             info = graduation.get("mezuniyetimeNeKaldiBilgi") or {}
-            for item in info.get("checkMetMezuniyetList") or []:
-                if not item.get("isMet"):
-                    continue
-                grade = str(item.get("harfNotu") or "").upper()
-                if grade in failing:
-                    continue
-                try:
-                    code = split_course_code(str(item.get("bransKodu") or ""))
-                except ValueError:
-                    continue
-                completed[f"{code[0]} {code[1]}"] = grade or None
+            completed.update(completed_course_history(info))
             obs_credits = info.get("metKrediTotal")
             if completed_credits is None:
                 completed_credits = obs_credits
@@ -2249,10 +2347,12 @@ class NinovaMcpApp:
                     )
 
         eligible: bool | None
-        if blockers and credit_met is None and verdict["satisfied"]:
-            eligible = None  # only the unknown credit total stands in the way
+        if verdict["satisfied"] is False or credit_met is False:
+            eligible = False
+        elif verdict["satisfied"] is None or (credit_requirement is not None and credit_met is None):
+            eligible = None
         else:
-            eligible = verdict["satisfied"] and credit_met is not False
+            eligible = True
 
         result.update({
             "prerequisite_status": "has_prerequisites",
@@ -2262,6 +2362,7 @@ class NinovaMcpApp:
             "requirement_tree": rule.get("requirement_tree"),
             "minimum_grades": rule.get("minimum_grades"),
             "missing_courses": verdict.get("missing", []),
+            "unknown_courses": verdict.get("unknown", []),
             "credit_requirement": credit_requirement,
             "credit_requirement_met": credit_met,
         })
@@ -3178,15 +3279,23 @@ class NinovaMcpApp:
             return {"code": None, "title": None, "url": root_url, "context": course}
 
         target = normalize_lookup_text(course)
+        from .archive import normalize_course_code
+
+        def normalized_code(value: str | None) -> str | None:
+            try:
+                return normalize_course_code(value or "")
+            except ValueError:
+                return None
+
+        target_code = normalized_code(course)
         exact_matches = [
             item
             for item in courses
-            if target
-            and target
-            in {
+            if (target_code is not None and target_code in {normalized_code(item.get("code")), normalized_code(item.get("title"))})
+            or (target and target in {
                 normalize_lookup_text(item.get("code")),
                 normalize_lookup_text(item.get("title")),
-            }
+            })
         ]
         if len(exact_matches) == 1:
             return exact_matches[0]
@@ -3197,7 +3306,7 @@ class NinovaMcpApp:
             )
             raise NinovaError(f"Ambiguous course reference: {course}. Matches: {options}")
 
-        fuzzy_matches = [
+        fuzzy_matches = [] if target_code is not None else [
             item
             for item in courses
             if target in normalize_lookup_text(item.get("code"))
@@ -3317,9 +3426,13 @@ class NinovaMcpApp:
         include_assignment_details: bool = False,
     ) -> dict[str, Any]:
         errors: list[dict[str, str]] = []
+        observations: dict[str, dict[str, Any]] = {}
 
         course_html, course_response = self.client.get_html(course["url"])
         sections = extract_course_sections(course_html, course_response.url, base_url=self.client.base_url)
+        observations["sections"] = coverage("complete") if sections else coverage("unknown", "course_sections_not_recognized")
+        if not sections:
+            errors.append({"scope": "sections", "path": course["url"], "error": "course_sections_not_recognized"})
 
         info = self._safe_extract_course_payload(
             course["url"] + "/SinifBilgileri",
@@ -3336,6 +3449,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="info",
+            observations=observations,
         )
 
         announcements = self._safe_extract_course_payload(
@@ -3346,6 +3460,7 @@ class NinovaMcpApp:
             default={"announcements": []},
             errors=errors,
             error_scope="announcements",
+            observations=observations,
         )["announcements"][:200]
         for item in announcements:
             item["published_at_iso"] = ninova_datetime_iso(item.get("published_at"))
@@ -3358,35 +3473,36 @@ class NinovaMcpApp:
             default={"assignments": []},
             errors=errors,
             error_scope="assignments",
+            observations=observations,
         )["assignments"][:200]
         if include_assignment_details:
-            assignments = [self._merge_assignment_detail(item) for item in assignments]
+            detailed = []
+            for item in assignments:
+                try:
+                    detailed.append(self._merge_assignment_detail(item))
+                except Exception as exc:
+                    detailed.append(item)
+                    observations["assignments"] = coverage("partial", "assignment_detail_failed")
+                    errors.append({"scope": "assignments", "path": item.get("url") or course["url"], "error": str(exc)})
+            assignments = detailed
+        observations["assignments"]["details_included"] = include_assignment_details
         for item in assignments:
             item["submission_start_iso"] = ninova_datetime_iso(item.get("submission_start"))
             item["submission_end_iso"] = ninova_datetime_iso(item.get("submission_end"))
 
-        if include_files:
+        files: dict[str, list[dict[str, Any]]] = {"class_files": [], "lesson_files": []}
+        for scope, path in (("class_files", "/SinifDosyalari"), ("lesson_files", "/DersDosyalari")):
+            observations[scope] = coverage("skipped", "include_files_false")
+            if not include_files:
+                continue
             try:
-                class_files = self._walk_file_directory(
-                    course["url"] + "/SinifDosyalari",
-                    recursive=True,
-                    max_depth=file_max_depth,
-                )["entries"]
+                listing = self._walk_file_directory(course["url"] + path, recursive=True, max_depth=file_max_depth)
+                files[scope] = listing["entries"]
+                observations[scope] = listing["coverage"]
+                errors.extend({"scope": scope, **error} for error in listing.get("errors", []))
             except Exception as exc:
-                class_files = []
-                errors.append({"scope": "class_files", "path": course["url"] + "/SinifDosyalari", "error": str(exc)})
-            try:
-                lesson_files = self._walk_file_directory(
-                    course["url"] + "/DersDosyalari",
-                    recursive=True,
-                    max_depth=file_max_depth,
-                )["entries"]
-            except Exception as exc:
-                lesson_files = []
-                errors.append({"scope": "lesson_files", "path": course["url"] + "/DersDosyalari", "error": str(exc)})
-        else:
-            class_files = []
-            lesson_files = []
+                observations[scope] = coverage("failed", "file_listing_failed")
+                errors.append({"scope": scope, "path": course["url"] + path, "error": str(exc)})
 
         grades = self._safe_extract_course_payload(
             course["url"] + "/Notlar",
@@ -3394,6 +3510,7 @@ class NinovaMcpApp:
             default={"url": course["url"] + "/Notlar", "student_name": None, "weighted_average": None, "count": 0, "grades": []},
             errors=errors,
             error_scope="grades",
+            observations=observations,
         )
 
         message_board = self._safe_extract_course_payload(
@@ -3402,6 +3519,7 @@ class NinovaMcpApp:
             default={"url": course["url"] + "/MesajPanosu", "count": 0, "topics": []},
             errors=errors,
             error_scope="message_board",
+            observations=observations,
         )
 
         attendance = self._safe_extract_course_payload(
@@ -3418,6 +3536,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="attendance",
+            observations=observations,
         )
 
         remote_learning = self._safe_extract_course_payload(
@@ -3432,6 +3551,7 @@ class NinovaMcpApp:
             },
             errors=errors,
             error_scope="remote_learning",
+            observations=observations,
         )
 
         return {
@@ -3442,14 +3562,16 @@ class NinovaMcpApp:
                 "info": info,
                 "announcements": announcements,
                 "assignments": assignments,
-                "class_files": class_files,
-                "lesson_files": lesson_files,
+                "class_files": files["class_files"],
+                "lesson_files": files["lesson_files"],
                 "grades": grades,
                 "message_board": message_board,
                 "attendance": attendance,
                 "remote_learning": remote_learning,
             },
             "errors": errors,
+            "coverage": observations,
+            "snapshot_complete": all(item["status"] == "complete" for item in observations.values()),
         }
 
     def _safe_extract_course_payload(
@@ -3460,12 +3582,19 @@ class NinovaMcpApp:
         default: dict[str, Any],
         errors: list[dict[str, str]],
         error_scope: str,
+        observations: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         try:
             html, response = self.client.get_html(path)
-            return extractor(html, response.url, self.client.base_url)
+            payload = extractor(html, response.url, self.client.base_url)
+            observation = scope_coverage(html, response.url, path, error_scope, payload)
+            observations[error_scope] = observation
+            if observation["status"] != "complete":
+                errors.append({"scope": error_scope, "path": path, "error": observation.get("reason") or observation["status"]})
+            return payload
         except Exception as exc:
             errors.append({"scope": error_scope, "path": path, "error": str(exc)})
+            observations[error_scope] = coverage("failed", "fetch_or_parse_failed")
             return default
 
     def _walk_file_directory(
@@ -3480,6 +3609,8 @@ class NinovaMcpApp:
         visited: set[str] = set()
         entries: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        unvisited_folders: list[str] = []
 
         while queue:
             current_url, depth, current_path = queue.pop(0)
@@ -3488,18 +3619,23 @@ class NinovaMcpApp:
                 continue
             visited.add(normalized)
 
-            html, response = self.client.get_html(current_url)
-            listing = extract_file_directory(
-                html,
-                response.url,
-                base_url=self.client.base_url,
-                current_path=current_path,
-            )
+            try:
+                html, response = self.client.get_html(current_url)
+                listing = extract_file_directory(
+                    html, response.url, base_url=self.client.base_url, current_path=current_path,
+                )
+                observation = scope_coverage(html, response.url, current_url, "class_files", listing)
+            except Exception as exc:
+                errors.append({"path": current_url, "error": str(exc)})
+                continue
+            if observation["status"] != "complete":
+                errors.append({"path": current_url, "error": observation.get("reason") or observation["status"]})
             pages.append(
                 {
                     "url": response.url,
                     "current_path": current_path,
                     "entry_count": len(listing["entries"]),
+                    "coverage": observation,
                 }
             )
 
@@ -3507,6 +3643,16 @@ class NinovaMcpApp:
                 entries.append(entry)
                 if recursive and entry["entry_type"] == "folder" and depth < max_depth:
                     queue.append((entry["url"], depth + 1, entry["path"]))
+                elif entry["entry_type"] == "folder" and self._strip_fragment(entry["url"]) not in visited:
+                    unvisited_folders.append(entry["url"])
+
+        if unvisited_folders:
+            errors.append({"path": start_url, "error": "file_depth_or_recursion_limit"})
+        observation = coverage(
+            "partial" if errors and pages else "failed" if errors else "complete",
+            "incomplete_file_inventory" if errors else None,
+            max_depth=max_depth, recursive=recursive, unvisited_folder_count=len(unvisited_folders),
+        )
 
         return {
             "root_url": start_url,
@@ -3516,6 +3662,8 @@ class NinovaMcpApp:
             "pages": pages,
             "entry_count": len(entries),
             "entries": entries,
+            "coverage": observation,
+            "errors": errors,
         }
 
     def _extract_course_root_path(self, url: str) -> str:
@@ -4370,8 +4518,66 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_registration_status",
         "title": "OBS Registration Status",
-        "description": "Read OBS registration and course-registration status (active/class level).",
+        "description": "Read official OBS registration status, class/GPA provenance and published class registration windows. Personal holds and credit limits are reported only when verified.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_registration_draft",
+        "title": "OBS Registration Draft",
+        "description": (
+            "Read the saved OBS registration draft with CRNs, course names, saved eligibility "
+            "verdicts, restriction reasons, last check time and available draft meeting times. "
+            "Reads the active registration term. Does not save or recheck the draft. "
+            "Saved eligibility is a snapshot; use obs_validate_registration_plan for a fresh check."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_elective_group",
+        "title": "OBS Elective Group",
+        "description": (
+            "Read any official elective group by group_id, including eligible course membership, "
+            "current undergraduate offerings, CRNs, meeting times and student-specific section "
+            "eligibility. Each section is checked independently, up to 24 sections per call. "
+            "Membership and schedules are public; eligibility requires an OBS session. "
+            "Unknown source data stays unknown. Does not change the saved draft or registration."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "group_id": {"type": "integer", "minimum": 1, "description": "Official OBS elective group ID from a degree plan."},
+        }, "required": ["group_id"], "additionalProperties": False},
+    },
+    {
+        "name": "obs_validate_registration_plan",
+        "title": "OBS Validate Registration Plan",
+        "description": (
+            "Validate one to twelve proposed CRNs using the independent OBS CRN checker, public "
+            "meeting times, official prerequisite rules and the student's completed course history. "
+            "Reports time conflicts, program/credit/class restrictions, possible elective-slot "
+            "assignments, remaining graduation requirements and prerequisite-chain deferral risks. "
+            "Planned courses count toward future chains only conditionally on passing, never as "
+            "already completed prerequisites. Returns valid, invalid or incomplete. Future course "
+            "offerings and final graduation are not guaranteed. Does not save a draft or register courses."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "crns": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]{4,5}$"},
+                     "minItems": 1, "maxItems": 12, "uniqueItems": True},
+        }, "required": ["crns"], "additionalProperties": False},
+    },
+    {
+        "name": "obs_get_grade_distribution",
+        "title": "OBS Grade Distribution",
+        "description": (
+            "Read public OBS historical letter-grade counts and percentages for a course, by term. "
+            "year is the academic ending year: 2026 means 2025-2026; defaults to the current calendar year. "
+            "Optionally select a term_code returned in available_terms. Reports AA, BA, BB and every "
+            "other published grade, including plus grades. OBS may combine Turkish and English course "
+            "codes; reported_course_codes states the actual aggregate scope. No login required."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "course_code": {"type": "string", "description": "Full course code, such as UZB 438E."},
+            "year": {"type": "integer", "minimum": 1900, "maximum": 2100, "description": "Academic ending year; 2026 selects 2025-2026."},
+            "term_code": {"type": "string", "pattern": "^[0-9]{6}$", "description": "Optional official term code from available_terms; determines year when year is omitted."},
+        }, "required": ["course_code"], "additionalProperties": False},
     },
     {
         "name": "obs_get_advisor",
@@ -4595,7 +4801,10 @@ TOOLS: list[dict[str, Any]] = [
         "name": "obs_calculate_gpa",
         "title": "Calculate GPA",
         "description": (
-            "Calculate GPA/GANO from OBS registered courses. "
+            "Calculate a term GPA estimate from OBS registered courses and compare it with "
+            "the official term record. For factual average questions use preferred_term_gpa "
+            "and preferred_term_gpa_source; the legacy gpa field remains the calculated estimate. "
+            "This is a term average, not cumulative GANO. "
             "Supports projected grades for what-if scenarios. "
             "Uses İTÜ 4.00-scale letter grade conversion."
         ),
@@ -4612,6 +4821,10 @@ TOOLS: list[dict[str, Any]] = [
                         "Optional dict of course code → expected letter grade "
                         'for what-if scenarios, e.g. {"BLG 223E": "AA"}.'
                     ),
+                },
+                "include_official": {
+                    "type": "boolean", "default": True,
+                    "description": "Read the matching official OBS term average for comparison.",
                 },
             },
             "additionalProperties": False,
@@ -4932,13 +5145,14 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "library_search",
         "title": "Search İTÜ Library",
-        "description": "Search the public İTÜ Library WebPAC catalog; uses a separate client and no Ninova credentials.",
+        "description": "Search the current public İTÜ Sirsi catalog. Reuse next_offset for pagination. Public network access is required; no Ninova credentials are used.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 2},
                 "search_type": {"type": "string", "enum": ["keyword", "title", "author", "subject", "call_number", "isbn"], "default": "keyword"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "offset": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 0},
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -4947,31 +5161,31 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "library_get_item",
         "title": "İTÜ Library Item",
-        "description": "Read one public library catalog record and copy list.",
-        "inputSchema": {"type": "object", "properties": {"record_id": {"type": "string", "pattern": "^b[0-9]{5,12}$"}}, "required": ["record_id"], "additionalProperties": False},
+        "description": "Read a public Sirsi record and copy list using the SD_ILS: ID returned by library_search. Copy status loaded asynchronously may be unknown.",
+        "inputSchema": {"type": "object", "properties": {"record_id": {"type": "string", "pattern": "^(SD_ILS:[0-9]{1,12}|b[0-9]{5,12})$"}}, "required": ["record_id"], "additionalProperties": False},
     },
     {
         "name": "library_check_availability",
         "title": "İTÜ Library Availability",
-        "description": "Check copy-level shelf availability for a public library record.",
-        "inputSchema": {"type": "object", "properties": {"record_id": {"type": "string", "pattern": "^b[0-9]{5,12}$"}}, "required": ["record_id"], "additionalProperties": False},
+        "description": "Read public copy status. Returns available=null when the catalog requires an asynchronous status lookup; verify current shelf availability in the official catalog.",
+        "inputSchema": {"type": "object", "properties": {"record_id": {"type": "string", "pattern": "^(SD_ILS:[0-9]{1,12}|b[0-9]{5,12})$"}}, "required": ["record_id"], "additionalProperties": False},
     },
     {
         "name": "library_get_account",
         "title": "İTÜ Library Account",
-        "description": "Read the separate library patron account; requires NINOVA_LIBRARY_NAME/ID/PIN.",
+        "description": "Legacy library account reader. Unavailable on the current Sirsi platform; use the official catalog account page.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "library_list_loans",
         "title": "İTÜ Library Loans",
-        "description": "List current loans from the separate library patron account.",
+        "description": "Legacy library loan reader. Unavailable on the current Sirsi platform; use the official catalog account page.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "library_renew_loan",
         "title": "Renew İTÜ Library Loan",
-        "description": "Preview a renewal by default; submits only with confirm=true.",
+        "description": "Legacy library renewal tool. Unavailable on the current Sirsi platform, including with confirm=true.",
         "inputSchema": {
             "type": "object",
             "properties": {"loan_id": {"type": "string"}, "confirm": {"type": "boolean", "default": False}},
@@ -4982,11 +5196,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "library_reserve_item",
         "title": "Reserve İTÜ Library Item",
-        "description": "Preview a hold by default; submits only with confirm=true.",
+        "description": "Legacy library hold tool. Unavailable on the current Sirsi platform, including with confirm=true.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "record_id": {"type": "string", "pattern": "^b[0-9]{5,12}$"},
+                "record_id": {"type": "string", "pattern": "^(SD_ILS:[0-9]{1,12}|b[0-9]{5,12})$"},
                 "pickup_location": {"type": "string"},
                 "confirm": {"type": "boolean", "default": False},
             },

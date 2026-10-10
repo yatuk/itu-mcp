@@ -190,6 +190,8 @@ codex mcp add itu \
     <td>
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
       <code>obs_list_registered_courses</code><br/>
+      <code>obs_get_registration_draft</code><br/>
+      <code>obs_get_elective_group</code> · <code>obs_validate_registration_plan</code><br/>
       <code>obs_get_course_grades</code> · <code>obs_get_attendance</code><br/>
       <code>obs_get_advisor</code> · <code>obs_download_transcript</code><br/>
       <code>get_cafeteria_menu</code> · <code>obs_get_notifications</code><br/>
@@ -197,6 +199,7 @@ codex mcp add itu \
     </td>
     <td>
       <code>get_public_course_schedule</code> · <code>get_public_exam_schedule</code><br/>
+      <code>obs_get_grade_distribution</code><br/>
       <code>search_itu_directory</code> · <code>search_campus_locations</code><br/>
       <code>get_shuttle_schedule</code> · <code>get_sports_facility_hours</code><br/>
       <code>get_itu_announcements</code> · <code>get_academic_calendar</code>
@@ -217,6 +220,19 @@ codex mcp add itu \
     <td colspan="5" align="center"><strong>İTÜ Mail (salt okunur):</strong> <code>mail_status</code> · <code>mail_list_inbox</code> · <code>mail_get_message</code> · <code>mail_get_attachment</code></td>
   </tr>
 </table>
+
+### Kayıt taslağı ve geçmiş not dağılımları
+
+Ders seçimini kayıt öncesinde gözden geçirmek için dört araç:
+
+| Araç | Ne işe yarar? |
+|---|---|
+| `obs_get_registration_draft()` | Kayıtlı taslağı CRN’ler, alınabilirlik durumu, hata nedenleri ve varsa taslak takvimiyle okur. |
+| `obs_get_elective_group(group_id)` | Seçmeli grubu doldurabilen dersleri, bu dönem açılan şubeleri, CRN’leri, gün/saat bilgilerini ve alınabilirlik durumunu gösterir. |
+| `obs_validate_registration_plan(crns)` | CRN listesini saat çakışmaları, ön şartlar, seçmeli gereksinimleri, mezuniyet ilerlemesi ve sonraki derslere etkisi açısından kontrol eder. |
+| `obs_get_grade_distribution(course_code, year, term_code)` | Önceki dönemlerde her harf notunu kaç kişinin aldığını ve yüzdelerini, OBS’nin birlikte raporladığı ders kodlarıyla gösterir. |
+
+Bu araçlar taslağını veya ders kayıtlarını değiştirmez. Kesin bir engel bulunmasa bile eksik bilgiler varsa plan sonucu `incomplete` olur. Sonraki derslere geçiş, ön şart derslerini gereken notlarla tamamlamana bağlıdır. Not dağılımı herkese açıktır. `year`, akademik yılın bittiği yılı belirtir (2026 = 2025–2026). Yıl ve dönem filtresi isteğe bağlıdır. Örnekler ve sınırlar: [Kayıt planlama](docs/registration-planning.md) ve [Not dağılımları](docs/grade-distribution.md).
 
 Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
 
@@ -248,7 +264,9 @@ export NINOVA_COURSE_CACHE_TTL_SECONDS=60
 export NINOVA_REQUEST_DELAY_MS=120
 export NINOVA_SESSION_PERSIST=1
 export NINOVA_ALLOW_UPLOADS=1
-# Kütüphane hesabı araçları için (public katalog araması bunları istemez):
+# İsteğe bağlı, operatörün önceden kurduğu yerel CONNECT proxy:
+# NINOVA_LIBRARY_PROXY_URL="http://127.0.0.1:18888"
+# Yalnız eski WebPAC uyumluluğu için (yeni katalogda hesap araçları desteklenmiyor):
 # NINOVA_LIBRARY_NAME="Soyad, Ad"
 # NINOVA_LIBRARY_ID="öğrenci-numarası"
 # NINOVA_LIBRARY_PIN="ayrı-kütüphane-pin'i"
@@ -258,6 +276,16 @@ export NINOVA_ALLOW_UPLOADS=1
 ```
 
 Tüm değişkenler için `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
+
+`NINOVA_LIBRARY_PROXY_URL` yalnız yeni kütüphane kataloğunun anonim HTTPS GET
+isteklerini etkiler. `http://127.0.0.1:PORT` veya `http://[::1]:PORT` biçiminde,
+1024–65535 aralığında açık port gerekir. Kullanıcı adı, şifre, sorgu ve ek yol
+kabul edilmez. Proxy önceden çalışıyor olmalıdır; bu ayar servis kurmaz veya VPN
+yapılandırmasını değiştirmez. Ayar yoksa katalog doğrudan bağlanır. Yeni katalog
+istemcisi her iki durumda da `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` ve `.netrc`
+ayarlarını kullanmaz. TLS doğrulaması açıktır; proxy hatasında başka rotaya
+geçilmez. Eski WebPAC hesap araçları ve diğer İTÜ/PaperBridge istemcileri bu
+ayardan etkilenmez. Kapsam ve doğrulama: [docs/library-catalog.md](docs/library-catalog.md).
 
 ---
 

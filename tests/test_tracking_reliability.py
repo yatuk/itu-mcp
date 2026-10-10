@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from ninova_mcp.server import NinovaMcpApp
-from ninova_mcp.tracking import load_tracking_state, save_tracking_state
+from ninova_mcp.tracking import SNAPSHOT_SCOPES, load_tracking_state, save_tracking_state
 
 
 def course(identifier: int) -> dict:
@@ -17,7 +17,7 @@ def course(identifier: int) -> dict:
 
 
 def snapshot(item: dict, title: str = "Original announcement") -> dict:
-    return {"course": item, "overview": {
+    return {"course": item, "coverage": {scope: {"status": "complete"} for scope in SNAPSHOT_SCOPES}, "overview": {
         "announcements": [{"url": item["url"] + "/Duyuru/1", "title": title}],
         "assignments": [], "class_files": [], "lesson_files": [], "info": {},
         "grades": {"grades": []}, "message_board": {"topics": []},
@@ -35,10 +35,11 @@ class BoundedCourseSyncTests(unittest.TestCase):
         self.courses = [course(1), course(2), course(3)]
         self.state = {
             "version": 1, "last_sync_at": "2026-01-01T00:00:00+00:00", "updates": [],
+            "enrollment_coverage": {"status": "complete"},
             "courses": {item["url"]: {"course": item, "synced_at": "previous", "snapshot": snapshot(item)} for item in self.courses},
         }
         save_tracking_state(self.app.tracking_state_path, self.state)
-        self.app.list_courses = Mock(return_value={"courses": self.courses})
+        self.app.list_courses = Mock(return_value={"courses": self.courses, "enrollment_coverage": {"status": "complete"}})
         self.app._collect_course_snapshot = Mock(side_effect=lambda item, **kwargs: snapshot(item, "Updated announcement"))
 
     def test_course_limit_preserves_unsynchronized_courses_and_their_snapshots(self) -> None:
@@ -55,7 +56,7 @@ class BoundedCourseSyncTests(unittest.TestCase):
         self.assertFalse(any(update["entity_type"] == "course" and update["action"] == "removed" for update in result["updates"]))
 
     def test_limited_sync_still_removes_courses_absent_from_the_full_enrollment_list(self) -> None:
-        self.app.list_courses.return_value = {"courses": self.courses[:2]}
+        self.app.list_courses.return_value = {"courses": self.courses[:2], "enrollment_coverage": {"status": "complete"}}
         result = self.app.sync_all_courses(course_limit=1, include_files=False)
         saved = load_tracking_state(self.app.tracking_state_path)
         self.assertEqual(set(saved["courses"]), {item["url"] for item in self.courses[:2]})

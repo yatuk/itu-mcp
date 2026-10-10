@@ -15,8 +15,26 @@ from __future__ import annotations
 
 from typing import Any
 
-# Grades that mean the attempt did not count toward the plan.
-FAILING_GRADES = frozenset({"FF", "FD", "VF", "BZ", "KF", "IA", "NA"})
+from .archive import normalize_course_code
+from .grading import FAILING_GRADES, INCOMPLETE_GRADES, grade_rank, normalize_grade
+
+
+def completed_course_history(info: dict[str, Any]) -> dict[str, str | None]:
+    """Read successful plan and valid unused attempts using one grade ordering."""
+    rows = [row for row in info.get("checkMetMezuniyetList") or [] if row.get("isMet")]
+    rows += [row for row in info.get("unusedSinifOgrenciList") or [] if row.get("isValidAndUnused") is True]
+    completed: dict[str, str | None] = {}
+    for row in rows:
+        try:
+            code = normalize_course_code(str(row.get("bransKodu") or ""))
+        except ValueError:
+            continue
+        grade = normalize_grade(row.get("harfNotu"))
+        if grade in FAILING_GRADES or grade in INCOMPLETE_GRADES:
+            continue
+        if code not in completed or grade_rank(grade) > grade_rank(completed[code]):
+            completed[code] = grade or None
+    return completed
 
 
 def _credit_of(item: dict[str, Any]) -> float:
