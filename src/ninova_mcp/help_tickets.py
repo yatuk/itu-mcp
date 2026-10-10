@@ -186,6 +186,7 @@ def parse_detail(html: str, page_url: str, expected_id: str) -> dict[str, Any]:
     ticket = summary(fields)
     ticket["subcategory"] = fields.get("subcategory")
     messages = []
+    person_names: set[str] = set()
     # The help desk renders newest operations first. Return chronological
     # history so the original request identifies the requester and description.
     for row in reversed(history.select("tbody tr")) if history else []:
@@ -209,6 +210,11 @@ def parse_detail(html: str, page_url: str, expected_id: str) -> dict[str, Any]:
         is_event = stamp is None and event_date is not None and body.find("strong") is not None and "tarafindan" in normalize_lookup_text(content)
         if is_event:
             stamp = date_value(event_date.group(1))
+            actor = _text(body.find("strong").get_text(" ", strip=True))
+            if actor:
+                person_names.add(actor)
+        if author:
+            person_names.add(author)
         messages.append({"author": author, "created_at": stamp,
                          "content": content, "kind": "status_change" if is_event else "message",
                          "attachments": _attachments(body, page_url)})
@@ -227,6 +233,8 @@ def parse_detail(html: str, page_url: str, expected_id: str) -> dict[str, Any]:
             message["is_reply"] = is_reply if requester and message["author"] else None
         if is_reply:
             replies.append(message)
+    ticket["requester"] = requester
+    ticket["person_names"] = sorted(person_names, key=len, reverse=True)
     ticket["description"] = messages[0]["content"] if messages else None
     ticket["messages"] = messages
     ticket["replies"] = replies
@@ -243,3 +251,49 @@ def parse_detail(html: str, page_url: str, expected_id: str) -> dict[str, Any]:
     if not messages:
         ticket["parse_warning"] = "Ticket history was unavailable. Reply and date fields may be incomplete."
     return ticket
+
+
+REDACTED_REQUESTER = "[requester]"
+REDACTED_STAFF = "[staff]"
+
+
+def redact_ticket(ticket: dict[str, Any], *, include_sensitive: bool = False) -> dict[str, Any]:
+    """Return a copy for the tool result, hiding person names unless asked.
+
+    The help desk prints full names of the requester and of staff next to every
+    message and status change. Names are replaced with role labels in authors
+    and wherever they recur in message text (signatures, status lines).
+    """
+    import copy
+
+    data = copy.deepcopy(ticket)
+    names = [name for name in data.pop("person_names", []) if name]
+    requester = data.pop("requester", None)
+    if include_sensitive:
+        data["names_redacted"] = False
+        return data
+    requester_key = normalize_lookup_text(requester) if requester else None
+
+    def label(name: str) -> str:
+        return REDACTED_REQUESTER if requester_key and normalize_lookup_text(name) == requester_key else REDACTED_STAFF
+
+    def scrub(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        for name in names:
+            value = re.sub(re.escape(name), label(name), value, flags=re.IGNORECASE)
+        return value
+
+    def scrub_message(message: dict[str, Any]) -> None:
+        if message.get("author"):
+            message["author"] = label(message["author"])
+        message["content"] = scrub(message.get("content"))
+
+    for message in data.get("messages") or []:
+        scrub_message(message)
+    for reply in data.get("replies") or []:
+        scrub_message(reply)
+    for key in ("description", "institution_reply"):
+        data[key] = scrub(data.get(key))
+    data["names_redacted"] = True
+    return data

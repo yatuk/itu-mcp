@@ -1855,17 +1855,14 @@ class NinovaMcpApp:
         notifications = notifications[: max(1, min(limit, 100))]
         return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
 
-    def get_help_ticket(self, ticket_id: str) -> dict[str, Any]:
-        """Read a help ticket, its history and attachment links without mutations."""
-        from .help_tickets import help_url, parse_detail, ticket_id as valid_id, ticket_url
+    def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
+        """Fetch and parse one ticket page. Callers decide ownership and redaction."""
+        from .help_tickets import help_url, parse_detail, ticket_url
 
-        identifier = valid_id(ticket_id)
-        if identifier is None:
-            raise NinovaError("Help ticket ID must contain only decimal digits (1–20 characters).")
         cache_key = f"help_ticket:{identifier}"
         cached = self._course_cache.get(cache_key)
         if cached is not None:
-            return {"ticket": cached, "untrusted_external_content": True}
+            return cached  # type: ignore[return-value]
         from requests import RequestException
 
         try:
@@ -1878,13 +1875,11 @@ class NinovaMcpApp:
         if ticket.get("id") != identifier:
             raise NinovaError(ticket.get("parse_warning") or "Help ticket was not found or is inaccessible.")
         self._course_cache.set(cache_key, ticket)
-        return {"ticket": ticket, "untrusted_external_content": True}
+        return ticket
 
-    def obs_get_help_tickets(
-        self, query: str | None = None, limit: int = 20, include_details: bool = True,
-    ) -> dict[str, Any]:
-        """List help tickets, enriching selected rows from the help desk by default."""
-        from .help_tickets import SUMMARY_FIELDS, summary
+    def _help_ticket_rows(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """The signed-in user's own ticket list, from the Portal widget."""
+        from .help_tickets import summary
         from .parsing import extract_help_tickets
 
         try:
@@ -1894,12 +1889,38 @@ class NinovaMcpApp:
         raw_items = data.get("YardimInformationList") or data.get("HelpInformationList") or []
         tickets = [summary(item) for item in raw_items if isinstance(item, dict)]
         if tickets:
-            payload = {"source": "portal.itu.edu.tr/GetYardim"}
-        else:
-            html, url = self._get_portal_page()
-            payload = extract_help_tickets(html, url)
-            tickets = payload["tickets"]
-            payload["api_fallback"] = True
+            return tickets, {"source": "portal.itu.edu.tr/GetYardim"}
+        html, url = self._get_portal_page()
+        payload = extract_help_tickets(html, url)
+        tickets = payload["tickets"]
+        payload["api_fallback"] = True
+        return tickets, payload
+
+    def get_help_ticket(self, ticket_id: str, include_sensitive: bool = False) -> dict[str, Any]:
+        """Read one of the user's own help tickets without mutations."""
+        from .help_tickets import redact_ticket, ticket_id as valid_id
+
+        identifier = valid_id(ticket_id)
+        if identifier is None:
+            raise NinovaError("Help ticket ID must contain only decimal digits (1–20 characters).")
+        # Ticket IDs are sequential. Only IDs from the user's own Portal list
+        # are read, so this tool cannot be pointed at someone else's ticket.
+        own_ids = {str(item["id"]) for item in self._help_ticket_rows()[0] if item.get("id")}
+        if identifier not in own_ids:
+            raise NinovaError(
+                "Help ticket ID is not in your own ticket list. "
+                "Call obs_get_help_tickets to see the IDs you can read."
+            )
+        ticket = redact_ticket(self._read_help_ticket(identifier), include_sensitive=bool(include_sensitive))
+        return {"ticket": ticket, "untrusted_external_content": True}
+
+    def obs_get_help_tickets(
+        self, query: str | None = None, limit: int = 20, include_details: bool = False,
+    ) -> dict[str, Any]:
+        """List help tickets. Detail pages are opened only when include_details is true."""
+        from .help_tickets import SUMMARY_FIELDS
+
+        tickets, payload = self._help_ticket_rows()
         if query:
             target = normalize_lookup_text(query)
             tickets = [item for item in tickets if target in normalize_lookup_text(
@@ -1909,7 +1930,7 @@ class NinovaMcpApp:
         for item in selected:
             if include_details and item["id"]:
                 try:
-                    detail = self.get_help_ticket(item["id"])["ticket"]
+                    detail = self._read_help_ticket(item["id"])
                 except (NinovaError, ValueError):
                     item["detail_available"] = False
                     item["detail_warning"] = "Help ticket details were unavailable. Portal fields are retained."
@@ -4999,7 +5020,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "query": {"type": "string", "description": "Match ticket ID, title or status."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-                "include_details": {"type": "boolean", "default": True, "description": "Read details only for the selected matching tickets."},
+                "include_details": {"type": "boolean", "default": False, "description": "Also open each selected ticket page for unit, category and dates. Off by default because it costs one request per ticket."},
             },
             "additionalProperties": False,
         },
@@ -5010,7 +5031,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Read one help ticket by numeric ID: title, description, unit, category, subcategory, status, dates, messages, institutional replies and attachment links. Does not download attachments. Reply detection compares history authors with the original requester. Missing fields are null. Dates are local to the source with no assumed timezone. Requires login.",
         "inputSchema": {
             "type": "object",
-            "properties": {"ticket_id": {"type": "string", "pattern": "^[0-9]{1,20}$", "description": "Numeric İTÜ help ticket ID."}},
+            "properties": {
+                "ticket_id": {"type": "string", "pattern": "^[0-9]{1,20}$", "description": "Numeric ID of one of your own tickets, from obs_get_help_tickets."},
+                "include_sensitive": {"type": "boolean", "default": False, "description": "Show the real names of the requester and staff instead of role labels."},
+            },
             "required": ["ticket_id"],
             "additionalProperties": False,
         },
