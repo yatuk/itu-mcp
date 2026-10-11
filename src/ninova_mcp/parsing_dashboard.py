@@ -20,6 +20,15 @@ from .parsing_common import (
 from .parsing_page import extract_named_table
 
 
+def _first_yearless_date(row: dict[str, Any], today: date | None) -> str | None:
+    """ISO form of the first value of the row that is a date without a year."""
+    for value in row.values():
+        iso = infer_yearless_datetime(value, today=today) if isinstance(value, str) else None
+        if iso:
+            return iso
+    return None
+
+
 def _with_inferred_dates(rows: list[Any], today: date | None) -> list[Any]:
     """Add ``date_iso`` to dashboard rows whose date has no year.
 
@@ -32,11 +41,9 @@ def _with_inferred_dates(rows: list[Any], today: date | None) -> list[Any]:
         if isinstance(row, list) and len(row) == 2 and infer_yearless_datetime(row[1], today=today):
             row = {"text": row[0], "date": row[1]}
         if isinstance(row, dict) and "date_iso" not in row:
-            for value in list(row.values()):
-                iso = infer_yearless_datetime(value, today=today) if isinstance(value, str) else None
-                if iso:
-                    row = {**row, "date_iso": iso, "date_year_inferred": True}
-                    break
+            iso = _first_yearless_date(row, today)
+            if iso:
+                row = {**row, "date_iso": iso, "date_year_inferred": True}
         result.append(row)
     return result
 
@@ -129,6 +136,42 @@ def _course_own_text(anchor: Tag, page_url: str, base_url: str) -> str:
     return ""
 
 
+def _course_code(anchor: Tag, context: str, page_url: str, base_url: str) -> tuple[str | None, str | None, bool]:
+    """``(code, source, uncertain)`` for a course link.
+
+    The text next to the section links is tried first (``course_element``),
+    then the link's own context (``section_label``). ``uncertain`` is set when
+    a branch followed by a year was seen and refused as a code.
+    """
+    code, uncertain = _pick_code(_course_own_text(anchor, page_url, base_url))
+    if code:
+        return code, "course_element", uncertain
+    code, label_uncertain = _pick_code(context)
+    return code, "section_label" if code else None, uncertain or label_uncertain
+
+
+def _course_row(anchor: Tag, absolute: str, page_url: str, base_url: str) -> dict[str, Any]:
+    context = _context_from_anchor(anchor)
+    title = _extract_course_title(anchor)
+    label = clean_text(anchor.get_text(" ", strip=True))
+    crn_match = _CRN_LABEL_RE.search(label)
+
+    code, source, uncertain = _course_code(anchor, context, page_url, base_url)
+    course: dict[str, Any] = {
+        "code": code,
+        "title": title,
+        "url": absolute,
+        "context": context,
+        "section": label if label and label != title else None,
+        "crn": crn_match.group(1) if crn_match else None,
+    }
+    if source == "section_label":
+        course["code_source"] = source
+    if source == "section_label" or (code is None and uncertain):
+        course["code_uncertain"] = True
+    return course
+
+
 def extract_courses(html: str, page_url: str, base_url: str) -> list[dict[str, Any]]:
     """List the course links of the dashboard, one row per enrolled section.
 
@@ -148,30 +191,7 @@ def extract_courses(html: str, page_url: str, base_url: str) -> list[dict[str, A
         if absolute in seen:
             continue
         seen.add(absolute)
-        context = _context_from_anchor(anchor)
-        title = _extract_course_title(anchor)
-        label = clean_text(anchor.get_text(" ", strip=True))
-        crn_match = _CRN_LABEL_RE.search(label)
-
-        code, uncertain = _pick_code(_course_own_text(anchor, page_url, base_url))
-        source = "course_element" if code else None
-        if code is None:
-            code, label_uncertain = _pick_code(context)
-            uncertain = uncertain or label_uncertain
-            source = "section_label" if code else None
-        course: dict[str, Any] = {
-            "code": code,
-            "title": title,
-            "url": absolute,
-            "context": context,
-            "section": label if label and label != title else None,
-            "crn": crn_match.group(1) if crn_match else None,
-        }
-        if source == "section_label" or (code is None and uncertain):
-            if source:
-                course["code_source"] = source
-            course["code_uncertain"] = True
-        courses.append(course)
+        courses.append(_course_row(anchor, absolute, page_url, base_url))
     return courses
 
 
