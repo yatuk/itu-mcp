@@ -344,6 +344,19 @@ the published tool set.
 - `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
 - `find_open_course_sections` — capacity minus enrolled, across up to 25 selected departments
 - `find_empty_classrooms` — coverage-limited estimate from selected schedules; does not include reservations
+- Seat watch (local state, no login; see [tracking.md](tracking.md#seat-watch)). The server
+  does not run in the background and sends no notifications: seats are read only when the
+  check tool is called, by the user or by a scheduled task on the client
+  - `watch_course_sections(crns, department_code?, program_type?)`: adds up to 12 CRNs per
+    call to a watch list of at most 20 sections. Without `department_code` the branch is found
+    from the archive's current-term search index and confirmed against the live schedule
+  - `unwatch_course_sections(crns? | stale_only? | clear_all?)`: removes the named CRNs, the
+    entries left from a past term, or the whole list
+  - `list_watched_course_sections`: the stored list and last observation, without reading OBS
+  - `check_watched_course_sections`: one schedule request per watched branch. Reports capacity,
+    enrolled, seats free and `changes` (`opened`, `filled`, `capacity_raised`, `delisted`, ...)
+    per section. `unknown` is never a free seat and `not_listed` is not the same as full.
+    `freshness.all_from_cache` says the numbers were not re-read, with `retry_after_seconds`
 - `explain_course_eligibility` — evaluates the official OBS branch prerequisite table
   (`/public/GenelTanimlamalar/OnsartAra`): full Ve/Veya expression, per-course minimum
   grades, and credit requirement. Accepts 3- and 4-digit codes (`CEN 4901E`) and
