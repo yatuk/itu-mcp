@@ -17,6 +17,7 @@ REGISTRATION_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read the saved OBS registration draft with CRNs, course names, saved eligibility "
             "verdicts, restriction reasons, last check time and available draft meeting times. "
+            "Each meeting gives room (the door label) and room_type (e.g. Amfi, Derslik). "
             "Reads the active registration term. Does not save or recheck the draft. "
             "Saved eligibility is a snapshot; use obs_validate_registration_plan for a fresh check."
         ),
