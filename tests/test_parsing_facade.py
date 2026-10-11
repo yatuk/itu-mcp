@@ -103,21 +103,34 @@ class ParsingFacadeTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(sorted(name for name in names if not hasattr(parsing, name)), [])
 
-    def test_nothing_patches_a_name_on_the_facade(self) -> None:
-        """A parser calls the helper of its own module, so a patch here would do nothing.
+    def test_a_patch_on_the_facade_is_one_the_caller_actually_reads(self) -> None:
+        """A parser calls the helper of its own module, so most patches here would do nothing.
 
-        No test patched ``ninova_mcp.parsing.<name>`` when the module was
-        split. One that needs to replace a helper has to patch it where the
-        calling parser lives, for example ``ninova_mcp.parsing_course.clean_text``.
+        The exception is a caller that imports the name from the facade inside
+        the function body, at call time. It reads the facade attribute on every
+        call, so patching the facade works. Any other
+        patch on ``ninova_mcp.parsing.<name>`` is silently ineffective and has to
+        target the module the calling parser lives in instead.
         """
         this_file = Path(__file__).resolve()
-        offenders = [
-            path.relative_to(REPO).as_posix()
-            for path in _python_files()
-            if path.resolve() != this_file and _PATCH_RE.search(path.read_text(encoding="utf-8"))
-        ]
+        patched = re.compile(r"""["']ninova_mcp\.parsing\.(\w+)["']""")
+        source = "\n".join(
+            path.read_text(encoding="utf-8") for path in (REPO / "src" / "ninova_mcp").glob("*.py")
+        )
+        offenders = []
+        for path in _python_files():
+            if path.resolve() == this_file:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if not _PATCH_RE.search(text):
+                continue
+            for name in sorted(set(patched.findall(text))):
+                lazy_import = re.compile(
+                    rf"^[ \t]+from \.parsing import [^\n]*\b{re.escape(name)}\b", re.MULTILINE
+                )
+                if not lazy_import.search(source):
+                    offenders.append(f"{path.relative_to(REPO).as_posix()}: {name}")
         self.assertEqual(offenders, [])
-
 
 if __name__ == "__main__":
     unittest.main()
