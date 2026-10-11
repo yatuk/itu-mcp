@@ -325,6 +325,30 @@ def extract_assignment_upload_form(html: str, page_url: str, base_url: str) -> d
     }
 
 
+def _match_slot_by_description(slots: list[dict[str, Any]], slot_description: str) -> dict[str, Any]:
+    """The one slot whose description equals the text, or else the one that contains it."""
+    target = normalize_lookup_text(slot_description)
+    exact = [
+        slot
+        for slot in slots
+        if target and target == normalize_lookup_text(slot.get("description"))
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    fuzzy = [
+        slot
+        for slot in slots
+        if target and target in normalize_lookup_text(slot.get("description"))
+    ]
+    if len(fuzzy) == 1:
+        return fuzzy[0]
+    if len(fuzzy) > 1 or len(exact) > 1:
+        options = ", ".join(f"{s.get('index')}:{s.get('description')}" for s in (fuzzy or exact))
+        raise ValueError(f"Ambiguous slot description {slot_description!r}. Matches: {options}")
+    options = ", ".join(f"{s.get('index')}:{s.get('description')}" for s in slots)
+    raise ValueError(f"No slot matching {slot_description!r}. Available: {options}")
+
+
 def match_upload_slot(
     slots: list[dict[str, Any]],
     *,
@@ -345,26 +369,7 @@ def match_upload_slot(
         )
 
     if slot_description:
-        target = normalize_lookup_text(slot_description)
-        exact = [
-            slot
-            for slot in slots
-            if target and target == normalize_lookup_text(slot.get("description"))
-        ]
-        if len(exact) == 1:
-            return exact[0]
-        fuzzy = [
-            slot
-            for slot in slots
-            if target and target in normalize_lookup_text(slot.get("description"))
-        ]
-        if len(fuzzy) == 1:
-            return fuzzy[0]
-        if len(fuzzy) > 1 or len(exact) > 1:
-            options = ", ".join(f"{s.get('index')}:{s.get('description')}" for s in (fuzzy or exact))
-            raise ValueError(f"Ambiguous slot description {slot_description!r}. Matches: {options}")
-        options = ", ".join(f"{s.get('index')}:{s.get('description')}" for s in slots)
-        raise ValueError(f"No slot matching {slot_description!r}. Available: {options}")
+        return _match_slot_by_description(slots, slot_description)
 
     if len(slots) == 1:
         return slots[0]
