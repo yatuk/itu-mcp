@@ -63,6 +63,7 @@ export NINOVA_STATE_DIR="/absolute/path/to/.ninova_state"
 export NINOVA_DISABLE_PLAYWRIGHT_FALLBACK="1"
 export NINOVA_ENV_FILE="/absolute/path/to/.env"
 export NINOVA_COURSE_CACHE_TTL_SECONDS="60"          # course list cache; 0 disables
+export NINOVA_TRACKING_MAX_AGE_SECONDS="43200"       # tracking snapshot is stale after this (12h)
 export NINOVA_REQUEST_DELAY_MS="120"                 # min gap between HTTP calls
 export NINOVA_COMPACT_DEFAULT="0"                    # 1 = shrink heavy tool payloads by default
 export NINOVA_SESSION_PERSIST="1"                    # cache cookies under NINOVA_STATE_DIR

@@ -13,6 +13,42 @@ from .parsing import normalize_lookup_text
 from .attendance_summary import summarize_obs_attendance
 
 
+def _registered_label(item: dict[str, Any]) -> str:
+    code = f"{item.get('bransKodu') or ''} {item.get('dersKodu') or ''}".strip()
+    crn = f"; CRN {item.get('crn')}" if item.get("crn") else ""
+    return f"{code} ({item.get('dersAdiTR')}{crn})"
+
+
+def _registered_options(items: list[dict[str, Any]]) -> str:
+    return ", ".join(_registered_label(item) for item in items[:12])
+
+
+def _term_note(semester: dict[str, Any]) -> str:
+    """Name the term that was searched, so a wrong term is visible in the error."""
+    label = semester.get("akademikDonemAdi") or semester.get("akademikDonemKodu") or semester.get("akademikDonemId")
+    return f" (term searched: {label})" if label else ""
+
+
+def _match_registered(course: str, items: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
+    """Match a reference against registered OBS classes (see ``course_matching``).
+
+    Codes are compared without spacing or case (``cen354e``), names without
+    accents or case and with Roman and Arabic numerals as equal (``fizik 2``).
+    """
+    from .course_matching import match_courses
+
+    return match_courses(
+        course,
+        items,
+        codes=lambda item: (f"{item.get('bransKodu') or ''} {item.get('dersKodu') or ''}",),
+        names=lambda item: (item.get("dersAdiTR"), item.get("dersAdiEN")),
+        crn=lambda item: str(item.get("crn") or "") or None,
+        partial_text=lambda item: (" ".join(
+            str(item.get(key) or "") for key in ("bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN", "crn")
+        ),),
+    )
+
+
 class ObsRecordToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies ``obs`` and ``obs_public``."""
 
@@ -73,7 +109,7 @@ class ObsRecordToolsMixin:
         self,
         class_id: int | None = None,
         semester: str | int | None = None,
-        course: str | None = None,
+        course: str | int | None = None,
         include_midterms: bool = True,
         include_letter: bool = True,
     ) -> dict[str, Any]:
@@ -106,7 +142,7 @@ class ObsRecordToolsMixin:
         self,
         class_id: int | None = None,
         semester: str | int | None = None,
-        course: str | None = None,
+        course: str | int | None = None,
         include_summary: bool = True,
         max_absence_ratio: float = 0.30,
     ) -> dict[str, Any]:
@@ -174,7 +210,7 @@ class ObsRecordToolsMixin:
         *,
         class_id: int | None,
         semester: str | int | None,
-        course: str | None,
+        course: str | int | None,
     ) -> dict[str, Any]:
         if class_id is not None:
             return {"sinifId": class_id, "source": "class_id"}
@@ -183,38 +219,34 @@ class ObsRecordToolsMixin:
         resolved_semester = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved_semester["akademikDonemId"])
         items = payload.get("kayitSinifResultList") or []
-        target = normalize_lookup_text(course)
-        matches = []
-        for item in items:
-            code = f"{item.get('bransKodu') or ''} {item.get('dersKodu') or ''}".strip()
-            blob = normalize_lookup_text(
-                " ".join(
-                    str(item.get(key) or "")
-                    for key in ("bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN", "crn")
-                )
-            )
-            if target == normalize_lookup_text(code) or target in blob:
-                matches.append(item)
+        tier, matches = _match_registered(str(course), items)
         if not matches:
-            options = ", ".join(
-                f"{i.get('bransKodu')} {i.get('dersKodu')} ({i.get('dersAdiTR')})"
-                for i in items[:12]
+            raise ObsError(
+                f"OBS course not found: {course}{_term_note(resolved_semester)}. "
+                f"Available: {_registered_options(items)}"
             )
-            raise ObsError(f"OBS course not found: {course}. Available: {options}")
         if len(matches) > 1:
-            options = ", ".join(
-                f"sinifId={i.get('sinifId')} {i.get('bransKodu')} {i.get('dersKodu')}"
-                for i in matches[:8]
+            options = "; ".join(
+                f"sinifId={i.get('sinifId')} {_registered_label(i)}" for i in matches[:8]
             )
-            raise ObsError(f"Ambiguous OBS course {course!r}. Matches: {options}")
+            raise ObsError(
+                f"Ambiguous OBS course {course!r}{_term_note(resolved_semester)}. Matches: {options}. "
+                "Pass class_id, the CRN or the full course code."
+            )
         chosen = matches[0]
-        chosen = {**chosen, "source": "course_lookup", "semester": resolved_semester}
+        chosen = {
+            **chosen,
+            "source": "course_lookup",
+            "semester": resolved_semester,
+            "matched_by": tier,
+            "requested": course,
+        }
         return chosen
 
     def get_personal_exam_calendar(
         self,
         semester: str | int | None = None,
-        course: str | None = None,
+        course: str | int | None = None,
     ) -> dict[str, Any]:
         """Read the authenticated student's OBS final calendar directly."""
         resolved = self.obs.resolve_semester(semester)
@@ -222,17 +254,16 @@ class ObsRecordToolsMixin:
         registered_payload = self.obs.list_registered_courses(semester_id)
         registered = registered_payload.get("kayitSinifResultList") or []
         final_calendar = self.obs.get_final_calendar(semester_id)
-        target = normalize_lookup_text(course) if course else ""
-        matched_courses = []
+        target = normalize_lookup_text(str(course)) if course else ""
+        matched_courses: list[dict[str, Any]] = []
         if target:
-            for item in registered:
-                blob = normalize_lookup_text(
-                    " ".join(str(item.get(key) or "") for key in ("bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN", "crn"))
-                )
-                if target in blob:
-                    matched_courses.append(item)
+            # A filter, so several matching courses are all kept.
+            _tier, matched_courses = _match_registered(str(course), registered)
             if not matched_courses:
-                raise ObsError(f"Kayıtlı dersler arasında eşleşme bulunamadı: {course}")
+                raise ObsError(
+                    f"Kayıtlı dersler arasında eşleşme bulunamadı: {course}{_term_note(resolved)}. "
+                    f"Kayıtlı dersler: {_registered_options(registered) or 'yok'}"
+                )
         return {
             "semester": resolved,
             "course_filter": course,

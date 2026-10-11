@@ -41,7 +41,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
     {
         "name": "crawl_course",
         "title": "Crawl Course",
-        "description": "Inventory pages and downloadable resources inside a Ninova course tree.",
+        "description": "Inventory pages and downloadable resources inside a Ninova course tree. A link that is refused or fails is listed in skipped with its reason and the crawl continues.",
         "inputSchema": {
             "type": "object",
             "properties": {

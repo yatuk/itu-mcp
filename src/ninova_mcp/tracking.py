@@ -12,6 +12,9 @@ from .private_io import write_private_text
 
 TRACKING_STATE_VERSION = 2
 MAX_UPDATE_HISTORY = 2000
+# A stored snapshot older than this is reported as stale. Twelve hours keeps a
+# same-day answer cheap and still catches an assignment announced overnight.
+DEFAULT_TRACKING_MAX_AGE_SECONDS = 12 * 3600.0
 
 # Metadata follows the fields in overview. Different entity types may share
 # one read, for example the active/past session lists.
@@ -27,6 +30,59 @@ SNAPSHOT_SCOPES = tuple(dict.fromkeys((*ENTITY_SCOPES.values(), "sections")))
 
 def utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
+
+
+def _age_hours(stamp: Any, now: datetime) -> float | None:
+    if not isinstance(stamp, str) or not stamp.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return round(max(0.0, (now - parsed).total_seconds()) / 3600, 2)
+
+
+def course_reference(course: dict[str, Any]) -> dict[str, Any]:
+    """The few fields that identify a tracked course in a status block."""
+    return {key: course.get(key) for key in ("code", "title", "section", "url") if course.get(key)}
+
+
+def snapshot_freshness(
+    state: dict[str, Any],
+    *,
+    max_age_seconds: float,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Describe how old the stored tracking state is.
+
+    ``stale`` is true when there has been no sync, when the last sync is older
+    than ``max_age_seconds``, or when any tracked course was last read longer
+    ago than that (a failed or limited sync leaves such courses behind).
+    """
+    moment = now or datetime.now(tz=UTC)
+    limit_hours = max_age_seconds / 3600
+    age = _age_hours(state.get("last_sync_at"), moment)
+    stale_courses: list[dict[str, Any]] = []
+    for entry in (state.get("courses") or {}).values():
+        course_age = _age_hours(entry.get("synced_at"), moment)
+        if course_age is None or course_age > limit_hours:
+            stale_courses.append({
+                **course_reference(entry.get("course") or {}),
+                "synced_at": entry.get("synced_at"),
+                "age_hours": course_age,
+            })
+    snapshot_stale = age is None or age > limit_hours
+    return {
+        "status": "no_snapshot" if age is None else "stale_snapshot" if snapshot_stale or stale_courses else "ok",
+        "stale": snapshot_stale or bool(stale_courses),
+        "snapshot_stale": snapshot_stale,
+        "snapshot_age_hours": age,
+        "stale_after_hours": round(limit_hours, 2),
+        "last_sync_at": state.get("last_sync_at"),
+        "stale_courses": stale_courses,
+    }
 
 
 def load_tracking_state(path: Path) -> dict[str, Any]:

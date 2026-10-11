@@ -10,7 +10,28 @@ from typing import Any
 
 from .client import NinovaClient, NinovaError
 from .operator_settings import SENSITIVE_OUTPUT_DISABLED_NOTE, sensitive_output_allowed
-from .parsing import normalize_lookup_text
+from .parsing import clean_text, normalize_lookup_text
+
+
+def _unique_allergens(effects: Any) -> list[dict[str, Any]]:
+    """Allergens of one dish, each once and in source order.
+
+    The Portal's own list repeats entries for a dish, so the repeats are
+    dropped here. Names are compared without case, accents or extra spaces.
+    """
+    allergens: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for effect in effects or []:
+        if not isinstance(effect, dict):
+            continue
+        name = clean_text(str(effect.get("SideEffectName") or "")) or None
+        name_en = clean_text(str(effect.get("SideEffectNameEN") or "")) or None
+        key = normalize_lookup_text(name or name_en)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        allergens.append({"name": name, "name_en": name_en})
+    return allergens
 
 
 class PortalToolsMixin:
@@ -141,11 +162,7 @@ class PortalToolsMixin:
                 "name": item.get("FoodName"),
                 "type": item.get("FoodType"),
                 "kcal": item.get("TotalWeight"),
-                "allergens": [
-                    {"name": effect.get("SideEffectName"), "name_en": effect.get("SideEffectNameEN")}
-                    for effect in (item.get("FoodSideEffectInformationList") or [])
-                    if isinstance(effect, dict)
-                ],
+                "allergens": _unique_allergens(item.get("FoodSideEffectInformationList")),
             })
         return {
             "date": date_value,

@@ -168,6 +168,34 @@ def _extract_plain(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+_LEGACY_OFFICE_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
+_ZIP_MAGIC = bytes.fromhex("504b0304")
+LEGACY_DOC_HINT = (
+    "This is a legacy Word (.doc) file, which cannot be read here. Next step: get the file as "
+    ".docx or PDF (open it in Word or LibreOffice and save it as .docx or PDF, or ask the "
+    "instructor for a PDF) and read that; download_resource still saves the original for the user."
+)
+
+
+def sniff_extension(data: bytes) -> str:
+    """Name the file type from its first bytes: ``.pdf``, ``.docx``, ``.doc`` or ``""``."""
+    if data[:1024].lstrip().startswith(b"%PDF-"):
+        return ".pdf"
+    if data.startswith(_LEGACY_OFFICE_MAGIC):
+        return ".doc"
+    if data.startswith(_ZIP_MAGIC):
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                names = archive.namelist()
+        except (zipfile.BadZipFile, OSError, ValueError):
+            return ""
+        if any(name.startswith("word/") for name in names):
+            return ".docx"
+    return ""
+
+
 def extract_text_from_bytes(
     data: bytes,
     *,
@@ -175,20 +203,27 @@ def extract_text_from_bytes(
     max_chars: int = DEFAULT_MAX_CHARS,
 ) -> dict[str, Any]:
     ext = extension.lower() if extension.startswith(".") else f".{extension.lower()}" if extension else ""
-    if ext not in SUPPORTED_EXTENSIONS and ext not in {".htm"}:
-        return {
-            "ok": False,
-            "extension": ext or None,
-            "error": (
-                f"Unsupported file type {ext or '(unknown)'}. "
-                f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-            ),
-            "text": None,
-            "char_count": 0,
-            "truncated": False,
-        }
-
     details: dict[str, Any] = {}
+    if ext not in SUPPORTED_EXTENSIONS and ext not in {".htm"}:
+        # A file saved without a usable suffix is still what its bytes say it is.
+        sniffed = sniff_extension(data) if len(data) <= MAX_EXTRACT_BYTES else ""
+        if sniffed in SUPPORTED_EXTENSIONS:
+            ext = sniffed
+            details["extension_source"] = "content"
+        else:
+            legacy = ext == ".doc" or sniffed == ".doc"
+            return {
+                "ok": False,
+                "extension": ".doc" if legacy else ext or None,
+                "error": LEGACY_DOC_HINT if legacy else (
+                    f"Unsupported file type {ext or '(unknown)'}. "
+                    f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+                ),
+                "text": None,
+                "char_count": 0,
+                "truncated": False,
+            }
+
     if len(data) > MAX_EXTRACT_BYTES:
         return {
             "ok": False,
@@ -203,7 +238,8 @@ def extract_text_from_bytes(
         }
     try:
         if ext == ".pdf":
-            text, details = _extract_pdf(data)
+            text, pdf_details = _extract_pdf(data)
+            details.update(pdf_details)
         elif ext == ".docx":
             text = _extract_docx(data)
         else:
@@ -218,6 +254,7 @@ def extract_text_from_bytes(
             "text": None,
             "char_count": 0,
             "truncated": False,
+            **details,
         }
 
     text = (text or "").strip()
