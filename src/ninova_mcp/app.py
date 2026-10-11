@@ -13,6 +13,7 @@ from .app_base import AppBase
 from .app_campus import CampusToolsMixin
 from .app_core import SessionToolsMixin
 from .app_files import PageFileToolsMixin
+from .app_gpa_simulation import GpaSimulationToolsMixin
 from .app_library import LibraryToolsMixin
 from .app_mail import MailToolsMixin
 from .app_ninova import NinovaCourseToolsMixin
@@ -45,6 +46,7 @@ class NinovaMcpApp(
     PlanningToolsMixin,
     LibraryToolsMixin,
     ArchiveHistoryToolsMixin,
+    GpaSimulationToolsMixin,
     ArchiveDatasetToolsMixin,
     SeatWatchToolsMixin,
     CalendarExportToolsMixin,
