@@ -18,22 +18,13 @@ permissions:
 jobs:
   pypi:
     runs-on: ubuntu-latest
-    # The upload authenticates with the PYPI_API_TOKEN secret, so this job
-    # needs no OIDC token.
-    #
-    # Moving to PyPI trusted publishing (no long-lived token):
-    #   1. First, on PyPI: project "itu-mcp" > Manage > Publishing > add a
-    #      GitHub publisher with owner "yatuk", repository "itu-mcp",
-    #      workflow "publish.yml" and the environment left empty.
-    #      docs/releasing.md has the steps in full.
-    #   2. Only after that, in this job: add "id-token: write" under
-    #      "permissions:" below, and delete the "with:" and "password:" lines
-    #      of the "Publish to PyPI" step.
-    #   3. After one successful release, delete the token on PyPI and the
-    #      PYPI_API_TOKEN repository secret.
-    # Doing step 2 before step 1 makes the upload fail.
+    # Trusted publishing: PyPI gives this workflow a short-lived token, so
+    # there is no API token stored in the repository. It needs the GitHub
+    # publisher registered on PyPI first (owner "yatuk", repository "itu-mcp",
+    # workflow "publish.yml", environment empty). docs/releasing.md has the steps.
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -56,8 +47,6 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
   registry:
     needs: pypi

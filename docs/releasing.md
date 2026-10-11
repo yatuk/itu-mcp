@@ -1,7 +1,7 @@
 # Releasing (maintainers)
 
-How the release workflows are locked down, how to update a pin, and how to move the
-PyPI upload from an API token to trusted publishing.
+How the release workflows are locked down, how to update a pin, and how the
+PyPI upload is authenticated.
 
 ## What runs on a release
 
@@ -63,12 +63,11 @@ gh api repos/astral-sh/python-build-standalone/releases/tags/20260623 --paginate
 Change the version and the checksum in the same commit. For the CPython runtime
 that means all five platform digests.
 
-## Moving PyPI to trusted publishing
+## PyPI trusted publishing
 
-Today `publish.yml` uploads with the `PYPI_API_TOKEN` repository secret. Trusted
-publishing replaces that long-lived token with a short-lived one that PyPI issues
-to this workflow only. The order matters: the PyPI side first, the workflow second.
-If the workflow is changed first, the upload fails.
+`publish.yml` uploads with trusted publishing: PyPI issues a short-lived token to
+this workflow only, and no API token is stored in the repository. It works once
+the publisher is registered on PyPI:
 
 1. Sign in to PyPI as an owner of the `itu-mcp` project.
 2. Open <https://pypi.org/manage/project/itu-mcp/settings/publishing/>.
@@ -78,31 +77,10 @@ If the workflow is changed first, the upload fails.
    - Workflow name: `publish.yml`
    - Environment name: leave empty
 4. Save. The publisher is now listed on that page.
-5. In `.github/workflows/publish.yml`, job `pypi`:
-   - add `id-token: write` under the job's `permissions:`
-   - delete the two lines `with:` and `password: ${{ secrets.PYPI_API_TOKEN }}`
-     of the "Publish to PyPI" step
-6. Publish the next release and check that the upload step succeeds.
-7. Then delete the API token on PyPI (Account settings, API tokens) and the
-   `PYPI_API_TOKEN` secret in the repository settings.
 
-After step 5 the job looks like this:
-
-```yaml
-  pypi:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      # checkout, setup-python, build and twine check stay as they are
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-```
-
-Optional hardening: create a GitHub environment named `pypi` with required
-reviewers, add `environment: pypi` to the job, and enter `pypi` as the environment
-name in step 3. A release then waits for an approval before it can upload.
+Until that is done the "Publish to PyPI" step fails and nothing is uploaded. To
+publish a release whose upload failed, run the workflow again from the Actions
+tab ("Publish to PyPI", "Run workflow") after registering the publisher.
 
 ## Not done yet: builds from a hashed lock
 

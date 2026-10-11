@@ -69,12 +69,13 @@ class WorkflowPinTests(unittest.TestCase):
         release = text[text.index("\n  release:") :]
         self.assertIn("contents: write", release)
 
-    def test_only_the_registry_job_gets_an_oidc_token(self) -> None:
+    def test_oidc_tokens_are_granted_per_job_and_no_api_token_is_used(self) -> None:
         text = _workflow_text("publish.yml")
         active = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        self.assertEqual(active.count("id-token: write"), 1)
-        registry = active[active.index("\n  registry:") :]
-        self.assertIn("id-token: write", registry)
+        # One for PyPI trusted publishing, one for the registry login. None at workflow level.
+        self.assertEqual(active.count("id-token: write"), 2)
+        self.assertNotIn("id-token", active[: active.index("\njobs:")])
+        self.assertNotIn("secrets.", active)
 
     def test_publish_tools_are_pinned(self) -> None:
         text = _workflow_text("publish.yml")
