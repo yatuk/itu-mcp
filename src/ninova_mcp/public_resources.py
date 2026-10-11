@@ -121,7 +121,7 @@ def course_catalog(app: Any, course_code: str) -> dict[str, Any]:
 def course_grades(app: Any, course_code: str) -> dict[str, Any]:
     """Archive letter grade distribution for one course code, every term."""
     branch, canonical = course_code_parameter(course_code)
-    payload = app.archive_grade_distribution(canonical)
+    payload = app.archive_grade_distribution(canonical, limit_terms=30)
     uri = COURSE_GRADES_TEMPLATE.format(course_code=canonical.replace(" ", ""))
     return _provenance(payload, uri, f"{app.archive.base_url}/grades/{branch}.json")
 

@@ -149,8 +149,37 @@ hatalar aşağıda, alan alan.
 - `build_degree_plan`: AKTS artık sayı, dersler bir kez listeleniyor
 - `obs_search_courses` her ders kodu için tek ve temiz bir kayıt döndürüyor
 
+### Daha kısa cevaplar
+
+- OBS araçları varsayılan olarak kısaltılmış sonuç döndürüyor: özet önce gelir, ham OBS yanıtı
+  yalnızca `include_raw=true` ile eklenir. 16 araçta aynı parametre var, sonuçtaki
+  `raw_available` alanı bunu tek satırda söyler. Örnek: mezuniyet durumu 29 KB'den 4 KB'ye,
+  pano 12 KB'den 3 KB'ye indi
+- Başarılı OBS yanıtlarındaki `statusCode`, `resultCode`, `resultMessage` alanları sonuçtan
+  çıkarıldı. Hatalı yanıtlarda ve bir cevap taşıyan kodlarda (ör. `SCCSinifOgrenciYoklamaYok`)
+  korunuyor
+- Türkçe ve İngilizce gelen etiketler tek dilde veriliyor, ders adları farklıysa iki dilde
+  kalıyor. Dönem bilgisi sonuçta bir kez yer alıyor
+- `obs_get_schedule` artık `weekly_schedule` döndürüyor: gün, saat, ders, bina ve derslik, güne
+  ve saate göre sıralı
+- `obs_calculate_gpa`: kredi ve not kaynağı sonuçta bir kez bildiriliyor, sabit açıklamalar araç
+  tanımına taşındı, `ff_risk` ders kodlarını veriyor
+- `explain_course_eligibility` sonucu kararla başlıyor
+- `obs_get_registration_status` her program için `term_history` (tüm dönemlerin ortalaması)
+  döndürüyor
+- `archive_grade_distribution` varsayılan olarak son 6 dönemi ve yalnızca not sayılarını
+  döndürüyor. Yüzdeler için `include_percentages=true`, daha fazla dönem için `limit_terms`
+- Arşiv: kontenjanı hiç alınmamış dönemlerde (ör. 2022-2023 Güz) `capacity` artık 0 değil boş
+  dönüyor ve dönem `capacity_not_captured` ile işaretleniyor. Geçmiş araçları bir dönemin
+  verisinin alınıp alınmadığına dönem geneline bakarak karar veriyor, küçük bir branşın gerçekten
+  boş şubeleri "alınmamış" sayılmıyor
+- En ağır araçların varsayılan sonuç boyutu test ediliyor, boyut fark edilmeden büyüyemez
+
 ### Yükseltirken bilmen gerekenler
 
+- Ham OBS verisini okuyan bir betiğin varsa ilgili araca `include_raw=true` eklemen gerekir.
+  `obs_calculate_gpa` içinde kaldırılan sabit alanların (`note`, `scale`, `calculated_term_gpa`,
+  `credit_fallback_courses` ve benzerleri) geri alma seçeneği yoktur
 - `find_open_course_sections` içinde `available_seats` anlam değiştirdi: toplam boş yer değil,
   alınabilecek yer
 - `get_upcoming_deadlines` kayıt eskiyse kendiliğinden istek atabiliyor

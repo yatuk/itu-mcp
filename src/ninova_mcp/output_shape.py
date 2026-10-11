@@ -46,6 +46,19 @@ def _plain(text: Any) -> str:
     return str(text or "").translate(table).strip().lower()
 
 
+def _generic_code(code: Any) -> bool:
+    """Whether a result code only repeats "success".
+
+    OBS names its success codes after the endpoint (``SCCFinalTakvimi``,
+    ``SCCKayitliSinifListesi``): those say nothing new. A code ending in
+    ``Yok`` ("none", as in ``SCCSinifOgrenciYoklamaYok``) is the answer and stays.
+    """
+    plain = _plain(code)
+    if plain in _GENERIC_CODES:
+        return True
+    return plain.startswith("scc") and plain.isalnum() and not plain.endswith(("yok", "bulunamadi"))
+
+
 def is_success_envelope(payload: Any) -> bool:
     """A dict OBS answered with status 0 and nothing but its stock success text."""
     if not isinstance(payload, dict) or type(payload.get("statusCode")) is not int or payload["statusCode"] != 0:
@@ -70,7 +83,7 @@ def drop_success_envelope(value: Any, _depth: int = 0) -> Any:
     return {
         key: drop_success_envelope(item, _depth + 1)
         for key, item in value.items()
-        if not (success and key in ENVELOPE_KEYS and (key != "resultCode" or _plain(item) in _GENERIC_CODES))
+        if not (success and key in ENVELOPE_KEYS and (key != "resultCode" or _generic_code(item)))
     }
 
 
