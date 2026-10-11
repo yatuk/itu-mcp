@@ -45,7 +45,9 @@ class ItuPublicClient:
     )
     OBS_BASE = "https://obs.itu.edu.tr"
     DIRECTORY_BASE = "https://rehber.itu.edu.tr"
-    SHUTTLE_URL = "https://sks.itu.edu.tr/mekik-servis"
+    # Linked from the SKS home page as "Kampüs İçi Ring Servis"; the earlier
+    # /mekik-servis address answers 404.
+    SHUTTLE_URL = "https://sks.itu.edu.tr/kampus-ici-ring-servis"
     SPORTS_URL = "https://sks.itu.edu.tr/hizmetlerimiz/spor-hizmetleri/spor-tesisleri-saatleri"
     BUILDINGS_URL = "https://obs.itu.edu.tr/public/GenelTanimlamalar/BinaKodlariList"
 
@@ -242,7 +244,7 @@ class ItuPublicClient:
             self._cache.set("shuttle_html", cached)
         html, final_url = cached
         result = extract_shuttle_schedule(html, final_url, route=route, day_type=day_type)
-        result["source"] = "sks.itu.edu.tr/mekik-servis"
+        result["source"] = self.SHUTTLE_URL.removeprefix("https://")
         return self._mark(result)
 
     def get_sports_facility_hours(self, facility: str | None = None) -> dict[str, Any]:

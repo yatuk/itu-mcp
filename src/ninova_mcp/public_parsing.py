@@ -305,6 +305,12 @@ def extract_shuttle_schedule(
         "stop_list_count": len(stop_lists),
         "stop_lists": stop_lists,
     }
+    # The page opens with a sentence saying from which date the tables apply.
+    for node in soup.find_all(["strong", "p"]):
+        text = clean_text(node.get_text(" ", strip=True))
+        if "tarihinden itibaren" in text and len(text) < 400:
+            result["validity_note"] = text
+            break
     if not schedules and not stop_lists:
         result["parse_warning"] = "Mekik çizelgesi tablosu bulunamadı veya filtre eşleşmedi."
     return result

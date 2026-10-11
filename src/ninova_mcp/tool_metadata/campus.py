@@ -25,7 +25,12 @@ CAMPUS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_shuttle_schedule",
         "title": "İTÜ Shuttle Schedule",
-        "description": "Read official SKS shuttle/ring timetables and stop lists (public).",
+        "description": (
+            "Read the official SKS campus ring/shuttle timetables and stop lists of the Ayazağa "
+            "campus (public): the in-campus ring, the staff housing (kamu konutları) service and "
+            "the KYK Mühendishane dormitory service, weekday and weekend. 'validity_note' is the "
+            "page's own sentence on the date the tables apply from."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"route": {"type": "string"}, "day_type": {"type": "string", "description": "Optional page text filter, e.g. hafta içi/hafta sonu."}},
