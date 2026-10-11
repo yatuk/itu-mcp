@@ -6,21 +6,19 @@ exchanges them for a short-lived JWT via ``/ogrenci/auth/jwt``.
 
 from __future__ import annotations
 
-import base64
 import os
-import threading
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
 
 from .cache import TtlCache
-from .client import DEFAULT_HEADERS, NinovaAuthError, NinovaClient, _request_delay_seconds
+from .client import DEFAULT_HEADERS, _request_delay_seconds
 from .http_security import request_with_safe_redirects
 from .obs_errors import ObsError
+from .obs_registration_api import ObsRegistrationApi
 from .obs_redaction import (
     _EMAIL as _EMAIL,
     _REDACTION_NOTE as _REDACTION_NOTE,
@@ -38,6 +36,8 @@ from .obs_semesters import (
     _semester_tokens as _semester_tokens,
     describe_semester,
 )
+from .obs_session import DEFAULT_OBS_BASE_URL, JWT_PATH, STUDENT_HOME
+from .obs_student_api import ObsStudentRecordsApi
 from .parsing import (
     clean_text,
     extract_course_search_results,
@@ -46,7 +46,6 @@ from .parsing import (
     make_soup,
     normalize_lookup_text,
 )
-from .private_io import write_private_bytes
 
 __all__ = [
     "DEFAULT_OBS_BASE_URL",
@@ -60,333 +59,13 @@ __all__ = [
     "redact_obs_profile",
 ]
 
-DEFAULT_OBS_BASE_URL = "https://obs.itu.edu.tr"
-JWT_PATH = "/ogrenci/auth/jwt"
-STUDENT_HOME = "/ogrenci/"
 
+class ObsClient(ObsStudentRecordsApi, ObsRegistrationApi):
+    """Authenticated client for the OBS student API.
 
-class ObsClient:
-    def __init__(
-        self,
-        ninova_client: NinovaClient | None = None,
-        base_url: str | None = None,
-    ) -> None:
-        self.base_url = (
-            base_url or os.getenv("NINOVA_OBS_BASE_URL") or DEFAULT_OBS_BASE_URL
-        ).rstrip("/")
-        parsed_base = urlparse(self.base_url)
-        if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "obs.itu.edu.tr":
-            raise ObsError("NINOVA_OBS_BASE_URL must be https://obs.itu.edu.tr")
-        self._ninova = ninova_client
-        self._jwt: str | None = None
-        self._jwt_obtained_at: float | None = None
-        self._registration_check_lock = threading.Lock()
-        self._last_registration_check: float | None = None
-        self._jwt_ttl_seconds = float(os.getenv("NINOVA_OBS_JWT_TTL_SECONDS") or "1500")
-
-    @property
-    def ninova(self) -> NinovaClient:
-        if self._ninova is None:
-            self._ninova = NinovaClient()
-        return self._ninova
-
-    @property
-    def session(self) -> requests.Session:
-        return self.ninova.session
-
-    def _safe_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        return self.ninova._safe_request(method, url, **kwargs)
-
-    def ensure_ready(self) -> dict[str, Any]:
-        """Ensure Ninova/SSO session exists and the OBS JWT is genuinely valid.
-
-        Forces a real verification and a fresh token rather than trusting
-        cached state, since callers use this to answer "can I reach OBS right
-        now", not "did we think so up to ``_jwt_ttl_seconds`` ago". A stale
-        Ninova session or an expired JWT does not reliably surface as a
-        clean error from OBS (see ``_looks_like_obs_login_page``), so a soft
-        check here would keep reporting success after access has quietly died.
-        """
-        self.ninova.ensure_logged_in(verify=True)
-        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
-        token = self._get_jwt(force=True)
-        return {
-            "obs_base_url": self.base_url,
-            "jwt_present": bool(token),
-            "login_method": self.ninova.login_method,
-        }
-
-    def _looks_like_obs_login_page(self, response: requests.Response) -> bool:
-        """True if OBS answered with the İTÜ SSO login page instead of data.
-
-        A dead session commonly does not surface as 401/403 here: OBS (or
-        the SSO gateway in front of it) can return HTTP 200 with the login
-        page's HTML body. Treating that as a normal response means a stale
-        session silently returns login-page markup as if it were the
-        requested data, instead of a diagnosable error.
-        """
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        if "json" in content_type:
-            return False
-        text = response.text
-        if not text or text.lstrip()[:1] in {"{", "["}:
-            return False
-        return self.ninova._looks_like_login_page(response, html=text)
-
-    def _get_jwt(self, *, force: bool = False) -> str:
-        now = time.time()
-        if (
-            not force
-            and self._jwt
-            and self._jwt_obtained_at is not None
-            and (now - self._jwt_obtained_at) < self._jwt_ttl_seconds
-        ):
-            return self._jwt
-
-        self.ninova.ensure_logged_in()
-        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
-        response = self._safe_request("GET", self.base_url + JWT_PATH, timeout=30)
-        if response.status_code != 200 or not response.text.strip():
-            raise NinovaAuthError(
-                "Could not obtain OBS JWT. Log in via Ninova credentials and open "
-                "https://obs.itu.edu.tr/ogrenci/ in a browser to verify access."
-            )
-        token = response.text.strip().strip('"')
-        # A dead Ninova session can make this endpoint return the SSO login
-        # page's HTML instead of a token; a bare dot-count check would often
-        # accept that HTML as a plausible-looking token (page markup easily
-        # contains 2+ literal dots), so the login-page shape is checked too.
-        if token.count(".") < 2 or self._looks_like_obs_login_page(response):
-            raise NinovaAuthError(
-                "OBS returned a login page instead of a JWT. The İTÜ SSO session is "
-                "stale; call refresh_session and try again."
-            )
-        self._jwt = token
-        self._jwt_obtained_at = now
-        return token
-
-    def _headers(self) -> dict[str, str]:
-        token = self._get_jwt()
-        return {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": self.base_url + STUDENT_HOME,
-            "X-Requested-With": "XMLHttpRequest",
-        }
-
-    def api_get(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
-        return self._api_request("GET", path, params=params)
-
-    def _api_request(
-        self, method: str, path: str, *, params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
-    ) -> Any:
-        request_options: dict[str, Any] = {"params": params}
-        if json_body is not None:
-            request_options["json"] = json_body
-        if not path.startswith("/"):
-            path = "/" + path
-        url = self.base_url + path
-        self.ninova._throttle()
-        response = self._safe_request(
-            method,
-            url,
-            headers=self._headers(),
-            **request_options,
-            timeout=45,
-        )
-        if response.status_code in {401, 403} or self._looks_like_obs_login_page(response):
-            # A stale JWT alone doesn't explain a login-page body; the
-            # underlying Ninova/SSO session itself is usually what died, so
-            # this re-verifies that too rather than just re-minting a token
-            # against cookies that are already dead.
-            self.ninova.ensure_logged_in(verify=True)
-            self._get_jwt(force=True)
-            self.ninova._throttle()
-            response = self._safe_request(
-                method,
-                url,
-                headers=self._headers(),
-                **request_options,
-                timeout=45,
-            )
-            if self._looks_like_obs_login_page(response):
-                raise ObsError(
-                    f"OBS API {path} kept returning a login page after refreshing the "
-                    "session. Call refresh_session, or check access manually at "
-                    "https://obs.itu.edu.tr/ogrenci/."
-                )
-        if response.status_code >= 400:
-            # Some OBS endpoints return 500 when data is not yet published.
-            raise ObsError(f"OBS API {path} failed with HTTP {response.status_code}")
-        if not response.content:
-            return None
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        if "json" in content_type or response.text[:1] in {"{", "["}:
-            return response.json()
-        return response.text
-
-    # --- High-level reads ---
-
-    def get_profile(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/KisiselBilgiler/")
-
-    def list_programs(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/OgrenciProgamListesi/")
-
-    def list_semesters(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/DonemListesi/")
-
-    def get_registration_status(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/KayitDurumu")
-
-    def get_lesson_registration_status(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/DersKayitDurumu")
-
-    def get_registration_draft(self) -> dict[str, Any]:
-        from .registration_draft import read_registration_draft
-        return read_registration_draft(self)
-
-    def save_registration_draft(
-        self, crns: list[str], *, allow_replace: bool = False,
-        confirm_write: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
-    ) -> dict[str, Any]:
-        """Save a draft once and reconcile its contents; this does not enroll."""
-        from .registration_write import save_registration_draft
-        gate = {"confirm_write": confirm_write} if confirm_write is not None else {}
-        return save_registration_draft(self, crns, allow_replace=allow_replace, **gate)
-
-    def validate_registration_crns(self, crns: list[str]) -> dict[str, Any]:
-        """Run OBS's independent CRN check without saving or registering courses."""
-        from .registration_draft import VALIDATION_PATH, normalize_crns, normalize_validation
-        selected = normalize_crns(crns)
-        # OBS retains a short transaction lock after a check completes. Space
-        # independent section checks and serialize calls sharing this client.
-        with self._registration_check_lock:
-            for attempt in range(2):
-                if self._last_registration_check is not None:
-                    delay = 2.0 - (time.monotonic() - self._last_registration_check)
-                    if delay > 0:
-                        time.sleep(delay)
-                try:
-                    payload = self._api_request("POST", VALIDATION_PATH, json_body={"ecrn": selected})
-                finally:
-                    self._last_registration_check = time.monotonic()
-                if (attempt == 0 and isinstance(payload, dict)
-                        and payload.get("resultCode") in ("VAL16", "ERRMaxIstekTaslakKontrol")):
-                    continue
-                return normalize_validation(payload, selected)
-        # Not reached: the second attempt always returns or raises. Kept so the
-        # function visibly ends in a return or a raise on every path.
-        raise ObsError("OBS CRN validation remained busy.")
-
-    def get_advisor(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/DanismanBilgi")
-
-    def get_internships(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/StajBilgi")
-
-    def get_contacts(self) -> dict[str, Any]:
-        return self.api_get("/api/ogrenci/IletisimBilgileri")
-
-    def get_academic_status(self, program_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/AkademikDurum/{program_id}")
-
-    def get_debts(self, program_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/BorcBilgisi/{program_id}")
-
-    def get_graduation_remaining(self, program_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/MezuniyetimeNeKaldi/{program_id}")
-
-    def list_registered_courses(self, academic_semester_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/sinif/KayitliSinifListesi/{academic_semester_id}")
-
-    def get_letter_grades(self, academic_semester_id: int | str) -> dict[str, Any]:
-        """Read the student's course letter grades for one academic semester."""
-        return self.api_get(f"/api/ogrenci/Sinif/SinifHarfNotuListesi/{academic_semester_id}")
-
-    def get_midterm_grades(self, class_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/Sinif/SinifDonemIciNotListesi/{class_id}")
-
-    def get_attendance(self, class_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/Sinif/SinifOgrenciYoklama/{class_id}")
-
-    def get_schedule(self, academic_semester_id: int | str) -> dict[str, Any]:
-        return self.api_get(f"/api/ogrenci/Takvim/DersTakvimi/{academic_semester_id}")
-
-    def get_final_calendar(self, academic_semester_id: int | str) -> dict[str, Any]:
-        return self.api_get(
-            "/api/ogrenci/Takvim/FinalTakvimi",
-            params={"donemId": academic_semester_id},
-        )
-
-    def get_transcript_preview(self, *, english: bool = False) -> dict[str, Any]:
-        path = (
-            "/api/ogrenci/Belgeler/TranskriptIngilizceOnizleme"
-            if english
-            else "/api/ogrenci/Belgeler/TranskriptOnizleme"
-        )
-        return self.api_get(path)
-
-    # -- campus card (portal) ---------------------------------------------
-
-    def get_card_info(self) -> dict[str, Any]:
-        """Return structured campus card balance and info from the İTÜ Portal."""
-        html, url = self.ninova.get_portal_html("/apps/default/")
-        from .parsing import extract_campus_card_info
-
-        return extract_campus_card_info(html, url, base_url=self.base_url)
-
-    def save_transcript_pdf(
-        self,
-        output_dir: str | Path,
-        *,
-        english: bool = False,
-        filename: str | None = None,
-    ) -> dict[str, Any]:
-        payload = self.get_transcript_preview(english=english)
-        b64 = payload.get("belgeAsByteArray") if isinstance(payload, dict) else None
-        if not b64:
-            raise ObsError("Transcript preview did not include belgeAsByteArray.")
-        raw = base64.b64decode(b64)
-        target_dir = Path(output_dir).expanduser().resolve()
-        name = filename or ("transcript-en.pdf" if english else "transcript-tr.pdf")
-        path = target_dir / name
-        # The transcript is owner-only (0600 on POSIX). The directory is the
-        # caller's choice, so its own permissions are left alone.
-        write_private_bytes(path, raw, private_dir=False)
-        return {
-            "path": str(path),
-            "size_bytes": len(raw),
-            "english": english,
-            "statusCode": payload.get("statusCode") if isinstance(payload, dict) else None,
-        }
-
-    def default_program_id(self) -> int:
-        programs = self.list_programs()
-        items = programs.get("ogrenciProgramBilgiListesi") or []
-        if not items:
-            raise ObsError("No OBS student programs found.")
-        return int(items[0]["ogrenciProgramId"])
-
-    def resolve_semester(
-        self,
-        semester: str | int | None = None,
-    ) -> dict[str, Any]:
-        data = self.list_semesters()
-        items = data.get("ogrenciDonemListesi") or []
-        if not items:
-            raise ObsError("No OBS semesters found.")
-        if semester is None:
-            return items[-1]
-        target_raw = _semester_lookup_text(semester)
-        # An exact id or term code wins over any name fragment of another term.
-        for item in items:
-            if str(item.get("akademikDonemId")) == target_raw:
-                return item
-            if str(item.get("donemKodu")) == target_raw:
-                return item
-        return _resolve_semester_by_name(items, semester, target_raw)
+    The session and request core is ``ObsSessionCore``; the endpoint groups
+    are ``ObsStudentRecordsApi`` and ``ObsRegistrationApi``.
+    """
 
 
 class ObsPublicClient:
