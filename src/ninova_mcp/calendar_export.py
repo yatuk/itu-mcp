@@ -244,7 +244,7 @@ class CalendarExportToolsMixin:
 
     def export_course_schedule_ics(
         self,
-        crns: list[str],
+        crns: list[str | int],
         department_codes: list[str],
         program_type: str = "LS",
         term_start: str | None = None,

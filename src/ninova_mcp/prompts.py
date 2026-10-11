@@ -152,12 +152,12 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
         )
     if target_gpa.strip():
         lines.append(
-            f"3. `calculate_target_gpa(...)` ile {target_gpa.strip()} GANO'ya "
+            f"3. `obs_simulate_cumulative_gpa(target_gpa=...)` ile {target_gpa.strip()} GANO'ya "
             "ulaşmak için kalan derslerde gereken ortalamayı hesapla."
         )
     else:
         lines.append(
-            "3. Kullanıcı bir hedef GANO söylerse `calculate_target_gpa(...)` "
+            "3. Kullanıcı bir hedef GANO söylerse `obs_simulate_cumulative_gpa(target_gpa=...)` "
             "ile gereken ortalamayı hesapla."
         )
     lines.append(

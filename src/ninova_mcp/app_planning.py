@@ -289,6 +289,7 @@ class PlanningToolsMixin:
         self,
         class_scores: list[float],
         my_score: float,
+        my_score_included: bool | None = None,
     ) -> dict[str, Any]:
         """Estimate a likely letter grade under İTÜ's relative-grading rules.
 
@@ -299,7 +300,7 @@ class PlanningToolsMixin:
         """
         from .relative_grading import estimate_relative_grade
 
-        return estimate_relative_grade(class_scores=class_scores, my_score=my_score)
+        return estimate_relative_grade(class_scores=class_scores, my_score=my_score, my_score_included=my_score_included)
 
     def _obs_login_available(self) -> bool:
         """Whether an OBS read can be tried without starting a doomed login."""
@@ -370,7 +371,7 @@ class PlanningToolsMixin:
 
     def check_course_conflicts(
         self,
-        crns: list[str],
+        crns: list[str | int],
         program_type: str = "LS",
         department_code: str | None = None,
         department_codes: list[str] | None = None,

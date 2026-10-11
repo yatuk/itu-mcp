@@ -160,6 +160,13 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                     "maximum": 100,
                     "description": "Your own raw 0-100 score.",
                 },
+                "my_score_included": {
+                    "type": "boolean",
+                    "description": (
+                        "true: my_score is already in class_scores; false: add it even if a classmate "
+                        "has the same score; omitted: counted as included when the value is in the list."
+                    ),
+                },
             },
             "required": ["class_scores", "my_score"],
             "additionalProperties": False,

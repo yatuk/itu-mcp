@@ -82,10 +82,11 @@ class ObsRecordToolsMixin:
         return self.obs.list_semesters()
 
     def obs_get_grade_distribution(
-        self, course_code: str, year: int | None = None, term_code: str | None = None,
+        self, course_code: str, year: int | None = None, term_code: str | int | None = None,
     ) -> dict[str, Any]:
         from .grade_distribution import get_grade_distribution
-        return get_grade_distribution(self.obs_public, course_code, year, term_code)
+        code = None if term_code is None else str(term_code).strip()
+        return get_grade_distribution(self.obs_public, course_code, year, code)
 
     def obs_get_advisor(self) -> dict[str, Any]:
         return self.obs.get_advisor()

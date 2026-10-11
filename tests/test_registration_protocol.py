@@ -151,7 +151,7 @@ class RegistrationProtocolTests(unittest.TestCase):
         distribution = tools["obs_get_grade_distribution"]["inputSchema"]
         self.assertEqual(distribution["properties"]["course_code"]["type"], "string")
         self.assertEqual({option["type"] for option in distribution["properties"]["year"]["anyOf"]}, {"integer", "null"})
-        self.assertEqual({option["type"] for option in distribution["properties"]["term_code"]["anyOf"]}, {"string", "null"})
+        self.assertEqual({option["type"] for option in distribution["properties"]["term_code"]["anyOf"]}, {"string", "integer", "null"})
         self.assertEqual(distribution["required"], ["course_code"])
 
     def test_draft_write_is_disabled_by_default_over_real_stdio(self) -> None:

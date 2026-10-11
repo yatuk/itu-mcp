@@ -467,7 +467,8 @@ the published tool set.
 - CLI: `itu-mcp --version`, `--check-auth`, `--list-tools`, or no args for the stdio server.
 - **OBS** tools are prefixed with `obs_`. They reuse the same İTÜ username/password (SSO),
   open `obs.itu.edu.tr/ogrenci/`, fetch a JWT from `/ogrenci/auth/jwt`, and call
-  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact TCKN/phone by default;
+  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact ID numbers, e-mail, phone, address and birth details by default
+  and list the hidden fields in `redacted_fields`;
   `include_sensitive=true` needs `NINOVA_ALLOW_SENSITIVE_OUTPUT=1`.
 
 ### OBS tools
