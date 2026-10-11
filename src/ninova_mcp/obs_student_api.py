@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .obs_errors import ObsError
-from .obs_semesters import _resolve_semester_by_name, _semester_lookup_text
+from .obs_semesters import pick_semester
 from .obs_session import ObsSessionCore
 from .private_io import write_private_bytes
 
@@ -119,17 +119,6 @@ class ObsStudentRecordsApi(ObsSessionCore):
         self,
         semester: str | int | None = None,
     ) -> dict[str, Any]:
+        """Resolve an id, a term code or a term name; ``None`` is the latest term."""
         data = self.list_semesters()
-        items = data.get("ogrenciDonemListesi") or []
-        if not items:
-            raise ObsError("No OBS semesters found.")
-        if semester is None:
-            return items[-1]
-        target_raw = _semester_lookup_text(semester)
-        # An exact id or term code wins over any name fragment of another term.
-        for item in items:
-            if str(item.get("akademikDonemId")) == target_raw:
-                return item
-            if str(item.get("donemKodu")) == target_raw:
-                return item
-        return _resolve_semester_by_name(items, semester, target_raw)
+        return pick_semester(data.get("ogrenciDonemListesi") or [], semester)
