@@ -8,7 +8,7 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_campus_card",
         "title": "OBS Campus Card",
-        "description": "Read campus card balance and recent transactions from OBS (requires login).",
+        "description": "Read campus card balance and recent transactions from the İTÜ Portal (requires login). Each transaction has amount (the transaction) and balance_after (card balance after it).",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -73,7 +73,7 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_cloud_quota",
         "title": "Cloud & Mail Quota",
-        "description": "Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login).",
+        "description": "Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login). used and total are the Portal's own text; used_value/total_value are numbers with used_unit/total_unit. The mail quota arrives without a unit: assumed_unit and unit_note say so.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
 ]

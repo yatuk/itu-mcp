@@ -178,6 +178,9 @@ def campus_card(data: dict[str, Any]) -> dict[str, Any]:
         type_id = _text(row.get("TypeId"))
         transactions.append({
             "type": "spending" if type_id in ("1", "10", "20") else "credit" if type_id else None,
+            "balance_after": f"₺ {remaining}" if remaining is not None else None,
+            "amount": f"₺ {amount}" if amount is not None else None,
+            # Kept for older callers: balance after the transaction, then its amount.
             "amounts": [f"₺ {value}" for value in (remaining, amount) if value is not None],
             "description": _text(row.get("TypeName")),
         })
@@ -187,9 +190,52 @@ def campus_card(data: dict[str, Any]) -> dict[str, Any]:
         "transactions": transactions[:20],
         "transaction_count": len(transactions) if history_available else None,
         "transactions_available": history_available,
+        "transaction_fields_note": "balance_after is the card balance after the transaction; amount is the transaction itself.",
         "checked_at": _text(info.get("BalanceGetDate")),
         "source": _PORTAL + "service/service.aspx/GetBalance",
         "untrusted_external_content": True,
+    }
+
+
+_UNIT_BYTES = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+# The mail widget prints bare numbers. Mailbox quotas are counted in GB; the
+# Portal does not say so, which is why this is reported as an assumption.
+_ASSUMED_UNITS = {"mail": "GB"}
+
+
+def _number(value: str | None) -> float | None:
+    if value is None or not re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?", value.strip().lstrip("%").strip()):
+        return None
+    return float(value.strip().lstrip("%").strip().replace(",", "."))
+
+
+def _amount(value: str | None) -> tuple[float | None, str | None]:
+    """Split ``"12 MB"`` or ``"0,18"`` into a number and a stated unit."""
+    match = re.fullmatch(r"([0-9]+(?:[.,][0-9]+)?)\s*([KMGT]?B)?", (value or "").strip(), re.IGNORECASE)
+    if not match:
+        return None, None
+    return float(match.group(1).replace(",", ".")), (match.group(2).upper() if match.group(2) else None)
+
+
+def _quota_units(name: str, used: str | None, total: str | None) -> dict[str, Any]:
+    used_value, used_unit = _amount(used)
+    total_value, total_unit = _amount(total)
+    stated = used_unit is not None and total_unit is not None
+    bare = used_unit is None and total_unit is None and used_value is not None and total_value is not None
+    assumed = _ASSUMED_UNITS.get(name) if bare else None
+    note = None
+    if not stated:
+        note = "The Portal does not state a unit for this quota."
+        if bare:
+            note += " Both numbers use the same unit."
+        if assumed:
+            note += f" {assumed} is assumed for this service."
+    return {
+        "used_value": used_value, "used_unit": used_unit,
+        "total_value": total_value, "total_unit": total_unit,
+        "used_bytes": int(used_value * _UNIT_BYTES[used_unit]) if used_value is not None and used_unit else None,
+        "total_bytes": int(total_value * _UNIT_BYTES[total_unit]) if total_value is not None and total_unit else None,
+        "assumed_unit": assumed, "unit_note": note,
     }
 
 
@@ -205,9 +251,15 @@ def storage_quota(get_json: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
             info = _information(portal_call(get_json, operation), "KotaInformation")
             percent = _text(info.get("KotaYuzde"))
             used, total = _text(info.get("KotaKullanilan")), _text(info.get("KotaTotal"))
+            units = _quota_units(name, used, total)
+            suffix = ""
+            if units["unit_note"]:
+                suffix = f" ({units['assumed_unit']} assumed, unit not stated)" if units["assumed_unit"] else " (unit not stated)"
+            item.update(units)
             item.update({
                 "usage_percent": f"%{percent.lstrip('%')}" if percent is not None else None,
-                "details": f"Storage used: {used} / {total}" if used is not None and total is not None else None,
+                "usage_percent_value": _number(percent),
+                "details": f"Storage used: {used} / {total}{suffix}" if used is not None and total is not None else None,
                 "used": used, "total": total, "checked_at": _text(info.get("KotaGetDate")),
                 "available": all(value is not None for value in (percent, used, total)),
             })
