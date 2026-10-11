@@ -10,6 +10,15 @@ from .obs_public_transport import ObsPublicTransport
 from .parsing import normalize_lookup_text
 
 
+# OBS'nin kendi formu bu iki anahtarı Türkçe harfsiz gönderir; harfli hali HTTP 500 döndürür.
+_WIRE_PROGRAM_TYPES = {"ÖL": "OL", "LUİ": "LUI"}
+
+
+def _wire_program_type(program_type: str) -> str:
+    """The value the public schedule form submits for a canonical programme type."""
+    return _WIRE_PROGRAM_TYPES.get(program_type, program_type)
+
+
 class ObsPublicSchedule(ObsPublicTransport):
     """Department lists and the course schedule of the active semester."""
 
@@ -58,7 +67,7 @@ class ObsPublicSchedule(ObsPublicTransport):
 
         html, _url = self._get_html(
             "/public/DersProgram/SearchBransKoduByProgramSeviye",
-            params={"programSeviyeTipiAnahtari": pt},
+            params={"programSeviyeTipiAnahtari": _wire_program_type(pt)},
         )
         import json as _json
 
@@ -87,7 +96,7 @@ class ObsPublicSchedule(ObsPublicTransport):
 
         html, _url = self._get_html(
             "/public/DersProgram/GetAktifDonemByProgramSeviye",
-            params={"programSeviyeTipiAnahtari": pt},
+            params={"programSeviyeTipiAnahtari": _wire_program_type(pt)},
         )
         import json as _json
 
@@ -116,7 +125,7 @@ class ObsPublicSchedule(ObsPublicTransport):
         html, url = self._get_html(
             "/public/DersProgram/DersProgramSearch",
             params={
-                "ProgramSeviyeTipiAnahtari": pt,
+                "ProgramSeviyeTipiAnahtari": _wire_program_type(pt),
                 "DersBransKoduId": str(dept_id),
             },
         )

@@ -173,3 +173,13 @@ class GpaRangeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WireProgramTypeTest(unittest.TestCase):
+    def test_obs_receives_the_ascii_keys_its_own_form_sends(self) -> None:
+        from ninova_mcp.obs_public_schedule import _wire_program_type
+
+        self.assertEqual(_wire_program_type("ÖL"), "OL")
+        self.assertEqual(_wire_program_type("LUİ"), "LUI")
+        self.assertEqual(_wire_program_type("LS"), "LS")
+        self.assertEqual(_wire_program_type("LU"), "LU")
