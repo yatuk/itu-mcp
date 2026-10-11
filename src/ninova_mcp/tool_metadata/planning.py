@@ -165,7 +165,11 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
         "title": "Check Course Conflicts",
         "description": (
             "Check for schedule time conflicts between courses by CRN. "
-            "Uses the public course schedule to look up session day/time/room."
+            "Uses the public course schedule to look up session day/time/room. "
+            "Give only the CRNs: the department of each CRN is found from the course archive "
+            "(no login) and, for what is left, from the student's registered courses when "
+            "logged in. Read status: ok, partial (missing_crns were not checked), not_found, "
+            "or departments_required (pass department_codes)."
         ),
         "inputSchema": {
             "type": "object",
@@ -182,14 +186,19 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                 },
                 "department_code": {
                     "type": "string",
-                    "default": "BLG",
-                    "description": "Department code (default: 'BLG').",
+                    "description": (
+                        "Optional single department to scan, e.g. 'MAT'. Omit it to let the "
+                        "tool find the departments of the CRNs."
+                    ),
                 },
                 "department_codes": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 25,
-                    "description": "Optional multi-department scan; overrides department_code.",
+                    "description": (
+                        "Optional departments to scan, e.g. ['MAT', 'FIZ']; overrides "
+                        "department_code. Omit it to let the tool find them."
+                    ),
                 },
             },
             "required": ["crns"],

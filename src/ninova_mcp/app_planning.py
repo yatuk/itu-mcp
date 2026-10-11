@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import math
+import os
 from typing import Annotated, Any
 
 from .client import NinovaError
@@ -297,47 +298,171 @@ class PlanningToolsMixin:
 
         return estimate_relative_grade(class_scores=class_scores, my_score=my_score)
 
+    def _obs_login_available(self) -> bool:
+        """Whether an OBS read can be tried without starting a doomed login."""
+        return self._obs is not None or bool(  # type: ignore[attr-defined]
+            os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD")
+        )
+
+    def _registered_course_rows(self) -> list[dict[str, Any]]:
+        """Registered courses of the student's latest term, as OBS lists them."""
+        resolved = self.obs.resolve_semester(None)
+        payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
+        if not isinstance(payload, dict) or payload.get("statusCode") not in (None, 0):
+            raise ObsError("Kayıtlı ders listesi okunamadı.")
+        rows = payload.get("kayitSinifResultList")
+        if rows is None:
+            return []
+        if not isinstance(rows, list):
+            raise ObsError("Kayıtlı ders listesi beklenmeyen biçimde.")
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _departments_of_crns(
+        self, crns: list[str], program_type: str,
+    ) -> tuple[dict[str, str], list[str], list[str]]:
+        """Find the department of each CRN: ``(crn -> department, sources, notes)``.
+
+        The archive's search index of the current term is read first, since it
+        needs no login. The student's registered courses are read only for the
+        CRNs it leaves open, and only when a login is possible. Neither source
+        raises: what failed is returned as a note. The caller still confirms
+        every CRN against the live schedule of the department found here.
+        """
+        from .seat_watch import term_key
+
+        found: dict[str, str] = {}
+        sources: list[str] = []
+        notes: list[str] = []
+        try:
+            index = self.archive.get_index()
+            slug = index.get("currentSlug")
+            rows = self.archive.get_term_search(str(slug)) if slug else None
+            active = self.obs_public.get_active_semester(program_type)
+            if not rows:
+                notes.append("Ders arşivinde güncel dönemin arama dizini yok.")
+            elif not active or term_key(active) != term_key(index.get("currentTerm")):
+                # CRNs are reused between terms, so another term's index proves nothing.
+                notes.append("Ders arşivinin güncel dönemi OBS'nin aktif dönemiyle eşleşmiyor; arşiv kullanılmadı.")
+            else:
+                by_crn = {
+                    str(row[0]).strip(): str(row[3]).strip().upper()
+                    for row in rows if isinstance(row, list) and len(row) >= 4 and row[3]
+                }
+                found.update({crn: by_crn[crn] for crn in crns if by_crn.get(crn)})
+                if found:
+                    sources.append("archive_search_index")
+        except (ItuArchiveError, NinovaError) as exc:
+            notes.append(f"Ders arşivinden bölüm bulunamadı: {exc}")
+
+        open_crns = [crn for crn in crns if crn not in found]
+        if not open_crns:
+            return found, sources, notes
+        if not self._obs_login_available():
+            notes.append("OBS kayıtlı dersleri okunmadı: giriş bilgisi tanımlı değil.")
+            return found, sources, notes
+        try:
+            registered = {
+                str(row.get("crn") or "").strip(): str(row.get("bransKodu") or "").strip().upper()
+                for row in self._registered_course_rows()
+            }
+        except Exception as exc:  # noqa: BLE001 - an optional lookup must never fail the tool
+            notes.append(f"OBS kayıtlı dersleri okunamadı ({type(exc).__name__}).")
+            return found, sources, notes
+        from_obs = {crn: registered[crn] for crn in open_crns if registered.get(crn)}
+        if from_obs:
+            found.update(from_obs)
+            sources.append("obs_registered_courses")
+        return found, sources, notes
+
     def check_course_conflicts(
         self,
         crns: list[str],
         program_type: str = "LS",
-        department_code: str = "BLG",
+        department_code: str | None = None,
         department_codes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Check for time conflicts between courses by their CRNs.
 
-        Uses the public course schedule to look up session times.
+        Uses the public course schedule to look up session times. Without a
+        department the departments are found from the CRNs themselves.
         """
         from .schedule_utils import check_conflicts
 
-        departments = department_codes or [department_code]
-        departments = list(dict.fromkeys(code.strip().upper() for code in departments if code.strip()))
-        if not departments:
-            raise ObsError("En az bir department_code gerekli.")
-        if len(departments) > 25:
+        targets = list(dict.fromkeys(
+            str(crn).strip() for crn in (crns or []) if not isinstance(crn, bool) and str(crn).strip()
+        ))
+        if not targets:
+            raise ObsError("En az bir CRN gerekli.")
+        given = department_codes or ([department_code] if department_code else [])
+        explicit = list(dict.fromkeys(str(code).strip().upper() for code in given if str(code).strip()))
+        if len(explicit) > 25:
             raise ObsError("Tek çağrıda en fazla 25 bölüm taranabilir.")
-        schedules = [self.obs_public.get_course_schedule(program_type, code) for code in departments]
-        all_courses: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for schedule in schedules:
-            for course in schedule.get("courses") or []:
-                crn_value = str(course.get("crn") or "")
-                if crn_value and crn_value not in seen:
-                    all_courses.append(course)
-                    seen.add(crn_value)
-        target_crns = {str(c).strip() for c in crns}
-        matched = [c for c in all_courses if str(c.get("crn")) in target_crns]
+        supply_hint = (
+            "Bu CRN'lerin bağlı olduğu bölüm kodlarını department_codes ile verin "
+            "(örn. ['MAT', 'FIZ']); bölüm kodu ders kodunun harf kısmıdır."
+        )
+        base: dict[str, Any] = {"program_type": program_type}
+        notes: list[str] = []
+        if explicit:
+            departments, sources = explicit, ["parameter"]
+        else:
+            mapping, sources, notes = self._departments_of_crns(targets, program_type)
+            departments = sorted(set(mapping.values()))[:25]
+            if not departments:
+                return {
+                    **base,
+                    "status": "departments_required",
+                    "missing_crns": targets,
+                    "departments_scanned": [],
+                    "department_codes": [],
+                    "departments_resolved_by": [],
+                    "resolution_notes": notes,
+                    "hint": "CRN'lerin bölümü kendiliğinden bulunamadı; çakışma kontrolü yapılmadı. " + supply_hint,
+                }
 
+        all_courses: dict[str, dict[str, Any]] = {}
+        scanned: list[str] = []
+        for code in departments:
+            try:
+                schedule = self.obs_public.get_course_schedule(program_type, code)
+            except ObsError as exc:
+                if explicit:
+                    raise
+                notes.append(f"{code} programı okunamadı: {exc}")
+                continue
+            scanned.append(code)
+            for course in schedule.get("courses") or []:
+                crn_value = str(course.get("crn") or "").strip()
+                if crn_value:
+                    all_courses.setdefault(crn_value, course)
+        matched = [all_courses[crn] for crn in targets if crn in all_courses]
+        missing = [crn for crn in targets if crn not in all_courses]
+        base.update({
+            "department_codes": scanned,
+            "departments_scanned": scanned,
+            "departments_resolved_by": sources,
+            "missing_crns": missing,
+        })
+        if notes:
+            base["resolution_notes"] = notes
         if not matched:
             return {
-                "error": f"Hiçbir CRN bulunamadı. Aranan: {crns}. "
-                         f"Mevcut: {', '.join(str(c.get('crn')) for c in all_courses[:20])}"
+                **base,
+                "status": "not_found",
+                "hint": (
+                    f"Verilen CRN'lerin hiçbiri taranan bölümlerde ({', '.join(scanned) or 'yok'}) yok; "
+                    "çakışma kontrolü yapılmadı. " + supply_hint
+                ),
             }
 
         result = check_conflicts(matched)
-        result["program_type"] = program_type
-        result["department_codes"] = departments
-        result["missing_crns"] = sorted(target_crns - {str(course.get("crn")) for course in matched})
+        result.update(base)
+        result["status"] = "partial" if missing else "ok"
+        if missing:
+            result["hint"] = (
+                f"Çakışma kontrolü yalnızca bulunan {len(matched)} CRN'i kapsıyor; "
+                f"{', '.join(missing)} taranan bölümlerde yok. " + supply_hint
+            )
         return result
 
     def list_degree_faculties(self) -> dict[str, Any]:
