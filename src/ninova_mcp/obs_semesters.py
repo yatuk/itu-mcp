@@ -28,7 +28,8 @@ _LISTED_TERMS = 8
 def pick_semester(items: list[dict[str, Any]], semester: Any) -> dict[str, Any]:
     """The term of ``items`` (oldest first) that ``semester`` names.
 
-    ``None`` means the latest term. An exact id or term code wins over any
+    ``None`` means the latest term, and so does text that is empty once
+    spaces and quotes are removed. An exact id or term code wins over any
     name; a name has to identify one term, except a season on its own.
     """
     if not items:
@@ -36,6 +37,8 @@ def pick_semester(items: list[dict[str, Any]], semester: Any) -> dict[str, Any]:
     if semester is None:
         return items[-1]
     target_raw = _semester_lookup_text(semester)
+    if not target_raw:
+        return items[-1]
     # An exact id or term code wins over any name fragment of another term.
     for item in items:
         if str(item.get("akademikDonemId")) == target_raw:

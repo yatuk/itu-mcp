@@ -509,7 +509,7 @@ class SemesterMessageTests(unittest.TestCase):
         self.assertTrue(message.endswith("2050 Part 10 (term code 3010), id 10."))
 
     def test_not_found_messages(self) -> None:
-        for query in ("2050-2051 Bahar", "ah", "", "dönemi", "kış", "bahar güz", "   "):
+        for query in ("2050-2051 Bahar", "ah", "dönemi", "kış", "bahar güz"):
             with self.subTest(query=query):
                 self.assertEqual(self.failure(query), f"Semester not found: {query}. Examples: {ALL_TERMS_LISTING}")
 
