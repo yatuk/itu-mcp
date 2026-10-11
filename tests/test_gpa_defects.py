@@ -194,8 +194,9 @@ class PlanCreditFallbackTests(unittest.TestCase):
         self.assertNotIn("credits_unresolved", result)
         course = by_code(result, "ZZT 210E")
         self.assertEqual(course["credit"], 4)
-        self.assertEqual(course["credit_source"], "degree_plan_other_term")
-        self.assertEqual(result["credit_fallback_courses"], ["ZZT 210E"])
+        # The source every course shares is stated once, not on each course.
+        self.assertEqual(result["credit_source"], "degree_plan_other_term")
+        self.assertNotIn("credit_source", course)
 
     def test_credit_comes_from_an_earlier_passed_attempt_of_a_retake(self) -> None:
         app = make_app([reg("ZZT", "220E", "40022")],
@@ -209,14 +210,14 @@ class PlanCreditFallbackTests(unittest.TestCase):
         app = make_app([reg("ZZT", "230E", "40023")], met_rows=[unmet("ZZT 230E", 2)])
         result = app.obs_calculate_gpa(semester=TERM, include_official=False)
         self.assertEqual(by_code(result, "ZZT 230E")["credit"], 2)
-        self.assertEqual(by_code(result, "ZZT 230E")["credit_source"], "degree_plan")
+        self.assertEqual(result["credit_source"], "degree_plan")
 
     def test_same_term_row_is_preferred_over_another_attempt(self) -> None:
         app = make_app([reg("ZZT", "240E", "40024")], met_rows=[met("ZZT 240E", "CC", 3)],
                        unused_rows=[unused("ZZT 240E", "FF", 4, "203010")])
         result = app.obs_calculate_gpa(semester=TERM, include_official=False)
         self.assertEqual(by_code(result, "ZZT 240E")["credit"], 3)
-        self.assertEqual(by_code(result, "ZZT 240E")["credit_source"], "degree_plan")
+        self.assertEqual(result["credit_source"], "degree_plan")
 
     def test_conflicting_credits_across_other_attempts_stay_unresolved(self) -> None:
         app = make_app([reg("ZZT", "250E", "40025")], unused_rows=[
@@ -230,7 +231,7 @@ class PlanCreditFallbackTests(unittest.TestCase):
         result = app.obs_calculate_gpa(semester=TERM, include_official=False)
         self.assertEqual(result["ungraded_course_count"], 1)
         self.assertIsNone(result["gpa"])
-        self.assertNotIn("grade_fallback_courses", result)
+        self.assertEqual(result["grade_source"], "registration")
 
 
 class ElectiveSlotCreditTests(unittest.TestCase):
@@ -348,7 +349,7 @@ class AllFailedTermTests(unittest.TestCase):
         result = app.obs_calculate_gpa(semester=203130)
         self.assertEqual(result["gpa"], 0.0)
         self.assertEqual(result["total_credits"], 7)
-        self.assertEqual([c["code"] for c in result["ff_risk"]], ["ZZT 180E", "ZZT 190E"])
+        self.assertEqual(result["ff_risk"], ["ZZT 180E", "ZZT 190E"])
         self.assertEqual(result["official_reference"]["status"], "reported")
         self.assertEqual(result["official_term_gpa"], 0)
         self.assertEqual(result["official_term_credits"], 0)

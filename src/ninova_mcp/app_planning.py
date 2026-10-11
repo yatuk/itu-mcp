@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import math
 import os
 from typing import Annotated, Any
@@ -12,6 +11,8 @@ from .archive_client import ItuArchiveClient, ItuArchiveError
 from .community_data import CrossCheckDataClient, CrossCheckDataError
 from .graduation import summarize_graduation_plan
 from .obs_client import ObsClient, ObsError, ObsPublicClient
+from .tool_params import publish_include_raw
+from .tool_params import publish_parameter_schema as _publish_parameter_schema
 
 
 class PlanningToolsMixin:
@@ -41,6 +42,7 @@ class PlanningToolsMixin:
         from .gpa import (
             attempt_notes,
             calculate_gpa,
+            compact_term_result,
             parse_credit,
             plan_credit_table,
             plan_rows,
@@ -50,6 +52,7 @@ class PlanningToolsMixin:
         )
         from .gpa_reference import attach_official_reference, official_term_reference
         from .grading import LETTER_TO_GRADE, normalize_grade
+        from .output_shape import term_reference
         from .parsing import normalize_lookup_text
 
         # A bad grade is rejected before OBS is contacted.
@@ -84,9 +87,7 @@ class PlanningToolsMixin:
         plan_grades = self._plan_grade_lookup(graduation_info, term_code)
 
         courses: list[dict[str, Any]] = []
-        credit_fallbacks: list[str] = []
         missing_credits: list[str] = []
-        grade_fallbacks: list[str] = []
         for item in registered:
             code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
             try:
@@ -107,7 +108,6 @@ class PlanningToolsMixin:
                     credit_source = (
                         "degree_plan_other_term" if plan["scope"] == "other_term" else "degree_plan"
                     )
-                    credit_fallbacks.append(code)
                 else:
                     missing_credits.append(code)
 
@@ -118,7 +118,6 @@ class PlanningToolsMixin:
                 if fallback_grade:
                     grade = fallback_grade
                     grade_source = "degree_plan"
-                    grade_fallbacks.append(code)
 
             course = {
                 "code": code,
@@ -182,7 +181,7 @@ class PlanningToolsMixin:
             result, reference, projection=bool(projected_grades),
             ambiguous_credits=ambiguity["courses"] if ambiguity else [],
         )
-        result["semester"] = resolved
+        result["semester"] = term_reference(resolved)
         result["attempts_status"] = "from_graduation_plan" if graduation_info else "unavailable"
         if ambiguity:
             result["credit_ambiguity"] = ambiguity
@@ -201,25 +200,13 @@ class PlanningToolsMixin:
                 "No course of this term matches: " + ", ".join(unmatched_keys)
                 + ". Use a code or CRN from valid_projected_keys."
             )
-        if credit_fallbacks:
-            result["credit_fallback_courses"] = credit_fallbacks
-            result["credit_fallback_note"] = (
-                "Bu derslerin kayıt kaydında geçerli kredi bulunamadı; "
-                "hesaplama için kredi ders planından alındı."
-            )
-        if missing_credits:
-            result["credits_unresolved"] = missing_credits
-            result["credits_unresolved_note"] = (
-                "Bu dersler için güvenilir kredi belirlenemedi. "
-                "Hesaplama kapsamı ve bilinen derslerin ortalaması ayrı değerlendirilmelidir."
-            )
-        if grade_fallbacks:
-            result["grade_fallback_courses"] = grade_fallbacks
-            result["grade_fallback_note"] = (
-                "Bu derslerin notu kayıt kaydında boş geldi; not mezuniyet durumu "
-                "(MezuniyetimeNeKaldi) verisinden, bu döneme ait kayıttan alındı."
-            )
-        return result
+        # A course whose grade stays out of the average (BL, BZ and the like)
+        # needs no credit: a pass/fail course of zero credit is not a gap.
+        credit_not_needed = {course.get("code") for course in result["excluded_courses"]}
+        unresolved = [code for code in missing_credits if code not in credit_not_needed]
+        if unresolved:
+            result["credits_unresolved"] = unresolved
+        return compact_term_result(result, projection_requested=bool(projected_grades))
 
     def _fetch_graduation_info(self) -> dict[str, Any]:
         """Fetch and unwrap the MezuniyetimeNeKaldi payload once.
@@ -526,10 +513,16 @@ class PlanningToolsMixin:
         completed_credits: float | None = None,
         class_year: int | None = None,
         program_type: str = "LS",
+        include_raw: bool = False,
     ) -> dict[str, Any]:
-        """Explain prerequisite eligibility against the official OBS rule table."""
-        from .archive import split_course_code
-        from .prerequisites import compare_required_course_sets, describe_tree, evaluate_tree
+        """Explain prerequisite eligibility against the official OBS rule table.
+
+        The verdict comes first. The whole completed-course history and the
+        rule tree behind it are returned only with ``include_raw``.
+        """
+        from .archive import normalize_course_code, split_course_code
+        from .output_shape import RAW_AVAILABLE_KEY, raw_hint
+        from .prerequisites import compare_required_course_sets, describe_tree, evaluate_tree, flatten_courses
 
         try:
             branch, number = split_course_code(course_code)
@@ -637,16 +630,24 @@ class PlanningToolsMixin:
                 return None
             return {**summary, "note": seasonality_sentence(canonical, summary)}
 
-        result: dict[str, Any] = {
-            "course_code": canonical,
-            "completed_courses": sorted(completed),
-            "completed_grades": completed,
+        result: dict[str, Any] = {"course_code": canonical}
+        # What the verdict was computed from. It follows the verdict in the
+        # result, and the full history is listed only on request.
+        context: dict[str, Any] = {
             "completed_credits": completed_credits,
+            "completed_course_count": len(completed),
             "used_obs_history": use_obs_history,
             "program_type": program_type,
             "source": rules.get("url"),
-            "untrusted_external_content": True,
         }
+        if include_raw:
+            context["completed_courses"] = sorted(completed)
+            context["completed_grades"] = completed
+        else:
+            context[RAW_AVAILABLE_KEY] = raw_hint(
+                "completed_courses", "completed_grades", "requirement_tree", "minimum_grades", "explanation_parts",
+            )
+        context["untrusted_external_content"] = True
 
         if rule is None:
             if not rules.get("table_parsed"):
@@ -660,6 +661,7 @@ class PlanningToolsMixin:
                         "durumu doğrulanamıyor."
                     ),
                 })
+                result.update(context)
                 result["cross_check"] = cross_check_against_secondary_source()
                 result["archive_seasonality"] = archive_seasonality_note()
                 return result
@@ -671,6 +673,7 @@ class PlanningToolsMixin:
                     "yani ders ön şartı yok."
                 ),
             })
+            result.update(context)
             result["cross_check"] = cross_check_against_secondary_source()
             result["archive_seasonality"] = archive_seasonality_note()
             return result
@@ -764,14 +767,22 @@ class PlanningToolsMixin:
             for item in unmet if item["state"] != "unverified"
         ]
         parts = blockers or ["Tüm ön şartlar karşılanıyor."]
+        # The grade of every completed course the rule names: enough to see
+        # why the verdict holds without the whole history.
+        prerequisite_grades: dict[str, str | None] = {}
+        for leaf in flatten_courses(tree):
+            try:
+                leaf_code = normalize_course_code(str(leaf.get("code") or ""))
+            except ValueError:
+                continue
+            if leaf_code in completed:
+                prerequisite_grades[leaf_code] = completed[leaf_code]
         result.update({
             "prerequisite_status": "has_prerequisites",
             "eligible": eligible,
             "explanation": " ".join(parts),
-            "explanation_parts": parts,
             "requirement": describe_tree(tree),
-            "requirement_tree": tree,
-            "minimum_grades": rule.get("minimum_grades"),
+            "prerequisite_grades": prerequisite_grades,
             "missing_courses": missing_courses,
             "missing_requirements": [
                 {key: value for key, value in item.items() if key != "sentence"} for item in unmet
@@ -787,6 +798,13 @@ class PlanningToolsMixin:
         })
         if after_note:
             result["eligible_if_in_progress_passed_note"] = after_note
+        if include_raw:
+            result.update({
+                "explanation_parts": parts,
+                "requirement_tree": tree,
+                "minimum_grades": rule.get("minimum_grades"),
+            })
+        result.update(context)
         result["cross_check"] = cross_check_against_secondary_source()
         result["archive_seasonality"] = archive_seasonality_note()
         return result
@@ -871,12 +889,6 @@ class PlanningToolsMixin:
             },
             "other_registered_courses": other_registered,
             "registered_courses_status": "unavailable" if registered_note else "read",
-            "note": (
-                "in_progress: bu dönem alınan zorunlu dersler; geçilirse kalan listesinden çıkar. "
-                "plans ve unresolved_courses: henüz planlanması gereken zorunlu dersler. "
-                "open_elective_slots: boş seçmeli slotlar. other_registered_courses içindeki bir ders "
-                "bu slotlardan birini dolduruyor olabilir; OBS bunu not girilmeden göstermez."
-            ),
             "untrusted_external_content": True,
         }
         if registered_note:
@@ -1046,21 +1058,7 @@ def match_courses_in_progress(
     return matches, others
 
 
-def _publish_parameter_schema(function: Any, **annotations: Any) -> None:
-    """Give tool parameters a published type and description.
-
-    The server copies a tool's signature without evaluating its annotations, so
-    an ``Annotated`` written in the ``def`` line would reach FastMCP as text it
-    cannot resolve. A stored signature with real annotation objects is copied
-    as is. The return annotation is left untouched, which keeps the output
-    schema unchanged.
-    """
-    signature = inspect.signature(function)
-    function.__signature__ = signature.replace(parameters=[
-        parameter.replace(annotation=annotations.get(name, parameter.annotation))
-        for name, parameter in signature.parameters.items()
-    ])
-
+publish_include_raw(PlanningToolsMixin, "explain_course_eligibility")
 
 try:
     from pydantic import ConfigDict, Field

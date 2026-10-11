@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 PUBLIC_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_search_courses",
@@ -84,7 +86,10 @@ PUBLIC_TOOLS: list[dict[str, Any]] = [
             "first and last day of classes per term. With no argument only recent and upcoming "
             "events are listed (see 'default_window'). Check 'coverage' and 'coverage_warning' "
             "before concluding that nothing is scheduled. Official public holidays are not on "
-            "this calendar."
+            "this calendar. An event carries only what is its own: an empty field is left out "
+            "(no start_at means the source gives no time of day), and timezone, source_url and "
+            "academic_year are on an event only when they differ from the result's own timezone, "
+            "url and academic_year."
         ),
         "inputSchema": {
             "type": "object",
@@ -100,6 +105,7 @@ PUBLIC_TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 "query": {"type": "string", "description": "Words to look for, Turkish or English."},
+                "include_raw": include_raw_property("get_academic_calendar"),
             },
             "additionalProperties": False,
         },

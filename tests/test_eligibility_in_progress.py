@@ -144,7 +144,7 @@ class MissingRequirementWordingTests(unittest.TestCase):
         ])
 
     def test_definitely_unmet_group_is_not_called_unverifiable(self) -> None:
-        result = explain(make_app([reg("ZED 110E", "71002", "3")]), use_obs_history=True)
+        result = explain(make_app([reg("ZED 110E", "71002", "3")]), use_obs_history=True, include_raw=True)
         self.assertNotIn("doğrulana", result["explanation"])
         parts = result["explanation_parts"]
         self.assertEqual(result["explanation"], " ".join(parts))
@@ -159,7 +159,7 @@ class MissingRequirementWordingTests(unittest.TestCase):
     def test_low_grade_and_unverifiable_grade_keep_their_own_wording(self) -> None:
         tree = all_of(leaf("QAB 205E", "BB"), any_of(leaf("ZED 110", "CC"), leaf("ZED 110E")))
         result = explain(make_app([], tree=tree, credit_requirement=None),
-                         completed_courses=["QAB 205E:CC", "ZED 110:BL"])
+                         completed_courses=["QAB 205E:CC", "ZED 110:BL"], include_raw=True)
         self.assertIs(result["eligible"], False)
         self.assertIn("QAB 205E notu CC, en az BB gerekiyor.", result["explanation_parts"])
         self.assertEqual(result["missing_courses"], ["QAB 205E"])

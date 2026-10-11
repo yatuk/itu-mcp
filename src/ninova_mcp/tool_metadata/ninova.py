@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 NINOVA_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_dashboard",
@@ -13,7 +15,8 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "Each course row is one enrolled section: section and crn tell two sections of one course apart, "
             "and code_uncertain marks a code that could not be read reliably. Dashboard dates have no year: "
             "date_iso is inferred from today's date (date_year_inferred). A start/end window is split in "
-            "date_ranges (start, end, raw) without ISO values."
+            "date_ranges (start, end, raw) without ISO values. The page's link list and headings are "
+            "left out by default (link_count says how many links there are); include_raw=true adds them."
         ),
         "inputSchema": {
             "type": "object",
@@ -23,6 +26,7 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
                     "default": False,
                     "description": "Shrink large fields for smaller LLM context.",
                 },
+                "include_raw": include_raw_property("get_dashboard"),
             },
             "additionalProperties": False,
         },

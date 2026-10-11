@@ -9,8 +9,40 @@ from .graduation import summarize_graduation_plan
 from .local_files import LocalFileError, downloads_dir, resolve_output_dir
 from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
 from .operator_settings import SENSITIVE_OUTPUT_DISABLED_NOTE, sensitive_output_allowed
+from .output_shape import (
+    RAW_AVAILABLE_KEY,
+    RAW_UNREDUCED,
+    drop_repeated_term,
+    pick,
+    raw_hint,
+    reduce_obs,
+    reduce_term_payload,
+    term_reference,
+)
 from .parsing import normalize_lookup_text
 from .attendance_summary import summarize_obs_attendance
+from .tool_params import publish_include_raw
+
+# The fields that identify a registered course; the rest of the row is OBS bookkeeping.
+_COURSE_REFERENCE_KEYS = ("sinifId", "crn", "bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN")
+# Static explanations of the graduation summary; they are in the tool description.
+_GRADUATION_STATIC_NOTES = ("credit_fields_note", "note")
+
+
+def _reduced(payload: Any, include_raw: bool) -> Any:
+    """An OBS payload as a tool returns it: reduced by default, untouched with ``include_raw``."""
+    if include_raw or not isinstance(payload, dict):
+        return payload
+    return {**reduce_obs(payload), RAW_AVAILABLE_KEY: RAW_UNREDUCED}
+
+
+def _class_reference(resolved_class: dict[str, Any]) -> dict[str, Any]:
+    """The resolved class with one language per label and its term stated once."""
+    semester = resolved_class.get("semester")
+    row = drop_repeated_term([reduce_obs(resolved_class)], semester)[0]
+    if isinstance(semester, dict):
+        row["semester"] = term_reference(semester)
+    return row
 
 
 def _registered_label(item: dict[str, Any]) -> str:
@@ -72,14 +104,16 @@ class ObsRecordToolsMixin:
             redacted["sensitive_output_note"] = SENSITIVE_OUTPUT_DISABLED_NOTE
         return redacted
 
-    def obs_get_profile(self, include_sensitive: bool = False) -> dict[str, Any]:
-        return self._redact_unless_operator_allows(self.obs.get_profile(), bool(include_sensitive))
+    def obs_get_profile(self, include_sensitive: bool = False, include_raw: bool = False) -> dict[str, Any]:
+        # Redaction comes first: include_raw never widens what is shown.
+        redacted = self._redact_unless_operator_allows(self.obs.get_profile(), bool(include_sensitive))
+        return _reduced(redacted, include_raw)
 
-    def obs_list_programs(self) -> dict[str, Any]:
-        return self.obs.list_programs()
+    def obs_list_programs(self, include_raw: bool = False) -> dict[str, Any]:
+        return _reduced(self.obs.list_programs(), include_raw)
 
-    def obs_list_semesters(self) -> dict[str, Any]:
-        return self.obs.list_semesters()
+    def obs_list_semesters(self, include_raw: bool = False) -> dict[str, Any]:
+        return _reduced(self.obs.list_semesters(), include_raw)
 
     def obs_get_grade_distribution(
         self, course_code: str, year: int | None = None, term_code: str | int | None = None,
@@ -88,22 +122,31 @@ class ObsRecordToolsMixin:
         code = None if term_code is None else str(term_code).strip()
         return get_grade_distribution(self.obs_public, course_code, year, code)
 
-    def obs_get_advisor(self) -> dict[str, Any]:
-        return self.obs.get_advisor()
+    def obs_get_advisor(self, include_raw: bool = False) -> dict[str, Any]:
+        return _reduced(self.obs.get_advisor(), include_raw)
 
-    def obs_get_internships(self) -> dict[str, Any]:
-        return self.obs.get_internships()
+    def obs_get_internships(self, include_raw: bool = False) -> dict[str, Any]:
+        return _reduced(self.obs.get_internships(), include_raw)
 
-    def obs_get_contacts(self, include_sensitive: bool = False) -> dict[str, Any]:
-        return self._redact_unless_operator_allows(self.obs.get_contacts(), bool(include_sensitive))
+    def obs_get_contacts(self, include_sensitive: bool = False, include_raw: bool = False) -> dict[str, Any]:
+        redacted = self._redact_unless_operator_allows(self.obs.get_contacts(), bool(include_sensitive))
+        return _reduced(redacted, include_raw)
 
-    def obs_list_registered_courses(self, semester: str | int | None = None) -> dict[str, Any]:
+    def obs_list_registered_courses(
+        self, semester: str | int | None = None, include_raw: bool = False,
+    ) -> dict[str, Any]:
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
+        count = len(payload.get("kayitSinifResultList") or [])
+        if include_raw:
+            return {"semester": resolved, "count": count, **payload}
+        # The term is stated once in ``semester``; a row keeps a term field
+        # only when it names another term.
         return {
-            "semester": resolved,
-            "count": len(payload.get("kayitSinifResultList") or []),
-            **payload,
+            "semester": term_reference(resolved),
+            "count": count,
+            **reduce_term_payload(payload, resolved),
+            RAW_AVAILABLE_KEY: RAW_UNREDUCED,
         }
 
     def obs_get_course_grades(
@@ -113,6 +156,7 @@ class ObsRecordToolsMixin:
         course: str | int | None = None,
         include_midterms: bool = True,
         include_letter: bool = True,
+        include_raw: bool = False,
     ) -> dict[str, Any]:
         resolved_class = self._resolve_obs_class(
             class_id=class_id,
@@ -120,7 +164,9 @@ class ObsRecordToolsMixin:
             course=course,
         )
         sid = resolved_class["sinifId"]
-        result: dict[str, Any] = {"class": resolved_class, "errors": []}
+        result: dict[str, Any] = {
+            "class": resolved_class if include_raw else _class_reference(resolved_class), "errors": [],
+        }
         if include_letter:
             try:
                 from .obs_grades import get_class_letter_grades
@@ -133,10 +179,13 @@ class ObsRecordToolsMixin:
                 result["errors"].append({"scope": "letter_grades", "error": str(exc)})
         if include_midterms:
             try:
-                result["midterm_grades"] = self.obs.get_midterm_grades(sid)
+                midterms = self.obs.get_midterm_grades(sid)
+                result["midterm_grades"] = midterms if include_raw else reduce_obs(midterms)
             except ObsError as exc:
                 result["midterm_grades"] = None
                 result["errors"].append({"scope": "midterm_grades", "error": str(exc)})
+        if not include_raw:
+            result[RAW_AVAILABLE_KEY] = RAW_UNREDUCED
         return result
 
     def obs_get_attendance(
@@ -146,6 +195,7 @@ class ObsRecordToolsMixin:
         course: str | int | None = None,
         include_summary: bool = True,
         max_absence_ratio: float = 0.30,
+        include_raw: bool = False,
     ) -> dict[str, Any]:
         resolved_class = self._resolve_obs_class(
             class_id=class_id,
@@ -158,9 +208,11 @@ class ObsRecordToolsMixin:
         except ObsError as exc:
             attendance = None
             error = str(exc)
+        # The week-by-week record stays in the default result: the summary
+        # counts absences but only the record says which sessions they were.
         result: dict[str, Any] = {
-            "class": resolved_class,
-            "attendance": attendance,
+            "class": resolved_class if include_raw else _class_reference(resolved_class),
+            "attendance": attendance if include_raw else reduce_obs(attendance),
             "error": error,
         }
         if include_summary:
@@ -169,25 +221,59 @@ class ObsRecordToolsMixin:
                 max_absence_ratio=max_absence_ratio,
                 course=resolved_class,
             )
+        if not include_raw:
+            result[RAW_AVAILABLE_KEY] = RAW_UNREDUCED
         return result
 
-    def obs_get_schedule(self, semester: str | int | None = None) -> dict[str, Any]:
-        resolved = self.obs.resolve_semester(semester)
-        return {
-            "semester": resolved,
-            "schedule": self.obs.get_schedule(resolved["akademikDonemId"]),
-            "final_calendar": self.obs.get_final_calendar(resolved["akademikDonemId"]),
-        }
+    def obs_get_schedule(
+        self, semester: str | int | None = None, include_raw: bool = False,
+    ) -> dict[str, Any]:
+        from .obs_schedule import weekly_schedule
 
-    def obs_get_graduation_remaining(self, program_id: int | None = None) -> dict[str, Any]:
+        resolved = self.obs.resolve_semester(semester)
+        schedule = self.obs.get_schedule(resolved["akademikDonemId"])
+        final_calendar = self.obs.get_final_calendar(resolved["akademikDonemId"])
+        meetings, recognized = weekly_schedule(schedule)
+        result: dict[str, Any] = {
+            "semester": resolved if include_raw else term_reference(resolved),
+            "weekly_schedule": meetings,
+            "meeting_count": len(meetings),
+        }
+        if include_raw:
+            result["schedule"] = schedule
+            result["final_calendar"] = final_calendar
+            return result
+        if not recognized:
+            # The source rows are not in a shape this server can read into
+            # meetings. They are returned so the week is not shown as empty.
+            result["weekly_schedule_status"] = "source_shape_not_recognized"
+            result["schedule"] = reduce_term_payload(schedule, resolved)
+        result["final_calendar"] = reduce_term_payload(final_calendar, resolved)
+        result[RAW_AVAILABLE_KEY] = raw_hint("schedule", "the unreduced final_calendar")
+        return result
+
+    def obs_get_graduation_remaining(
+        self, program_id: int | None = None, include_raw: bool = False,
+    ) -> dict[str, Any]:
         pid = program_id if program_id is not None else self.obs.default_program_id()
         graduation = self.obs.get_graduation_remaining(pid)
+        summary = summarize_graduation_plan(graduation)
+        academic_status = self.obs.get_academic_status(pid)
+        debts = self.obs.get_debts(pid)
+        if include_raw:
+            return {
+                "program_id": pid,
+                "summary": summary,
+                "graduation": graduation,
+                "academic_status": academic_status,
+                "debts": debts,
+            }
         return {
             "program_id": pid,
-            "summary": summarize_graduation_plan(graduation),
-            "graduation": graduation,
-            "academic_status": self.obs.get_academic_status(pid),
-            "debts": self.obs.get_debts(pid),
+            "summary": {key: value for key, value in summary.items() if key not in _GRADUATION_STATIC_NOTES},
+            "academic_status": reduce_obs(academic_status),
+            "debts": reduce_obs(debts),
+            RAW_AVAILABLE_KEY: raw_hint("graduation"),
         }
 
     def obs_download_transcript(
@@ -248,6 +334,7 @@ class ObsRecordToolsMixin:
         self,
         semester: str | int | None = None,
         course: str | int | None = None,
+        include_raw: bool = False,
     ) -> dict[str, Any]:
         """Read the authenticated student's OBS final calendar directly."""
         resolved = self.obs.resolve_semester(semester)
@@ -265,11 +352,33 @@ class ObsRecordToolsMixin:
                     f"Kayıtlı dersler arasında eşleşme bulunamadı: {course}{_term_note(resolved)}. "
                     f"Kayıtlı dersler: {_registered_options(registered) or 'yok'}"
                 )
+        matched = matched_courses if target else registered
+        if include_raw:
+            return {
+                "semester": resolved,
+                "course_filter": course,
+                "matched_courses": matched,
+                "final_calendar": final_calendar,
+                "source": "obs.itu.edu.tr/api/ogrenci/Takvim/FinalTakvimi",
+                "untrusted_external_content": True,
+            }
+        # A matched course is named by the fields that identify it; its full
+        # row belongs to obs_list_registered_courses.
         return {
-            "semester": resolved,
+            "semester": term_reference(resolved),
             "course_filter": course,
-            "matched_courses": matched_courses if target else registered,
-            "final_calendar": final_calendar,
+            "matched_courses": [reduce_obs(pick(row, _COURSE_REFERENCE_KEYS)) for row in matched],
+            "final_calendar": reduce_term_payload(final_calendar, resolved),
             "source": "obs.itu.edu.tr/api/ogrenci/Takvim/FinalTakvimi",
+            RAW_AVAILABLE_KEY: raw_hint("the full matched_courses rows", "the unreduced final_calendar"),
             "untrusted_external_content": True,
         }
+
+
+publish_include_raw(
+    ObsRecordToolsMixin,
+    "obs_get_profile", "obs_list_programs", "obs_list_semesters", "obs_get_advisor",
+    "obs_get_internships", "obs_get_contacts", "obs_list_registered_courses",
+    "obs_get_course_grades", "obs_get_attendance", "obs_get_schedule",
+    "obs_get_graduation_remaining", "get_personal_exam_calendar",
+)

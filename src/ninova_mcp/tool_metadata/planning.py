@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 # Parameter descriptions are shared with the published signature in
 # ``app_planning`` so the schema a client sees and this entry say the same.
 TARGET_CURRENT_GPA_DESCRIPTION = "Current cumulative GPA (GANO) on the 4.00 scale, e.g. 2.35."
@@ -39,7 +41,21 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "Each course may carry attempts (other terms of the same course, and "
             "likely_equivalent failed attempts under another code, which are unconfirmed). "
             "credit_ambiguity names courses whose plan row carries two credit values. "
-            "Uses İTÜ 4.00-scale letter grade conversion."
+            "Uses İTÜ 4.00-scale letter grade conversion. "
+            "The average covers only the courses of this term; it decides no honour degree, "
+            "academic standing or cumulative GANO. gpa is null when a grade or credit is missing "
+            "or invalid, and known_courses_gpa then holds the average of the verified courses. "
+            "Grades without a coefficient (BL, BZ, T, E, M and the like) are listed in "
+            "excluded_courses and stay out of the average. "
+            "credit_source and grade_source say where the credits and grades of the courses came "
+            "from: registration (the registered-course record) or degree_plan (the graduation "
+            "plan row of this term, used when the registration record has no usable value, which "
+            "is the usual case); a course carries its own credit_source or grade_source only when "
+            "it differs. A course also carries plan_credit or counted_credit only when that value "
+            "differs from the credit used. credits_unresolved names courses that need a credit "
+            "for the average and have none. ff_risk lists the codes of courses graded FF or VF; "
+            "whether one must be retaken or can be replaced follows OBS rules. A grade of DC or "
+            "lower weighs on the average in proportion to the course's credit."
         ),
         "inputSchema": {
             "type": "object",
@@ -275,7 +291,10 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "is taking this term are listed in in_progress_prerequisites and "
             "eligible_if_in_progress_passed says what the answer becomes once they are passed; "
             "report that instead of a bare 'not eligible'. In missing_courses the alternatives of "
-            "one OR group are a single entry ('A VEYA B'): one of them is enough."
+            "one OR group are a single entry ('A VEYA B'): one of them is enough. "
+            "requirement is the whole rule as text with its minimum grades, and prerequisite_grades "
+            "holds the student's grade in each prerequisite course already completed. The full "
+            "completed-course history and the rule tree are returned only with include_raw=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -302,6 +321,7 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                 "completed_credits": {"type": "number", "minimum": 0},
                 "class_year": {"type": "integer", "minimum": 1},
                 "program_type": {"type": "string", "default": "LS"},
+                "include_raw": include_raw_property("explain_course_eligibility"),
             },
             "required": ["course_code"],
             "additionalProperties": False,
@@ -317,8 +337,10 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "average fill 0.95 — plan for Güz'). Replaces manually calling "
             "archive_course_history once per remaining course. The result keeps three things "
             "apart: in_progress (required courses the student is registered in this term, with "
-            "CRN; do not present them as untaken), plans and unresolved_courses (still to plan), "
-            "and open_elective_slots with their credits."
+            "CRN; do not present them as untaken; once passed they leave the remaining list), "
+            "plans and unresolved_courses (still to plan), and open_elective_slots with their "
+            "credits. A course in other_registered_courses may be filling one of the open "
+            "elective slots: OBS does not show that until its grade is entered."
         ),
         "inputSchema": {
             "type": "object",

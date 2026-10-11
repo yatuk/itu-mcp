@@ -135,6 +135,108 @@ def _choose_window(events: list[dict[str, Any]], now: datetime) -> tuple[dict[st
             "notice": "This is the published undergraduate class calendar. It does not confirm personal registration clearance or program-specific exceptions."}, None
 
 
+# Always null with a fixed reason: these endpoints never report them. The tool
+# description says so once instead of every result.
+_NEVER_REPORTED = (
+    "max_credit", "max_credit_unavailable_reason", "blockers", "blockers_unavailable_reason",
+    "academic_standing", "academic_standing_unavailable_reason",
+)
+_MAX_HISTORY_TERMS = 30
+
+
+def _short_term(term: Any) -> Any:
+    """A term with its name in one language."""
+    if not isinstance(term, dict):
+        return term
+    return {key: value for key, value in term.items() if key != "name_en" or not term.get("name")}
+
+
+def _short_window(window: Any) -> Any:
+    """A calendar window without its fixed notice; the result's own timezone applies."""
+    if not isinstance(window, dict):
+        return window
+    return {key: value for key, value in window.items() if key not in ("notice", "timezone")}
+
+
+def term_history(registration: Any) -> list[list[dict[str, Any]]] | None:
+    """Per program, the official record of every term, newest first.
+
+    This is the part of the KayitDurumu payload that answers a question about
+    an earlier term. Returns None when the payload is not a successful,
+    recognized answer.
+    """
+    programs = _rows(registration, "kayitDurumuList")
+    if programs is None:
+        return None
+    history = []
+    for program in programs:
+        terms = program.get("kayitDurumuDonemList")
+        rows = [row for row in terms if isinstance(row, dict)] if isinstance(terms, list) else []
+        rows.sort(key=lambda row: str(row.get("akademikDonemKodu") or ""), reverse=True)
+        history.append([
+            {
+                "code": None if row.get("akademikDonemKodu") is None else str(row["akademikDonemKodu"]),
+                "name": row.get("akademikDonemAdi") or row.get("akademikDonemAdiEN"),
+                "gpa": row.get("donemlikNotOrtalamasi"),
+                "cumulative_gpa": row.get("genelNotOrtalamasi"),
+                "reported_term_credit": row.get("verilenKredi"),
+                "class_label": row.get("sinifSeviye") or None,
+            }
+            for row in rows
+        ])
+    return history
+
+
+def compact_registration_summary(summary: dict[str, Any], registration: Any = None) -> dict[str, Any]:
+    """The summary as ``obs_get_registration_status`` returns it by default.
+
+    Fixed texts and values that repeat another field are left out, a term is
+    named in one language, and each program gains ``term_history`` so the raw
+    payload is not needed for a question about an earlier term.
+    """
+    history = term_history(registration)
+    programs = []
+    for position, program in enumerate(summary.get("per_program") or []):
+        row = {key: value for key, value in program.items() if key not in _NEVER_REPORTED}
+        if row.get("program_name"):
+            row.pop("program_name_en", None)
+        # Where the class level and the GPA fields come from never varies:
+        # the latest reported term of KayitDurumu, which the result names.
+        row.pop("class_level_source", None)
+        # The evidence matters only when the two endpoints disagree.
+        evidence = row.get("enrollment_status_evidence") or []
+        if len({str(item.get("value") or "").strip() for item in evidence}) <= 1:
+            row.pop("enrollment_status_evidence", None)
+        for key in ("latest_academic_term", "course_registration_term"):
+            row[key] = _short_term(row.get(key))
+        latest = row.get("latest_academic_term") or {}
+        regular = row.get("last_regular_term")
+        if isinstance(regular, dict):
+            if regular.get("code") and regular.get("code") == latest.get("code"):
+                # Its values are the official_* fields of this same program.
+                row["last_regular_term"] = {"code": regular["code"], "same_as_latest_academic_term": True}
+            else:
+                row["last_regular_term"] = {
+                    key: value for key, value in _short_term(regular).items() if key != "source_url"
+                }
+        if row.get("last_regular_term_note") is None:
+            row.pop("last_regular_term_note", None)
+        permission = row.get("registration_permission")
+        if isinstance(permission, dict):
+            row["registration_permission"] = {"status": permission.get("status")}
+        for key in ("registration_window", "all_students_reopening"):
+            row[key] = _short_window(row.get(key))
+        if history is not None and position < len(history):
+            terms = history[position]
+            row["term_history"] = terms[:_MAX_HISTORY_TERMS]
+            row["term_history_count"] = len(row["term_history"])
+            row["term_history_total_count"] = len(terms)
+        programs.append(row)
+    compact = {key: value for key, value in summary.items() if key != "selection_notice"}
+    compact["per_program"] = programs
+    return compact
+
+
 def summarize_registration_status(
     registration: Any, lesson_registration: Any, calendar: dict[str, Any] | None,
     *, now: datetime | None = None, calendar_error: str | None = None,

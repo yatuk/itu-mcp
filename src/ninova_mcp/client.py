@@ -402,7 +402,8 @@ class NinovaClient:
             "username": self.credentials.username,
             "last_login_at": self.last_login_at,
             "login_method": self.login_method,
-            "cookie_names": sorted(cookie.name for cookie in self.session.cookies),
+            # One cookie name can be set for several hosts; each is named once.
+            "cookie_names": sorted({cookie.name for cookie in self.session.cookies}),
             "request_delay_ms": int(self._min_request_interval * 1000),
             "session_persist": session_persist_enabled(),
             "session_path": str(self.session_path) if session_persist_enabled() else None,
