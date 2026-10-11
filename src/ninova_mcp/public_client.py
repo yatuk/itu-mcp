@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +21,8 @@ from .public_parsing import (
     extract_final_exam_schedule,
     extract_shuttle_schedule,
     extract_sports_facility_hours,
+    parse_announcement_date,
+    truncate_text,
 )
 
 
@@ -215,6 +216,11 @@ class ItuPublicClient:
         result["people"] = (result.get("people") or [])[: max(1, min(limit, 50))]
         result["count"] = len(result["people"])
         result.update({"query": {"first_name": first, "last_name": last, "identity_type": identity_type}, "source": "rehber.itu.edu.tr"})
+        if result.get("no_results"):
+            result["message"] = (
+                "Rehber bu arama için sonuç döndürmedi."
+                + ("" if type_value == "0" else " Kişi başka bir türde kayıtlı olabilir; identity_type='all' ile yeniden deneyin.")
+            )
         if include_details:
             for person in result["people"]:
                 detail_url = person.get("detail_url")
@@ -234,7 +240,12 @@ class ItuPublicClient:
         html, final_url = cached
         result = extract_building_codes(html, final_url, query)
         result["source"] = "obs.itu.edu.tr/public/GenelTanimlamalar/BinaKodlariList"
-        result["note"] = "Bu kaynak resmî bina kodu/adını sağlar; koordinat veya yol tarifi içermez."
+        result["note"] = (
+            "Bu kaynak ders programında kullanılan resmî bina kodlarını ve adlarını sağlar; koordinat "
+            "veya yol tarifi içermez. locations binaları, sub_locations bir binanın içindeki "
+            "blok/derslik kodlarını, pseudo_entries yer olmayan satırları (çevrimiçi, sonradan "
+            "açıklanacak) listeler."
+        )
         return self._mark(result)
 
     def get_shuttle_schedule(self, route: str | None = None, day_type: str | None = None) -> dict[str, Any]:
@@ -267,16 +278,34 @@ class ItuPublicClient:
         query: str | None = None,
         limit: int = 30,
     ) -> dict[str, Any]:
-        selected = [normalize_lookup_text(source) for source in (sources or list(self.NEWS_SOURCES))]
+        """Aggregate announcements, newest first across sources.
+
+        Every item carries ``published_at_iso`` next to the source's own
+        ``published_at``; undated items sort last. A source that answered but
+        listed nothing is named in ``empty_sources``. When the newest items
+        of one source would fill the whole result, each source first gets an
+        equal share of ``limit`` and the rest is filled by date.
+        """
+        selected = list(dict.fromkeys(
+            normalize_lookup_text(source) for source in (sources or list(self.NEWS_SOURCES))
+        ))
         unknown = [source for source in selected if source not in self.NEWS_SOURCES]
         if unknown:
-            raise ItuPublicError(f"Bilinmeyen duyuru kaynağı: {', '.join(unknown)}")
-        items: list[dict[str, Any]] = []
+            raise ItuPublicError(
+                f"Bilinmeyen duyuru kaynağı: {', '.join(unknown)}. Geçerli kaynaklar: {', '.join(self.NEWS_SOURCES)}."
+            )
+        bounded_limit = max(1, min(int(limit), 100))
+        by_source: dict[str, list[dict[str, Any]]] = {}
         errors: list[dict[str, str]] = []
-        per_source_limit = max(5, min(limit, 50))
+        per_source_limit = max(5, min(bounded_limit, 50))
+
+        def newest_first(item: dict[str, Any]) -> tuple[int, str]:
+            stamp = item.get("published_at_iso")
+            return (1, stamp) if stamp else (0, "")
 
         for source in selected:
             config = self.NEWS_SOURCES[source]
+            fetched: list[dict[str, Any]] = []
             try:
                 if config["kind"] == "sitefinity":
                     response = self._request(
@@ -288,7 +317,9 @@ class ItuPublicClient:
                     origin = f"{urlparse(config['url']).scheme}://{urlparse(config['url']).netloc}"
                     for value in values:
                         content = value.get("Summary") or value.get("Description") or value.get("Content") or ""
-                        summary = clean_text(make_soup(str(content)).get_text(" ", strip=True))[:700]
+                        summary, truncated = truncate_text(
+                            clean_text(make_soup(str(content)).get_text(" ", strip=True)), 700
+                        )
                         external = clean_text(value.get("ExternalURL") or "")
                         if external:
                             try:
@@ -298,43 +329,86 @@ class ItuPublicClient:
                                 item_url = origin + config.get("path", "/") + str(value.get("UrlName") or "")
                         else:
                             item_url = origin + config.get("path", "/") + str(value.get("UrlName") or "")
-                        items.append({
+                        item: dict[str, Any] = {
                             "source": source,
                             "title": clean_text(value.get("Title") or ""),
                             "published_at": value.get("PublicationDate"),
+                            "published_at_iso": parse_announcement_date(value.get("PublicationDate")),
                             "summary": summary or None,
                             "url": item_url,
-                        })
+                        }
+                        if truncated:
+                            item["summary_truncated"] = True
+                        fetched.append(item)
                 else:
                     html, final_url = self._get_text(config["url"])
-                    items.extend(extract_announcement_list(html, final_url, source))
+                    fetched = extract_announcement_list(html, final_url, source)
             except (ItuPublicError, requests.RequestException, ValueError) as exc:
                 errors.append({"source": source, "error": str(exc)})
+                continue
+            fetched.sort(key=newest_first, reverse=True)
+            by_source[source] = fetched[:per_source_limit]
+
+        # Judged before the query filter: an empty source is one that listed
+        # nothing at all, not one whose items did not match the query.
+        empty_sources = [source for source, fetched in by_source.items() if not fetched]
 
         if query:
             target = normalize_lookup_text(query)
-            items = [
-                item for item in items
-                if target in normalize_lookup_text(f"{item.get('title') or ''} {item.get('summary') or ''}")
-            ]
+            by_source = {
+                source: [
+                    item for item in fetched
+                    if target in normalize_lookup_text(f"{item.get('title') or ''} {item.get('summary') or ''}")
+                ]
+                for source, fetched in by_source.items()
+            }
 
-        def sort_key(item: dict[str, Any]) -> str:
-            value = str(item.get("published_at") or "")
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
-            except ValueError:
-                return value
-
-        items.sort(key=sort_key, reverse=True)
-        items = items[: max(1, min(limit, 100))]
-        result = {
+        populated = [fetched for fetched in by_source.values() if fetched]
+        total_available = sum(len(fetched) for fetched in populated)
+        items: list[dict[str, Any]] = []
+        balanced = False
+        if total_available <= bounded_limit or len(populated) <= 1:
+            for fetched in populated:
+                items.extend(fetched)
+        else:
+            # Equal share first, so a source that publishes often cannot push
+            # the others out; then the newest of what is left.
+            share = -(-bounded_limit // len(populated))
+            rest: list[dict[str, Any]] = []
+            for fetched in populated:
+                items.extend(fetched[:share])
+                rest.extend(fetched[share:])
+            balanced = bool(rest)
+            rest.sort(key=newest_first, reverse=True)
+            items.extend(rest[: max(0, bounded_limit - len(items))])
+        items.sort(key=newest_first, reverse=True)
+        items = items[:bounded_limit]
+        result: dict[str, Any] = {
             "count": len(items),
             "announcements": items,
             "sources": selected,
+            "source_counts": {
+                source: sum(1 for item in items if item["source"] == source)
+                for source in selected if source in by_source
+            },
+            "empty_sources": empty_sources,
             "source_errors": errors,
             "partial": bool(errors),
             "query": query,
+            "order": "published_at_iso descending; undated items last",
         }
+        if balanced:
+            result["selection_note"] = (
+                f"Sonuç {bounded_limit} duyuruyla sınırlı olduğu için her kaynağa önce eşit pay verildi, "
+                "kalan yer en yeni duyurularla dolduruldu. Tek bir kaynağın tamamı için sources ile "
+                "yalnızca o kaynağı isteyin."
+            )
+        if empty_sources:
+            result["empty_sources_note"] = (
+                "Bu kaynaklar yanıt verdi ama hiç duyuru listelemedi: " + ", ".join(empty_sources)
+                + ". Sayfa gerçekten boş olabilir ya da sayfa yapısı değişmiş olabilir; "
+                "kaynağın kendi sayfasından doğrulayın."
+            )
         if not items and not errors:
             result["parse_warning"] = "Seçilen resmî kaynaklarda duyuru bulunamadı."
         return self._mark(result)

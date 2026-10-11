@@ -516,7 +516,12 @@ the published tool set.
   bağıl değerlendirme rules, by both official methods (T-score against an example
   class-level table, and mean ± standard-deviation multiples); pure local computation,
   no OBS call. The example table is exactly that — an example — so treat the result as
-  a planning estimate, not the official grade.
+  a planning estimate, not the official grade. Scores must be finite numbers from 0 to 100
+  (a bad value is rejected and named). No letter is estimated when fewer than 10 scores
+  are counted or when every score is equal: the result has `estimate_available: false`,
+  `no_estimate_reason` (`class_too_small` or `zero_std_dev`) and still carries the mean
+  and standard deviation. `my_score` is added to the list unless the same value is
+  already in it; `my_score_included` in the result says which case applied
 - `check_course_conflicts` — scans one or more department codes
 - `get_personal_exam_calendar` — authenticated student's official final calendar
 
@@ -535,10 +540,32 @@ the published tool set.
     OBS updates it between calls. A CRN and query together select their
     intersection. Calls without the new options retain the full schedule.
 - `get_public_exam_schedule(department_code)` — official current final timetable
-- `get_academic_calendar(date_from, date_to, category, query)`
+- `get_academic_calendar(date_from, date_to, category, query)`: the whole current academic
+  year in Turkish and English (`description_tr`, `description`), with `terms` giving the
+  first and last day of classes per term. A query made only of exam words (`final`,
+  `sınav`, `bütünleme`) leaves out registration rows that contain the same word, such as
+  "Final Registration"; the result says so in `query_note`. With only one of `date_from`
+  and `date_to`, `coverage_warning` appears only when that date lies outside `coverage`
 - `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
-- `find_open_course_sections` — capacity minus enrolled, across up to 25 selected departments
-- `find_empty_classrooms` — coverage-limited estimate from selected schedules; does not include reservations
+- `find_open_course_sections(department_codes, program_type?, min_available_seats?, query?, program_code?)`:
+  sections with seats the student can take, across up to 25 selected departments. OBS
+  reserves part of a section's capacity for named programmes (`PROGRAM/quota/enrolled`
+  segments, "Diğer" is the general pool), so `available_seats` counts the general pool
+  only, or the programme's own remaining quota plus the general pool when `program_code`
+  (`CEN_LS` or `CEN`) is given. `total_free_seats` is capacity minus enrolled and
+  `reserved_free_seats` lists what is held for other programmes. Sections without a day
+  and time are listed last (`unscheduled: true`), "Ek Sınav" rows are left out, and an
+  empty result has `no_result_reason` (`query_matched_no_section`,
+  `matching_sections_full`, `free_seats_reserved_for_other_programs`, ...). `query`
+  ignores case, accents and spaces in the code (`mat210e` finds `MAT 210E`)
+- `find_empty_classrooms(department_codes, day, time, program_type?, building?)`:
+  coverage-limited estimate from selected schedules; does not include room reservations.
+  `day` takes Turkish or English names and abbreviations (`Salı`, `sali`, `Sal`,
+  `Tuesday`, `Tue`), `time` takes `10:00`, `9:45`, `10.00`, `0945` or `10`
+- Schedule rows: cells the OBS page leaves empty (`-`, `--`, `-/-`, `undeclared`) are
+  `null`. A section with no day and time has `unscheduled: true`, one without an announced
+  building or room `location_announced_later: true`. `reservation` is the page's text and
+  `reservations` its parsed segments; `section_kind` is `extra_exam` for "Ek Sınav" rows
 - Seat watch (local state, no login; see [tracking.md](tracking.md#seat-watch)). The server
   does not run in the background and sends no notifications: seats are read only when the
   check tool is called, by the user or by a scheduled task on the client
@@ -562,18 +589,27 @@ the published tool set.
   a disagreement is reported, never resolved silently in either direction, and a failed or
   missing lookup reports `available: false` without affecting the OBS-derived answer.
 - `search_itu_directory` — uses the official CSRF-protected directory form
-- `search_campus_locations` — official OBS building codes/names (not coordinates)
-- `get_shuttle_schedule` / `get_sports_facility_hours`
-- `get_itu_announcements` — İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation
+- `search_campus_locations`: official OBS building codes and names (not coordinates).
+  `locations` are buildings, `sub_locations` block or room codes inside a building (the
+  source lists `DZB` only that way), `pseudo_entries` rows that are not places (online,
+  to be announced). The source covers teaching buildings and sports areas only
+- `get_shuttle_schedule` / `get_sports_facility_hours`. Sports hours are `HH:MM` with
+  `closed: true` for a period the facility does not open, and a closure written into the
+  facility name on the page ("(Pazartesi Kapalı)") is returned as `closed_days`
+- `get_itu_announcements`: İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation, newest first across
+  sources by `published_at_iso` (undated last). `empty_sources` names sources that answered
+  with no items, `source_errors` those that failed. When `limit` is smaller than what the
+  sources offer, each source first gets an equal share
 - `export_course_schedule_ics(crns, department_codes, program_type?, term_start?, term_end?)`:
   the weekly meetings of the given CRNs as iCalendar (RFC 5545) text, read from the public
   course schedule. Each meeting is a weekly recurring event between the first and last day
-  of classes. Pass those as `term_start` and `term_end` (`YYYY-MM-DD`). When one is omitted
-  the tool looks for "Beginning of ... Term" / "End of ... Term" on the academic calendar
-  page for the same academic year and level, but that page covers only the displayed month,
-  so most calls without dates return `status: "term_dates_required"`, `ics: null` and the
-  names of the missing parameters. No date is ever guessed. A meeting whose day or time is
-  an OBS placeholder (`-`, `--`, `-/-`) is listed in `skipped` with a reason and gets no
+  of classes. `term_start` and `term_end` (`YYYY-MM-DD`) are optional: when one is omitted
+  the tool takes it from the `terms` list of the academic calendar, which is read for the
+  whole academic year and states the first and last day of classes for the same academic
+  year and level. Only when the calendar does not state a date (a term the site no longer
+  or does not yet list) does the call return `status: "term_dates_required"`, `ics: null`
+  and the names of the missing parameters. No date is ever guessed. A meeting without a day
+  or time (an OBS placeholder such as `-`, `--`, `-/-`) is listed in `skipped` with a reason and gets no
   event; CRNs not found in the scanned departments are in `missing_crns`. Holidays and
   make-up classes are not removed from the recurrence
 - `export_exam_schedule_ics(course_codes)`: the current public final exam schedule, filtered
@@ -703,11 +739,14 @@ Static reference tables (no network, no per-student state):
 Public data, fetched through the same clients the tools use (host allowlists, safe
 redirects, throttle and TTL caches all apply):
 
-- `itu://calendar/academic`: the academic calendar page as `get_academic_calendar` returns
-  it. It covers the displayed month only; check `coverage`
+- `itu://calendar/academic`: the academic calendar as `get_academic_calendar` returns it
+  with no argument: the whole current academic year is read, `terms` gives the first and
+  last day of classes, and the events listed are the recent and upcoming ones
+  (`default_window`); check `coverage`
 - `itu://archive/terms`: the terms the course archive holds, the current term slug and the
   known gaps
-- `itu://campus/buildings`: official OBS building codes and names
+- `itu://campus/buildings`: official OBS building codes and names (`locations`), with
+  in-building codes under `sub_locations` and non-places under `pseudo_entries`
 
 Resource templates:
 
@@ -718,7 +757,9 @@ Resource templates:
 - `itu://degree-plan/{program_code}`: the latest official undergraduate degree plan of an
   OBS program code such as `BLGE_LS`, with older versions under `available_plans`. The
   public form is keyed by faculty, so the faculty is found by reading each faculty's
-  program list (cached for an hour); the first read of a session is therefore slower
+  program list (cached for an hour); the first read of a session is therefore slower.
+  Courses are listed once, under `plan.semesters[].courses`; `ects` is a number, or `null`
+  with `ects_min`/`ects_max`/`ects_raw` when the plan gives a range
 
 Write the course code without a space (`itu://archive/catalog/BLG223E`); a percent-encoded
 space and lower case are accepted too. Every parameter is percent-decoded and validated

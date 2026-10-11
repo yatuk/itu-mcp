@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 import re
 from typing import Any
 from urllib.parse import urljoin
@@ -125,7 +126,9 @@ def extract_directory_results(html: str, page_url: str) -> dict[str, Any]:
             "url": page_url,
             "count": 0,
             "people": [],
-            **({} if no_results else {"parse_warning": "Rehber sonuç tablosu bulunamadı."}),
+            # The directory's own "no result" answer, as opposed to a page
+            # this parser could not read.
+            **({"no_results": True} if no_results else {"parse_warning": "Rehber sonuç tablosu bulunamadı."}),
         }
 
     header_row = (table.find("thead") or table).find("tr")
@@ -223,22 +226,139 @@ def extract_directory_detail(html: str, page_url: str) -> dict[str, Any]:
     return detail
 
 
+def _pseudo_location_kind(code: str, name: str) -> str | None:
+    """Rows of the building list that are not places: online teaching, "to be announced"."""
+    blob = normalize_lookup_text(f"{code} {name}")
+    if "online" in blob or "cevrimici" in blob:
+        return "online"
+    if "undeclared" in blob or "aciklanacak" in blob:
+        return "announced_later"
+    return None
+
+
 def extract_building_codes(html: str, page_url: str, query: str | None = None) -> dict[str, Any]:
+    """Parse the OBS building code list into buildings, sub-locations and pseudo entries.
+
+    The page is one two-column table of code and name. A code that is listed
+    once is a building. A code that is repeated (``DZB`` appears twelve times
+    with "C", "B", "LAB", "AMFİ" ...) is one building whose rows name its
+    blocks and rooms; the page gives no name for such a building. Rows such
+    as ``undeclared`` and ``Online/Çevrimiçi`` are not places at all.
+
+    ``locations`` holds the buildings, ``sub_locations`` the in-building
+    codes, ``pseudo_entries`` the rest.
+    """
     soup = make_soup(html)
     target = normalize_lookup_text(query) if query else ""
-    buildings: list[dict[str, str]] = []
+    rows: list[tuple[str, str]] = []
     for row in soup.select("table tr"):
+        if row.find("th"):
+            continue
         cells = _cell_texts(row)
-        if len(cells) < 2:
+        if len(cells) < 2 or not cells[0]:
             continue
-        code, name = cells[0], cells[1]
-        if target and target not in normalize_lookup_text(f"{code} {name}"):
-            continue
-        buildings.append({"code": code, "name": name})
-    result: dict[str, Any] = {"url": page_url, "query": query, "count": len(buildings), "locations": buildings}
-    if not buildings and not query:
+        rows.append((cells[0], cells[1]))
+    occurrences: dict[str, int] = {}
+    for code, _ in rows:
+        occurrences[code] = occurrences.get(code, 0) + 1
+
+    buildings: dict[str, dict[str, Any]] = {}
+    sub_locations: list[dict[str, str]] = []
+    pseudo_entries: list[dict[str, str]] = []
+    for code, name in rows:
+        kind = _pseudo_location_kind(code, name)
+        if kind:
+            pseudo_entries.append({"code": code, "name": name, "kind": kind})
+        elif occurrences[code] > 1:
+            building = buildings.setdefault(code, {
+                "code": code,
+                "name": None,
+                "name_missing_in_source": True,
+                "sub_location_codes": [],
+            })
+            if name and name not in building["sub_location_codes"]:
+                building["sub_location_codes"].append(name)
+                sub_locations.append({"building_code": code, "code": name})
+        else:
+            buildings[code] = {"code": code, "name": name}
+
+    parsed_any = bool(rows)
+    locations = list(buildings.values())
+    if target:
+        def matches(*values: str) -> bool:
+            return target in normalize_lookup_text(" ".join(values))
+
+        matched_codes = {
+            item["code"] for item in locations
+            if matches(item["code"], item.get("name") or "")
+        }
+        sub_locations = [
+            item for item in sub_locations
+            if item["building_code"] in matched_codes or matches(item["code"])
+        ]
+        locations = [item for item in locations if item["code"] in matched_codes]
+        pseudo_entries = [item for item in pseudo_entries if matches(item["code"], item["name"])]
+    result: dict[str, Any] = {
+        "url": page_url,
+        "query": query,
+        "count": len(locations),
+        "locations": locations,
+        "sub_location_count": len(sub_locations),
+        "sub_locations": sub_locations,
+        "pseudo_entries": pseudo_entries,
+    }
+    if not parsed_any:
         result["parse_warning"] = "Bina kodları tablosu bulunamadı."
+    elif target and not (locations or sub_locations or pseudo_entries):
+        result["no_match_note"] = (
+            "Eşleşme yok. Bu kaynak yalnızca ders programında geçen bina kodlarını listeler "
+            "(derslik binaları ve spor alanları); kütüphane, yemekhane, yurt gibi yerler ve "
+            "adresler burada yer almaz. Sorguyu bina kodu ya da bina adının bir parçasıyla deneyin."
+        )
     return result
+
+
+_SPORTS_TIME_RE = re.compile(r"(\d{1,2})\s*[:.]\s*(\d{2})")
+_WEEKDAY_NAMES = {
+    "pazartesi": "Pazartesi", "sali": "Salı", "carsamba": "Çarşamba", "persembe": "Perşembe",
+    "cuma": "Cuma", "cumartesi": "Cumartesi", "pazar": "Pazar",
+}
+_CLOSURE_NOTE_RE = re.compile(r"\s*\(([^()]*kapal[^()]*)\)\s*", re.IGNORECASE)
+
+
+def _sports_clock(value: str) -> str | None:
+    """``09.00`` and ``9:00`` both become ``09:00``; anything else is None."""
+    match = _SPORTS_TIME_RE.fullmatch(value.strip())
+    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
+        return None
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
+def _sports_period(opens: str, closes: str) -> dict[str, Any]:
+    """One opening period; "Kapalı" in a cell becomes ``closed`` instead of a time."""
+    closed = any("kapal" in normalize_lookup_text(value) for value in (opens, closes))
+    if closed:
+        return {"opens": None, "closes": None, "closed": True}
+    period: dict[str, Any] = {"opens": _sports_clock(opens), "closes": _sports_clock(closes), "closed": False}
+    for key, raw in (("opens", opens), ("closes", closes)):
+        if period[key] is None and raw.strip():
+            # An unexpected cell is passed on as text, never as a time.
+            period[f"{key}_text"] = raw.strip()
+    return period
+
+
+def _sports_facility_name(raw: str) -> tuple[str, str | None, list[str]]:
+    """Split "Havuz (Pazartesi Kapalı)" into the name, the note and the closed days."""
+    match = _CLOSURE_NOTE_RE.search(raw)
+    if match is None:
+        return raw, None, []
+    note = clean_text(match.group(1))
+    name = clean_text(raw[: match.start()] + " " + raw[match.end():])
+    days = [
+        display for folded, display in _WEEKDAY_NAMES.items()
+        if re.search(rf"\b{folded}\b", normalize_lookup_text(note))
+    ]
+    return name, note, days
 
 
 def extract_sports_facility_hours(html: str, page_url: str, facility: str | None = None) -> dict[str, Any]:
@@ -248,15 +368,20 @@ def extract_sports_facility_hours(html: str, page_url: str, facility: str | None
     for table in soup.find_all("table"):
         rows = _table_matrix(table)
         for values in rows:
-            if len(values) < 5 or not re.search(r"\d{1,2}:\d{2}|kapal", normalize_lookup_text(" ".join(values[1:]))):
+            if len(values) < 5 or not re.search(r"\d{1,2}[:.]\d{2}|kapal", normalize_lookup_text(" ".join(values[1:]))):
                 continue
             if target and target not in normalize_lookup_text(values[0]):
                 continue
-            facilities.append({
-                "facility": values[0],
-                "weekday": {"opens": values[1], "closes": values[2]},
-                "weekend": {"opens": values[3], "closes": values[4]},
-            })
+            name, note, closed_days = _sports_facility_name(values[0])
+            item: dict[str, Any] = {
+                "facility": name,
+                "weekday": _sports_period(values[1], values[2]),
+                "weekend": _sports_period(values[3], values[4]),
+                "closed_days": closed_days,
+            }
+            if note:
+                item["note"] = note
+            facilities.append(item)
     result: dict[str, Any] = {"url": page_url, "query": facility, "count": len(facilities), "facilities": facilities}
     if not facilities:
         result["parse_warning"] = "Spor tesisi saatleri tablosu bulunamadı veya filtre eşleşmedi."
@@ -346,7 +471,33 @@ def _number(value: str) -> float | None:
         return None
 
 
-def extract_degree_plan_detail(html: str, page_url: str) -> dict[str, Any]:
+def _ects_fields(raw: str) -> dict[str, Any]:
+    """Parse the ECTS cell: ``"5"`` and ``"4,5"`` are numbers, ``"4 / 5"`` is a range.
+
+    A range keeps its text in ``ects_raw`` with ``ects_min``/``ects_max`` and
+    leaves ``ects`` empty, because no single number is right for it.
+    """
+    value = raw.strip()
+    number = _number(value) if value else None
+    if number is not None or not value:
+        return {"ects": number}
+    parts = [_number(part) for part in re.split(r"\s*[/\u2013-]\s*", value) if part.strip()]
+    if len(parts) >= 2 and all(part is not None for part in parts):
+        return {"ects": None, "ects_min": min(parts), "ects_max": max(parts), "ects_raw": value}
+    return {"ects": None, "ects_raw": value}
+
+
+def extract_degree_plan_detail(
+    html: str,
+    page_url: str,
+    include_flat_courses: bool = False,
+) -> dict[str, Any]:
+    """Parse a semester-by-semester OBS degree plan.
+
+    Courses are listed once, under ``semesters``. ``include_flat_courses``
+    adds the same rows again as one flat ``courses`` list, each with its
+    ``semester``; it is off by default because it doubles the payload.
+    """
     soup = make_soup(html)
     semesters: list[dict[str, Any]] = []
     all_courses: list[dict[str, Any]] = []
@@ -369,7 +520,7 @@ def extract_degree_plan_detail(html: str, page_url: str) -> dict[str, Any]:
                 "language": values[2] or None,
                 "requirement": values[3] or None,
                 "credit": _number(values[4]),
-                "ects": values[5] or None,
+                **_ects_fields(values[5]),
                 "theory_hours": _number(values[6]),
                 "practice_hours": _number(values[7]),
                 "lab_hours": _number(values[8]),
@@ -385,20 +536,81 @@ def extract_degree_plan_detail(html: str, page_url: str) -> dict[str, Any]:
         "semester_count": len(semesters),
         "course_count": len(all_courses),
         "semesters": semesters,
-        "courses": all_courses,
     }
+    if include_flat_courses:
+        result["courses"] = all_courses
     if not semesters:
         result["parse_warning"] = "Ders planı detay tabloları bulunamadı."
     return result
 
 
+_MONTH_NUMBERS = {
+    "oca": 1, "ocak": 1, "sub": 2, "subat": 2, "mar": 3, "mart": 3, "nis": 4, "nisan": 4,
+    "may": 5, "mayis": 5, "haz": 6, "haziran": 6, "tem": 7, "temmuz": 7, "agu": 8, "agustos": 8,
+    "eyl": 9, "eylul": 9, "eki": 10, "ekim": 10, "kas": 11, "kasim": 11, "ara": 12, "aralik": 12,
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "march": 3, "apr": 4, "april": 4,
+    "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9,
+    "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+_TEXT_DATE_RE = re.compile(r"(\d{1,2})\s+([^\W\d_]+)\.?\s+(\d{4})")
+_NUMERIC_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
+
+
+def parse_announcement_date(value: Any) -> str | None:
+    """Turn a publication date into ISO form so that sources can be sorted together.
+
+    Reads ISO timestamps (kept with their time), ``06 Eki 2026``,
+    ``6 Ekim 2026`` and ``06.10.2026``. Returns None for anything else.
+    """
+    raw = clean_text(str(value)) if value is not None else ""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        pass
+    year = month = day = None
+    match = _TEXT_DATE_RE.search(raw)
+    if match:
+        month = _MONTH_NUMBERS.get(normalize_lookup_text(match.group(2)))
+        day, year = int(match.group(1)), int(match.group(3))
+    else:
+        match = _NUMERIC_DATE_RE.search(raw)
+        if match:
+            day, month, year = (int(part) for part in match.groups())
+    if not (year and month and day):
+        return None
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def truncate_text(value: str, limit: int) -> tuple[str, bool]:
+    """Cut ``value`` to ``limit`` characters at a word boundary, marking the cut with "…"."""
+    if len(value) <= limit:
+        return value, False
+    cut = value[:limit]
+    if not value[limit].isspace() and " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:-") + "…", True
+
+
 def extract_announcement_list(html: str, page_url: str, source: str) -> list[dict[str, Any]]:
-    """Best-effort parser for Sitefinity/legacy İTÜ announcement lists."""
+    """Best-effort parser for Sitefinity/legacy İTÜ announcement lists.
+
+    ``.thumbnail`` is the card of the main site (www.itu.edu.tr/duyurular):
+    an ``h6`` title, a ``p`` summary, a ``.date`` and a "Devamı" link.
+    """
     soup = make_soup(html)
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     candidates = soup.select(
-        ".sfnewsListItem, .news-list-item, .news-item, article, .content-area.news .row > div"
+        ".thumbnail, .sfnewsListItem, .news-list-item, .news-item, article, .content-area.news .row > div"
     )
     date_re = re.compile(r"\b\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}\b")
     for node in candidates:
@@ -413,14 +625,34 @@ def extract_announcement_list(html: str, page_url: str, source: str) -> list[dic
         if url in seen:
             continue
         text = clean_text(node.get_text(" ", strip=True))
-        date_match = date_re.search(text)
-        items.append({
+        date_node = node.select_one(".date, time")
+        date_text = clean_text(date_node.get_text(" ", strip=True)) if date_node else ""
+        date_match = date_re.search(date_text) or date_re.search(text)
+        published = date_match.group(0) if date_match else (date_text or None)
+        paragraphs = [
+            clean_text(p.get_text(" ", strip=True)) for p in node.find_all("p")
+            if not p.find_parent(class_="hidden")
+        ]
+        body = " ".join(part for part in paragraphs if part)
+        if not body:
+            # No paragraph: use the card text without its title, date and link label.
+            body = text
+            for piece in (title, published or "", clean_text(anchor.get_text(" ", strip=True))):
+                if piece:
+                    body = body.replace(piece, " ", 1)
+            body = clean_text(body)
+        summary, truncated = truncate_text(body, 500)
+        item: dict[str, Any] = {
             "source": source,
             "title": title,
-            "published_at": date_match.group(0) if date_match else None,
-            "summary": text[:500] if text != title else None,
+            "published_at": published,
+            "published_at_iso": parse_announcement_date(published),
+            "summary": summary if summary and summary != title else None,
             "url": url,
-        })
+        }
+        if truncated:
+            item["summary_truncated"] = True
+        items.append(item)
         seen.add(url)
     return items
 

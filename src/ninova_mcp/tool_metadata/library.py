@@ -8,7 +8,7 @@ LIBRARY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "library_search",
         "title": "Search İTÜ Library",
-        "description": "Search the current public İTÜ Sirsi catalog. Reuse next_offset for pagination. Public network access is required; no Ninova credentials are used.",
+        "description": "Search the current public İTÜ Sirsi catalog. Reuse next_offset for pagination. Each record lists its ISBNs one per entry. Public network access is required; no Ninova credentials are used.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -24,7 +24,7 @@ LIBRARY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "library_get_item",
         "title": "İTÜ Library Item",
-        "description": "Read a public Sirsi record and copy list using the SD_ILS: ID returned by library_search. Copy status loaded asynchronously may be unknown.",
+        "description": "Read a public Sirsi record and copy list using the SD_ILS: ID returned by library_search. fields.author is the record's main author; when the record has none (works catalogued under a title or an institution) it falls back to the corporate or added authors and fields.author_source names the field used. Copy status loaded asynchronously may be unknown.",
         "inputSchema": {"type": "object", "properties": {"record_id": {"type": "string", "pattern": "^(SD_ILS:[0-9]{1,12}|b[0-9]{5,12})$"}}, "required": ["record_id"], "additionalProperties": False},
     },
     {

@@ -161,7 +161,12 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "build_degree_plan",
         "title": "Build Degree Plan",
-        "description": "Read an official semester-by-semester OBS curriculum; latest plan is selected by default.",
+        "description": (
+            "Read an official semester-by-semester OBS curriculum; latest plan is selected by "
+            "default. Courses are listed once, under plan.semesters[].courses. 'ects' is a number; "
+            "when the plan gives a range such as '4 / 5' it is null and ects_min, ects_max and "
+            "ects_raw carry the range."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
