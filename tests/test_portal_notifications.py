@@ -115,17 +115,17 @@ class TransportShapeTests(unittest.TestCase):
     def test_notifications_read_from_a_bom_prefixed_string_wrapped_reply(self) -> None:
         inner = json.dumps({"StatusCode": 0, "NotificationInformationList": ROWS})
         body = b"\xef\xbb\xbf" + json.dumps({"d": inner}).encode()
-        app, adapter = offline_app(self, {SERVICE + "GetNotification": (200, {"Content-Type": JSON_TYPE}, body)})
+        app, adapter = offline_app(self, {SERVICE + "GetNotification?all=false": (200, {"Content-Type": JSON_TYPE}, body)})
         result = app.obs_get_notifications()
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["count"], 2)
-        self.assertEqual(result["notifications"][0]["content"], "Planned work")
+        self.assertNotIn("content", result["notifications"][0])
         self.assertNotIn("api_fallback", result)
         self.assertEqual(set(adapter.hosts), {"portal.itu.edu.tr"})
 
     def test_html_reply_and_empty_widget_is_unavailable_with_capture_facts(self) -> None:
         reply = (200, {"Content-Type": "text/html; charset=utf-8"}, b"<html><body>Example failure page</body></html>")
-        app, _ = offline_app(self, {SERVICE + "GetNotification": reply})
+        app, _ = offline_app(self, {SERVICE + "GetNotification?all=false": reply})
         result = app.obs_get_notifications()
         self.assertEqual(result["status"], "unavailable")
         self.assertIsNone(result["count"])
@@ -191,6 +191,7 @@ class NotificationToolTests(unittest.TestCase):
         with self.assertRaisesRegex(NinovaError, "bulunamadı"):
             self.call(payload, notification_id="999")
         self.assertEqual(self.call(payload, notification_id="502")["notification"]["id"], "502")
+        self.assertEqual(self.call(payload, notification_id="501")["notification"]["content"], "Planned work")
 
     def test_unreachable_host_is_a_short_error_not_a_fallback(self) -> None:
         cause = requests.ConnectionError(

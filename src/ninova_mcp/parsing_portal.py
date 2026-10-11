@@ -68,6 +68,19 @@ def extract_campus_card_info(
     }
 
 
+_NOTIFICATION_LIST = 'ul[data-placement="notification-list"], ul.notification__list'
+
+
+def notification_list_is_script_filled(html: str) -> bool:
+    """True when the page has the notification list element but no item in it.
+
+    The Portal sends the list empty and its script inserts the items, so an
+    empty list in the markup says nothing about the inbox.
+    """
+    container = make_soup(html).select_one(_NOTIFICATION_LIST)
+    return container is not None and container.find("li") is None
+
+
 def extract_notifications(
     html: str,
     page_url: str,
@@ -75,12 +88,16 @@ def extract_notifications(
     """Parse the İTÜ Portal notifications widget.
 
     Selectors (portal ``/apps/default/``):
-    - List: ``ul[data-placement="notification-list"] li.notification__list-item``
+    - List: ``ul[data-placement="notification-list"]`` or ``ul.notification__list``,
+      then ``li.notification__list-item``
+
+    The served page carries this list empty (its script fills it), so this
+    finds items only where the markup was rendered with them.
     """
     soup = make_soup(html)
     items: list[dict[str, Any]] = []
 
-    container = soup.select_one('ul[data-placement="notification-list"]')
+    container = soup.select_one(_NOTIFICATION_LIST)
     if container:
         for li in container.select("li.notification__list-item"):
             anchor = li.find("a", href=True)

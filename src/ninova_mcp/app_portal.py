@@ -174,22 +174,49 @@ class PortalToolsMixin:
     def obs_get_notifications(
         self,
         notification_id: str | None = None,
-        limit: int = 20,
+        limit: int | None = None,
+        include_all: bool = False,
     ) -> dict[str, Any]:
         """Read İTÜ Portal notifications (requires login).
+
+        The service is asked the way the Portal page asks it: ``all=false``
+        returns the recent notifications shown on the home page, ``all=true``
+        the whole list. The whole list is read when ``include_all`` is set,
+        when one notification is looked up by id, or when an explicit
+        ``limit`` is larger than the number of recent ones.
 
         A read that failed is reported as ``status: "unavailable"`` with a
         null count. Only a successful read may say that there are none.
         """
-        from .portal_data import PortalUnreachableError, notifications_from_api, portal_call
+        from .portal_data import (
+            PortalUnreachableError, notification_params, notifications_from_api, portal_call,
+        )
 
         api_source = "portal.itu.edu.tr/GetNotification"
+        row_limit = max(1, min(20 if limit is None else limit, 100))
+
+        def read(everything: bool) -> list[dict[str, Any]]:
+            return notifications_from_api(
+                portal_call(self._get_portal_json, "GetNotification", notification_params(everything)),
+            )
+
+        scope = "all" if include_all or notification_id else "recent"
+        scope_note = None
         try:
-            notifications = notifications_from_api(portal_call(self._get_portal_json, "GetNotification"))
+            notifications = read(scope == "all")
+            if scope == "recent" and limit is not None and row_limit > len(notifications):
+                # More was asked for than the home page list holds.
+                try:
+                    notifications, scope = read(True), "all"
+                except PortalUnreachableError:
+                    raise
+                except (NinovaError, ValueError):
+                    scope_note = "The full list could not be read; these are the recent notifications only."
         except PortalUnreachableError:
             raise
         except (NinovaError, ValueError) as api_exc:
             from .parsing import extract_notifications
+            from .parsing_portal import notification_list_is_script_filled
 
             api_error = str(api_exc)[:600]
             html, url = self._get_portal_page()
@@ -200,6 +227,12 @@ class PortalToolsMixin:
                     "The Portal notification service reply could not be read, and the Portal "
                     "homepage carries no notification list. This is not an empty inbox."
                 )
+                if notification_list_is_script_filled(html):
+                    reason = (
+                        "The Portal notification service reply could not be read. The homepage holds "
+                        "only an empty notification list that the page fills by script, so it could "
+                        "not be read from the markup either. This is not an empty inbox."
+                    )
                 if notification_id:
                     raise NinovaError(f"Portal notifications could not be read: {api_error}")
                 return {
@@ -218,7 +251,7 @@ class PortalToolsMixin:
                         "api_fallback": True, "source_kind": "homepage_html_fallback",
                         "untrusted_external_content": True}
             fallback["status"] = "ok"
-            fallback["notifications"] = notifications[: max(1, min(limit, 100))]
+            fallback["notifications"] = notifications[:row_limit]
             fallback["count"] = len(fallback["notifications"])
             fallback["api_fallback"] = True
             fallback["source_kind"] = "homepage_html_fallback"
@@ -234,9 +267,25 @@ class PortalToolsMixin:
             if target is None:
                 raise NinovaError(f"Portal bildirimi bulunamadı: {notification_id}")
             return {"notification": target, "source": api_source, "untrusted_external_content": True}
-        notifications = notifications[: max(1, min(limit, 100))]
-        return {"status": "ok", "count": len(notifications), "notifications": notifications,
-                "source": api_source, "untrusted_external_content": True}
+        # The body is returned for one requested notification only.
+        listed = [
+            {key: value for key, value in item.items() if key not in ("content", "content_truncated")}
+            for item in notifications[:row_limit]
+        ]
+        result: dict[str, Any] = {
+            "status": "ok", "count": len(listed), "total_count": len(notifications),
+            "unread_count": sum(1 for item in notifications if item["unread"]),
+            "scope": scope, "notifications": listed,
+            "source": api_source, "untrusted_external_content": True,
+        }
+        if scope_note:
+            result["scope_note"] = scope_note
+        elif scope == "recent":
+            result["scope_note"] = (
+                "These are the recent notifications the Portal home page shows. "
+                "Pass include_all=true for the whole list."
+            )
+        return result
 
     def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
         """Fetch and parse one ticket page. Callers decide ownership and redaction.

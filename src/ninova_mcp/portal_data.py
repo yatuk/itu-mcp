@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import requests
@@ -39,10 +40,12 @@ def _unreachable(exc: BaseException) -> PortalUnreachableError | None:
     return None
 
 
-def portal_call(get_json: Callable[..., dict[str, Any]], operation: str) -> dict[str, Any]:
+def portal_call(
+    get_json: Callable[..., dict[str, Any]], operation: str, params: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Run one Portal read, turning a transport failure into a short error."""
     try:
-        return get_json(operation)
+        return get_json(operation, params=params) if params else get_json(operation)
     except (NinovaError, requests.RequestException) as exc:
         unreachable = _unreachable(exc)
         if unreachable is None:
@@ -115,13 +118,54 @@ def decode_portal_response(operation: str, response: Any) -> dict[str, Any]:
     return data
 
 
+# Longest notification summary and body returned, in characters.
+NOTIFICATION_SUMMARY_LIMIT = 500
+NOTIFICATION_CONTENT_LIMIT = 8000
+
+
+def notification_params(include_all: bool) -> dict[str, str]:
+    """Query of GetNotification, as the Portal page sends it (``all=false`` for the recent ones)."""
+    return {"all": "true" if include_all else "false"}
+
+
+def _notification_date(value: Any) -> Any:
+    """ISO form of ``CreateDate`` when it can be read, else the value as given.
+
+    Dotted dates are day first and slash dates month first, as on the help
+    desk. The serializer form ``/Date(milliseconds)/`` counts from the epoch
+    in UTC and is returned with that offset.
+    """
+    from .help_tickets import date_value
+
+    if not isinstance(value, str):
+        return value
+    text = clean_text(value)
+    stamp = re.fullmatch(r"\\?/Date\((-?[0-9]{1,15})(?:[+-][0-9]{4})?\)\\?/", text)
+    if stamp:
+        try:
+            return datetime.fromtimestamp(int(stamp.group(1)) / 1000, tz=timezone.utc).isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            return text or None
+    return date_value(text) or text or None
+
+
+def _plain_text(value: Any, limit: int) -> tuple[str, bool]:
+    """Text of an HTML fragment, cut at ``limit`` characters. The flag says whether it was cut."""
+    from .parsing import make_soup
+
+    text = clean_text(make_soup(str(value or "")).get_text(" ", strip=True))
+    if len(text) <= limit:
+        return text, False
+    return text[:limit].rstrip() + " [...]", True
+
+
 def notifications_from_api(data: Any) -> list[dict[str, Any]]:
     """Normalize GetNotification. Raise when the reply does not carry a list.
 
     A failed status or a missing list is a failed read, not an empty inbox.
+    Each item carries its full ``content``; the tool returns that for one
+    requested notification only.
     """
-    from .parsing import make_soup
-
     if not isinstance(data, dict):
         raise NinovaError("Portal GetNotification returned an unrecognized response.")
     status = data.get("StatusCode")
@@ -134,14 +178,20 @@ def notifications_from_api(data: Any) -> list[dict[str, Any]]:
     for item in rows:
         if not isinstance(item, dict):
             continue
-        content_html = str(item.get("ContentText") or "")
+        read_state = item.get("IsRead")
+        unread = read_state in (0, "0", False)
+        content, content_cut = _plain_text(item.get("ContentText"), NOTIFICATION_CONTENT_LIMIT)
+        age = item.get("BeforeCreateDate")
         notifications.append({
             "id": str(item.get("ObjectId") or ""),
             "title": clean_text(str(item.get("Title") or "")),
-            "content": clean_text(make_soup(content_html).get_text(" ", strip=True)),
-            "created_at": item.get("CreateDate"),
-            "age": item.get("BeforeCreateDate"),
-            "unread": item.get("IsRead") in {0, "0", False},
+            "summary": _plain_text(item.get("SummaryText"), NOTIFICATION_SUMMARY_LIMIT)[0] or None,
+            "content": content,
+            "content_truncated": content_cut,
+            "created_at": _notification_date(item.get("CreateDate")),
+            "age": clean_text(age) if isinstance(age, str) else age,
+            "is_read": None if read_state is None else not unread,
+            "unread": unread,
         })
     return notifications
 
