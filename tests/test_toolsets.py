@@ -91,6 +91,25 @@ class PartitionTests(unittest.TestCase):
     def test_mail_toolset_matches_mail_tool_names(self) -> None:
         self.assertEqual(_tools_of("mail"), set(MAIL_TOOL_NAMES))
 
+    def test_cafeteria_menu_is_a_portal_tool_because_it_needs_login(self) -> None:
+        self.assertIn("get_cafeteria_menu", _tools_of("portal"))
+        self.assertNotIn("get_cafeteria_menu", _tools_of("campus"))
+
+    def test_campus_and_portal_tools_live_in_the_module_named_like_their_toolset(self) -> None:
+        from ninova_mcp.app_campus import CampusToolsMixin
+        from ninova_mcp.app_portal import PortalToolsMixin
+        from ninova_mcp.tool_metadata.campus import CAMPUS_TOOLS
+        from ninova_mcp.tool_metadata.portal import PORTAL_TOOLS
+
+        for toolset, mixin, metadata in (
+            ("campus", CampusToolsMixin, CAMPUS_TOOLS),
+            ("portal", PortalToolsMixin, PORTAL_TOOLS),
+        ):
+            with self.subTest(toolset=toolset):
+                self.assertEqual({tool["name"] for tool in metadata}, _tools_of(toolset))
+                for name in _tools_of(toolset):
+                    self.assertIn(name, vars(mixin))
+
 
 class SelectionTests(unittest.TestCase):
     def test_default_is_every_tool_in_the_same_order(self) -> None:

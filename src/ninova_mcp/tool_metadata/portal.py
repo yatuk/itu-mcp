@@ -16,6 +16,20 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_cafeteria_menu",
+        "title": "Cafeteria Menu",
+        "description": "Read a dated lunch/dinner or vegan menu from the İTÜ Portal (requires login), including calories and allergens.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD or DD.MM.YYYY; default today."},
+                "meal": {"type": "string", "description": "lunch/öğle or dinner/akşam."},
+                "vegan": {"type": "boolean", "default": False},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "obs_get_notifications",
         "title": "Portal Notifications",
         "description": "Read İTÜ Portal notifications (requires login).",

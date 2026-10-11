@@ -87,10 +87,10 @@ only the groups you need. Each tool belongs to exactly one group:
 | `files` | 6 | Read, crawl and download Ninova pages and files, text extraction, snapshots |
 | `obs` | 14 | OBS student record: profile, grades, schedule, attendance, transcript |
 | `registration` | 5 | OBS registration status, draft, elective groups, plan check |
-| `portal` | 5 | Campus card, notifications, help tickets, cloud and mail quota |
+| `portal` | 6 | Needs login: campus card, cafeteria menu, notifications, help tickets, cloud and mail quota |
 | `planning` | 9 | GPA, relative grade, conflicts, degree plan, eligibility |
 | `public` | 14 | Public OBS catalog: course search, schedules, prerequisites, exams, calendar, seat watch, calendar export |
-| `campus` | 6 | Cafeteria, shuttle, directory, buildings, sports hours, announcements |
+| `campus` | 5 | No login: shuttle, directory, buildings, sports hours, announcements |
 | `library` | 7 | Catalog search, availability, account, loans |
 | `archive` | 15 | Course archive: history, instructors, fill rates, grade distribution |
 | `mail` | 4 | Read-only ITU Mail |
