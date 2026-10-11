@@ -15,7 +15,11 @@ from .parsing import (
 
 
 def _branch_index_match(index: dict[str, int], raw: str, target: str) -> dict[str, Any] | None:
-    """Resolve through the branch index: the key itself, or the first key the code starts with."""
+    """Resolve through the branch index: the key itself, or the first key the code starts with.
+
+    The index also holds the raw branch ids as keys. They are not codes, so a
+    code is never matched through one of them.
+    """
     if target in index:
         return {
             "code": raw.upper(),
@@ -24,7 +28,7 @@ def _branch_index_match(index: dict[str, int], raw: str, target: str) -> dict[st
         }
     # Also try prefix match (e.g. "BBF 201E" → department code "bbf").
     for key, value in index.items():
-        if len(key) >= 2 and target.startswith(key):
+        if len(key) >= 2 and not key.isdigit() and target.startswith(key):
             return {
                 "code": raw.upper(),
                 "brans_kodu_id": value,
@@ -78,8 +82,7 @@ class ObsPublicCatalog(ObsPublicTransport):
             # The option text is usually "DEPARTMENT_CODE - Department Name".
             # Store multiple variations so lookups succeed with or without spaces,
             # trailing letters, etc.
-            parts = text.split("-", 1)
-            dept_code = clean_text(parts[0]) if parts else ""
+            dept_code = clean_text(text.split("-", 1)[0])
             if dept_code:
                 index[normalize_lookup_text(dept_code)] = numeric_id
 
@@ -87,7 +90,6 @@ class ObsPublicCatalog(ObsPublicTransport):
             index[value_str] = numeric_id
 
         self._cache.set("course_index", index)
-        self._course_index = index
         return index
 
     # -- course search ----------------------------------------------------
@@ -144,15 +146,14 @@ class ObsPublicCatalog(ObsPublicTransport):
         """
         raw = course_code.strip()
         target = normalize_lookup_text(raw)
+        if not any(character.isalpha() for character in target):
+            raise ObsError(
+                f"Not a course code: {raw!r}. A course code has letters and a number, such as "
+                "'BBF 201E'. A five-digit number is a CRN, which names a section, not a course."
+            )
         # Try the department-level index first (quick).
         from_index = _branch_index_match(self._build_course_index(), raw, target)
         if from_index is not None:
             return from_index
-        # Fallback: search the catalog.
-        results = self.search_courses(raw)
-        if not results:
-            raise ObsError(
-                f"Course not found in OBS public catalog: {raw}. "
-                "Try a different code format (e.g. 'BBF 201E' vs 'BBF201E')."
-            )
-        return _catalog_match(results, raw, target)
+        # Fallback: search the catalog, which raises when it finds nothing.
+        return _catalog_match(self.search_courses(raw), raw, target)

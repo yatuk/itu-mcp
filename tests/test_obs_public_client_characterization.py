@@ -99,7 +99,7 @@ class ConstructionTests(unittest.TestCase):
     def test_initial_state_and_class_constants(self) -> None:
         client = ObsPublicClient()
         self.assertIsNone(client._session)
-        self.assertIsNone(client._course_index)
+        self.assertFalse(hasattr(client, "_course_index"))
         self.assertEqual(client._last_request_at, 0.0)
         self.assertFalse(hasattr(client, "_dept_cache"))
         self.assertEqual(ObsPublicClient.DEFAULT_BASE_URL, BASE)
@@ -233,7 +233,7 @@ class CourseIndexTests(unittest.TestCase):
         index = client._build_course_index()
         self.assertEqual(index, {"bbf": 304, "304": 304, "mat": 301, "301": 301, "isl": 77, "77": 77})
         self.assertEqual(list(index), ["bbf", "304", "mat", "301", "isl", "77"])
-        self.assertIs(client._course_index, index)
+        self.assertIs(client._cache.get("course_index"), index)
         self.assertIs(client._build_course_index(), index)
         client._get_html.assert_called_once_with("/public/GenelTanimlamalar/DersOnsartList")
 
@@ -266,15 +266,26 @@ class SearchAndCodeResolutionTests(unittest.TestCase):
     def test_branch_code_resolves_from_the_index(self) -> None:
         self.assertEqual(self.client.resolve_course_code("  bbf "),
                          {"code": "BBF", "brans_kodu_id": 304, "source": "dept_index"})
-        self.assertEqual(self.client.resolve_course_code("304"),
-                         {"code": "304", "brans_kodu_id": 304, "source": "dept_index"})
+
+    def test_a_number_is_not_a_course_code_even_when_it_is_a_branch_id(self) -> None:
+        for query in ("304", "30412", " 12345 ", "", "201-1"):
+            with self.subTest(query=query):
+                with self.assertRaises(ObsError) as caught:
+                    self.client.resolve_course_code(query)
+                self.assertEqual(
+                    str(caught.exception),
+                    f"Not a course code: {query.strip()!r}. A course code has letters and a number, such as "
+                    "'BBF 201E'. A five-digit number is a CRN, which names a section, not a course.")
+        self.client._build_course_index.assert_not_called()
 
     def test_course_code_resolves_by_the_first_index_key_of_two_or_more_characters_it_starts_with(self) -> None:
         self.assertEqual(self.client.resolve_course_code("bbf 201e"), {
             "code": "BBF 201E", "brans_kodu_id": 304, "matched_key": "bbf", "source": "dept_index_prefix"})
         self.assertEqual(self.client.resolve_course_code("BBX 1")["matched_key"], "bb")
-        # Raw ids are index keys too, so a number starting with one resolves the same way.
-        self.assertEqual(self.client.resolve_course_code("30412")["matched_key"], "304")
+        # Raw ids are index keys too, but a code is never matched through one.
+        self.client.search_courses = Mock(side_effect=ObsError("not in the catalog"))  # type: ignore[method-assign]
+        with self.assertRaisesRegex(ObsError, "not in the catalog"):
+            self.client.resolve_course_code("304X 101")
 
     def test_catalog_fallback_prefers_the_exact_code(self) -> None:
         rows = [{"code": "MAT 101", "name": "Math", "url": "u1"}, {"code": "MAT 101E", "name": "Math E", "url": "u2"}]
@@ -289,11 +300,11 @@ class SearchAndCodeResolutionTests(unittest.TestCase):
             "code": "MAT 102", "name": None, "brans_kodu_id": None, "url": None, "source": "search_fuzzy"})
 
     def test_catalog_fallback_without_results(self) -> None:
-        self.client.search_courses = Mock(return_value=[])  # type: ignore[method-assign]
+        # The search itself raises when it finds nothing; there is no second message.
+        self.client._get_html = Mock(return_value=("<html></html>", BASE + "/x"))  # type: ignore[method-assign]
         with self.assertRaises(ObsError) as caught:
             self.client.resolve_course_code(" mat 101 ")
-        self.assertEqual(str(caught.exception), "Course not found in OBS public catalog: mat 101. "
-                                                "Try a different code format (e.g. 'BBF 201E' vs 'BBF201E').")
+        self.assertEqual(str(caught.exception), "OBS did not return recognizable course information for this code.")
         self.client.search_courses = Mock(side_effect=ObsError("catalog down"))  # type: ignore[method-assign]
         with self.assertRaisesRegex(ObsError, "catalog down"):
             self.client.resolve_course_code("mat 101")
@@ -455,11 +466,15 @@ class BranchPrerequisiteTests(unittest.TestCase):
         client._get_html = Mock(return_value=("<html></html>", BRANCH_URL))  # type: ignore[method-assign]
         with patch("ninova_mcp.prerequisites.extract_branch_prerequisites", return_value={"rules": {}}) as extract:
             result = client.get_branch_prerequisites(" işl ")
-            self.assertIs(client.get_branch_prerequisites("IŞL"), result)
+            for spelling in ("İŞL", "ISL", "Işl", "IŞL", "isl"):
+                self.assertIs(client.get_branch_prerequisites(spelling), result)
         self.assertEqual(result, {"rules": {}, "brans_kodu_id": 77})
-        # The table is parsed and cached under the plainly upper-cased text.
-        extract.assert_called_once_with("<html></html>", BRANCH_URL, "IŞL")
-        self.assertIs(client._cache.get("branch_prereq:IŞL"), result)
+        # Every spelling is one branch: one request, one parse, one cache entry
+        # under the key the branch index uses.
+        extract.assert_called_once_with("<html></html>", BRANCH_URL, "ISL")
+        self.assertIs(client._cache.get("branch_prereq:isl"), result)
+        self.assertEqual(
+            [key for key in ("branch_prereq:IŞL", "branch_prereq:İŞL", "branch_prereq:ISL") if client._cache.get(key)], [])
         client._get_html.assert_called_once_with("/public/GenelTanimlamalar/OnsartAra", params={"DersBransKoduId": 77})
 
     def test_unknown_branch(self) -> None:
@@ -685,10 +700,19 @@ class ProgramTypeAndDepartmentTests(unittest.TestCase):
         self.assertEqual(client._resolve_department("LS", "bb"), 310)
         self.assertEqual(client._resolve_department("LS", "BLG 223E"), 3)
         self.assertEqual(client._dept_cache, {3: DEPARTMENTS[0], 310: DEPARTMENTS[1]})
-        # Current behaviour, pinned as it is: empty text equals a missing code,
-        # and otherwise it is part of every code.
-        self.assertEqual(self.resolver()._resolve_department("LS", ""), 5)
-        self.assertEqual(self.resolver(DEPARTMENTS[:3])._resolve_department("LS", " "), 3)
+
+    def test_an_empty_department_is_refused_before_the_list_is_read(self) -> None:
+        for query in ("", " ", chr(9) + chr(10)):
+            with self.subTest(query=query):
+                client = self.resolver()
+                with self.assertRaises(ObsError) as caught:
+                    client._resolve_department("LS", query)
+                self.assertEqual(
+                    str(caught.exception),
+                    "Bölüm kodu boş olamaz. 'BLG' veya 'MAT' gibi bir bölüm kodu verin; bölüm kodu "
+                    "ders kodunun harf kısmıdır (BLG 223E için BLG).")
+                client.list_departments.assert_not_called()
+                self.assertFalse(hasattr(client, "_dept_cache"))
 
     def test_unknown_department_lists_the_first_twenty(self) -> None:
         for query in ("xyz", "999", "x y"):

@@ -43,7 +43,6 @@ class ObsPublicTransport:
             os.getenv("NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS")
             or self.DEFAULT_SCHEDULE_CACHE_TTL
         )
-        self._course_index: dict[str, int] | None = None  # normalised code → bransKoduId
         self._min_request_interval = _request_delay_seconds()
         self._last_request_at = 0.0
 

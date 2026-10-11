@@ -106,6 +106,7 @@ def _university_overall(row: dict[str, Any]) -> bool:
 
 
 _Window = tuple[datetime, datetime, str, dict[str, Any]]
+_AMBIGUOUS_WINDOWS = "Multiple matching calendar windows are ambiguous."
 
 
 def _window_bounds(event: dict[str, Any]) -> tuple[datetime, datetime] | None:
@@ -139,16 +140,23 @@ def _nearest_windows(candidates: list[_Window]) -> list[_Window]:
 
 def _choose_window(events: list[dict[str, Any]], now: datetime) -> tuple[dict[str, Any] | None, str | None]:
     candidates: list[_Window] = []
+    seen: set[tuple[datetime, datetime, str]] = set()
     for event in events:
         bounds = _window_bounds(event)
-        if bounds is not None:
+        if bounds is None:
+            continue
+        # The same opening and closing for the same class levels is one
+        # window, however many times the calendar lists it; the first is kept.
+        identity = (*bounds, repr(event.get("class_levels") or []))
+        if identity not in seen:
+            seen.add(identity)
             candidates.append((*bounds, _window_state(*bounds, now), event))
     if not candidates:
         return None, "No matching event with explicit opening and closing times is available in the fetched calendar."
     nearest = _nearest_windows(candidates)
     several_ongoing = sum(1 for item in candidates if item[2] == "ongoing") > 1
     if several_ongoing or len({(item[0], item[1]) for item in nearest}) > 1:
-        return None, "Multiple matching calendar windows are ambiguous."
+        return None, _AMBIGUOUS_WINDOWS
     start, end, state, event = nearest[0]
     return {"start_at": start.isoformat(), "end_at": end.isoformat(), "timezone": TIMEZONE,
             "state": state, "source": "class_calendar", "source_url": event.get("source_url"),
@@ -234,8 +242,10 @@ def _compact_program(program: dict[str, Any]) -> dict[str, Any]:
     regular = row.get("last_regular_term")
     if isinstance(regular, dict):
         row["last_regular_term"] = _compact_last_regular_term(regular, row.get("latest_academic_term") or {})
-    if row.get("last_regular_term_note") is None:
-        row.pop("last_regular_term_note", None)
+    # Present only when it says something.
+    for key in ("last_regular_term_note", "all_students_reopening_unavailable_reason"):
+        if row.get(key) is None:
+            row.pop(key, None)
     permission = row.get("registration_permission")
     if isinstance(permission, dict):
         row["registration_permission"] = {"status": permission.get("status")}
@@ -266,9 +276,19 @@ def compact_registration_summary(summary: dict[str, Any], registration: Any = No
     return compact
 
 
-def _class_level(label: str) -> int | None:
-    """The undergraduate class year in a label such as ``3. Sınıf`` or ``3rd Class``."""
-    match = re.fullmatch(r"([1-4])(?:st|nd|rd|th|\.)?\s*(?:sinif|class)", normalize_lookup_text(label))
+def _class_level(value: Any) -> int | None:
+    """The undergraduate class year, 1 to 4, that ``sinifSeviye`` states.
+
+    Read from a label such as ``3. Sınıf`` or ``3rd Class``, or from the bare
+    number ``3`` or ``"3"``. Anything else, a number outside 1 to 4 included,
+    is no class year: the published class windows exist for these four only.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    match = re.fullmatch(
+        r"([1-4])(?:(?:st|nd|rd|th|\.)?\s*(?:sinif|class))?", normalize_lookup_text(str(value or "")))
     return int(match[1]) if match else None
 
 
@@ -289,7 +309,8 @@ def _match_lesson_program(
     if len(matches) == 1:
         return matches[0], "exact_program_labels"
     sole_lesson_program = lesson_programs[0] if lesson_programs and len(lesson_programs) == 1 else None
-    if sole_lesson_program is not None and len(programs) == 1 and _university_overall(program):
+    # A row without any field says nothing about a program, so it is not related.
+    if sole_lesson_program and len(programs) == 1 and _university_overall(program):
         # The actual status API can return a University Overall row, with
         # the named degree present only in DersKayitDurumu. Relate it only
         # to a sole program and keep its aggregate source explicit.
@@ -298,8 +319,7 @@ def _match_lesson_program(
 
 
 def _latest_lesson_term(matching: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
-    # An empty row carries no term list, so it is reported like a missing one.
-    if not matching:
+    if matching is None:
         return None, "The corresponding course-registration program is missing or ambiguous."
     return _latest(matching.get("dersKayitDurumuDonemList"))
 
@@ -354,15 +374,21 @@ def _is_undergraduate_registration_event(event: Any, term: dict[str, Any]) -> bo
 
 def _calendar_windows(
     calendar: dict[str, Any], term: dict[str, Any], level: int, now: datetime,
-) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-    """The class window (or why there is none) and the reopening for all students."""
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, str | None]:
+    """The class window and the reopening for all students, each with why it is missing.
+
+    A calendar without a reopening event is the usual case and gets no reason;
+    several reopening events that cannot be told apart do.
+    """
     events = [event for event in calendar.get("events") or [] if _is_undergraduate_registration_event(event, term)]
     window, window_reason = _choose_window(
         [event for event in events
          if event.get("registration_kind") == "class_window" and event.get("class_levels") == [level]], now)
-    reopening, _ = _choose_window(
-        [event for event in events if event.get("registration_kind") == "all_students_reopening"], now)
-    return window, window_reason, reopening
+    reopenings = [event for event in events if event.get("registration_kind") == "all_students_reopening"]
+    reopening, reopening_reason = _choose_window(reopenings, now)
+    if reopening_reason != _AMBIGUOUS_WINDOWS:
+        reopening_reason = None
+    return window, window_reason, reopening, reopening_reason
 
 
 def _latest_term_fields(latest: dict[str, Any] | None, source_term: dict[str, Any] | None) -> dict[str, Any]:
@@ -389,15 +415,16 @@ def _summarize_program(
     # A University Overall row has no program name of its own.
     scope = "university_overall" if _university_overall(program) else "program"
     display_program = matching if scope == "university_overall" and matching else program
-    label = str((latest or {}).get("sinifSeviye") or "")
-    level = _class_level(label)
+    raw_level = (latest or {}).get("sinifSeviye")
+    label = str(raw_level or "")
+    level = _class_level(raw_level)
     is_active = _explicit_activity(program, matching)
     status_label, status_source = _status_label(program, matching)
     regular_term, regular_note = _last_regular_term(term_rows, latest)
-    window = reopening = None
+    window = reopening = reopening_reason = None
     window_reason = _class_window_not_applicable(is_active, display_program, level, target_term, calendar)
     if window_reason is None:
-        window, window_reason, reopening = _calendar_windows(calendar, target_term, level, now)
+        window, window_reason, reopening, reopening_reason = _calendar_windows(calendar, target_term, level, now)
     return {
         "program_index": index, "program_name": display_program.get("akademikProgramAdi"),
         "program_name_en": display_program.get("akademikProgramAdiEN"), "department": display_program.get("akademikBolumAdi"),
@@ -417,6 +444,7 @@ def _summarize_program(
             "notice": "The reported permission is not evidence that every personal hold or CRN restriction is clear."},
         "registration_window": window, "registration_window_unavailable_reason": window_reason,
         "all_students_reopening": reopening,
+        "all_students_reopening_unavailable_reason": reopening_reason,
         "max_credit": None, "max_credit_unavailable_reason": "These status endpoints do not report an authoritative maximum registration credit.",
         "blockers": None, "blockers_unavailable_reason": "These status endpoints do not provide a complete list of personal registration holds.",
         "academic_standing": None, "academic_standing_unavailable_reason": "Enrollment status and GPA do not establish a separate academic-standing decision.",

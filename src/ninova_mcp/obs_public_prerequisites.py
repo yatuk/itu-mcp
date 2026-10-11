@@ -13,6 +13,15 @@ from .parsing import extract_prerequisite_list, normalize_lookup_text
 _MAX_SCANNED_BRANCHES = 200
 
 
+def _branch_key(branch: str) -> str:
+    """A branch code as the branch index spells its keys: folded, without Turkish marks.
+
+    ``işl``, ``İŞL``, ``ISL`` and ``Işl`` are one branch and give one key, so
+    they share the index lookup and the cache entry.
+    """
+    return normalize_lookup_text(branch)
+
+
 def _courses_requiring(target_code: str, rules: dict[str, Any]) -> list[dict[str, Any]]:
     """One row for every course of a branch whose rule names ``target_code`` exactly."""
     from .prerequisites import flatten_courses
@@ -292,14 +301,14 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
         full Ve/Veya expression with minimum grades and the credit requirement,
         and it covers 4-digit capstone codes that the per-course page does not.
         """
-        key = branch.strip().upper()
+        key = _branch_key(branch)
         cache_key = f"branch_prereq:{key}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached  # type: ignore[return-value]
 
         index = self._build_course_index()
-        branch_id = index.get(normalize_lookup_text(key))
+        branch_id = index.get(key)
         if branch_id is None:
             raise ObsError(f"Branş kodu OBS önşart listesinde bulunamadı: {branch!r}")
 
@@ -310,7 +319,7 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
 
         from .prerequisites import extract_branch_prerequisites
 
-        parsed = extract_branch_prerequisites(html, url, key)
+        parsed = extract_branch_prerequisites(html, url, key.upper())
         parsed["brans_kodu_id"] = branch_id
         self._cache.set(cache_key, parsed)
         return parsed

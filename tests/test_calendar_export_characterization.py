@@ -296,7 +296,8 @@ def schedule_scenarios() -> dict[str, Callable[[], dict[str, Any]]]:
         "invalid_program_type_is_reported_before_invalid_date": schedule(
             ["10001"], dates={"term_start": "x"}, program_type="XX"),
 
-        # Refused after the schedules were read.
+        # A span the caller gave is refused before any request; an unknown
+        # department is found only by asking.
         "end_before_start": schedule(["10001"], dates={"term_start": "2026-09-28", "term_end": "2026-09-27"}),
         "span_one_day_too_long": schedule(["10001"], dates={"term_start": "2026-09-28", "term_end": "2027-04-17"}),
         "unknown_department_stops_the_scan": schedule(["10001"], ("TST", "ZZZ", "ABC")),
@@ -418,6 +419,7 @@ class CalendarExportCharacterizationTests(unittest.TestCase):
         for name in (
             "schedule:crns_is_text", "schedule:invalid_crns", "schedule:invalid_departments",
             "schedule:invalid_program_type", "schedule:invalid_start_date", "schedule:invalid_end_date",
+            "schedule:end_before_start", "schedule:span_one_day_too_long",
             "exams:codes_is_text", "exams:unreadable_code", "exams:too_many_codes",
         ):
             self.assertIn(name, refused)

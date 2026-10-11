@@ -159,6 +159,8 @@ def _event_term_dates(
     patterns = _term_boundary_patterns(season)
     candidates: dict[str, set[str]] = {"term_start": set(), "term_end": set()}
     for event in calendar.get("events") or []:
+        if not isinstance(event, dict):
+            continue
         if event.get("scope") != scope or event.get("academic_year") != academic_year:
             continue
         description = normalize_lookup_text(event.get("description") or "").strip(" .")
@@ -311,7 +313,8 @@ def _resolve_term_dates_without_inventing(
     a day out, and it fills that day only when it states it for this term
     (``find_term_dates``). A day nobody states stays ``None``, and the export
     then answers ``term_dates_required`` instead of a calendar. A calendar
-    that cannot be read is reported in ``calendar_note`` and fills nothing.
+    that cannot be read is reported in ``calendar_note`` and fills nothing,
+    and so is a calendar date that is not an ISO date.
     """
     start, end = given_start, given_end
     sources: dict[str, str | None] = {
@@ -326,11 +329,25 @@ def _resolve_term_dates_without_inventing(
     except ObsError as exc:
         found = {"term_start": None, "term_end": None}
         calendar_note = f"Akademik takvim okunamadı: {exc}"
+    unreadable: list[str] = []
     if start is None and found["term_start"]:
-        start, sources["term_start"] = date.fromisoformat(found["term_start"]), "academic_calendar"
+        start = _calendar_date(found["term_start"], "term_start", unreadable)
+        sources["term_start"] = "academic_calendar" if start else None
     if end is None and found["term_end"]:
-        end, sources["term_end"] = date.fromisoformat(found["term_end"]), "academic_calendar"
+        end = _calendar_date(found["term_end"], "term_end", unreadable)
+        sources["term_end"] = "academic_calendar" if end else None
+    if unreadable:
+        calendar_note = "Akademik takvimdeki tarih okunamadı ve kullanılmadı: " + ", ".join(unreadable)
     return _TermDates(start, end, sources, calendar_note)
+
+
+def _calendar_date(value: Any, name: str, unreadable: list[str]) -> date | None:
+    """A date the calendar states, or None (and a mention in ``unreadable``) when it is not ISO."""
+    try:
+        return date.fromisoformat(value.strip())
+    except (AttributeError, ValueError):
+        unreadable.append(f"{name}={value!r}")
+        return None
 
 
 def _term_dates_required(result: dict[str, Any], term: _TermDates) -> dict[str, Any]:
@@ -351,11 +368,30 @@ def _term_dates_required(result: dict[str, Any], term: _TermDates) -> dict[str, 
     return result
 
 
-def _check_term_span(start_day: date, end_day: date) -> None:
+def _check_term_span(start_day: date, end_day: date, sources: dict[str, str | None]) -> None:
+    """Refuse a term that ends before it starts or is longer than ``MAX_TERM_DAYS``.
+
+    The message says where each day came from, because the caller can only
+    correct a parameter; a wrong calendar day is replaced by passing both.
+    """
     if end_day < start_day:
-        raise ObsError("term_end, term_start tarihinden önce olamaz.")
-    if (end_day - start_day).days > MAX_TERM_DAYS:
-        raise ObsError(f"term_start ile term_end arası en fazla {MAX_TERM_DAYS} gün olabilir.")
+        problem = "term_end, term_start tarihinden önce olamaz."
+    elif (end_day - start_day).days > MAX_TERM_DAYS:
+        problem = f"term_start ile term_end arası en fazla {MAX_TERM_DAYS} gün olabilir."
+    else:
+        return
+    if "academic_calendar" not in sources.values():
+        raise ObsError(problem)
+    origins = {"parameter": "parametre", "academic_calendar": "akademik takvim"}
+    days = ", ".join(
+        f"{name}={day.isoformat()} ({origins[str(sources[name])]})"
+        for name, day in (("term_start", start_day), ("term_end", end_day))
+    )
+    raise ObsError(
+        f"{problem} Tarihler: {days}. Akademik takvimden okunan tarih bu dönem için "
+        "kullanılamıyor; derslerin ilk ve son gününü term_start ve term_end (YYYY-AA-GG) "
+        "olarak açıkça verin."
+    )
 
 
 def _first_meeting(
@@ -577,12 +613,18 @@ class CalendarExportToolsMixin:
         term_end: str | None = None,
     ) -> dict[str, Any]:
         """Weekly class meetings of the given CRNs as an iCalendar document."""
-        # Everything is validated before the first request goes out.
+        # Every argument is validated before the first request goes out, and so
+        # is the span of two dates the caller gave. A date the academic
+        # calendar supplies is checked later: the calendar is looked up by the
+        # semester that the department schedules name, so that check comes
+        # after the schedules and the calendar are read, before any event is built.
         targets = _valid_crns(crns)
         departments = _valid_department_codes(department_codes)
         level = self.obs_public._normalize_program_type(program_type)
         given_start = _iso_date(term_start, "term_start") if term_start else None
         given_end = _iso_date(term_end, "term_end") if term_end else None
+        if given_start is not None and given_end is not None:
+            _check_term_span(given_start, given_end, {"term_start": "parameter", "term_end": "parameter"})
 
         by_crn, semester = _sections_by_crn(self.obs_public, level, departments)
         term = _resolve_term_dates_without_inventing(self.obs_public, given_start, given_end, semester, level)
@@ -602,7 +644,8 @@ class CalendarExportToolsMixin:
             result["calendar_note"] = term.calendar_note
         if term.start is None or term.end is None:
             return _term_dates_required(result, term)
-        _check_term_span(term.start, term.end)
+        if "academic_calendar" in term.sources.values():
+            _check_term_span(term.start, term.end, term.sources)
 
         meetings = _collect_class_meetings(targets, by_crn, semester, term.start, term.end)
         result.update({
