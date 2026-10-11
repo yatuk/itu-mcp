@@ -1478,6 +1478,46 @@ def extract_prerequisite_list(
     }
 
 
+# Filler the schedule page prints where it has no value: dashes, the
+# "-/-" of an empty time range, and the building code "undeclared"
+# ("İlgili Bölümce Açıklanacak").
+_SCHEDULE_PLACEHOLDER_RE = re.compile(r"[-\u2013\u2014/\s]*")
+_SCHEDULE_RESERVATION_SEGMENT_RE = re.compile(r"(?P<program>[^/|]+?)\s*/\s*(?P<quota>\d+)\s*/\s*(?P<enrolled>\d+)")
+
+
+def _schedule_value(value: str | None) -> str | None:
+    """Return a schedule cell's text, or None when it is only a placeholder."""
+    text = clean_text(value)
+    if _SCHEDULE_PLACEHOLDER_RE.fullmatch(text) or text.casefold() == "undeclared":
+        return None
+    return text
+
+
+def _parse_schedule_reservation(raw: str | None) -> tuple[list[dict[str, Any]], bool]:
+    """Split ``"CEN_LS/8/10 | Diğer/41/37"`` into programme quota segments.
+
+    Each segment is ``PROGRAM/quota/enrolled``; "Diğer" is the general pool.
+    ``free`` is clamped at zero because a programme can be over its quota.
+    Returns ``(segments, parsed)``; an unrecognized shape gives ``([], False)``
+    so the caller can fall back instead of trusting a partial reading.
+    """
+    segments: list[dict[str, Any]] = []
+    for part in (raw or "").split("|"):
+        match = _SCHEDULE_RESERVATION_SEGMENT_RE.fullmatch(part.strip())
+        if match is None:
+            return [], False
+        quota, enrolled = int(match.group("quota")), int(match.group("enrolled"))
+        program = clean_text(match.group("program"))
+        segments.append({
+            "program": program,
+            "general_pool": normalize_lookup_text(program) in {"diger", "other", "others"},
+            "quota": quota,
+            "enrolled": enrolled,
+            "free": max(0, quota - enrolled),
+        })
+    return segments, bool(segments)
+
+
 def extract_course_schedule_table(
     html: str,
     page_url: str,
@@ -1487,6 +1527,15 @@ def extract_course_schedule_table(
 
     Returns a dict with ``courses`` list, where each course has structured
     ``sessions`` (split on ``<br/>`` separators).
+
+    Placeholder cells (``-``, ``--``, ``-/-``, ``undeclared``) and link texts
+    ("Detay") are never passed on as values: they become None, and the section
+    carries ``unscheduled`` (no day and time at all) or
+    ``location_announced_later`` (a day and time, but no building or room).
+    ``reservation`` keeps the page's raw text; ``reservations`` is the same
+    line parsed into programme quotas. ``section_kind`` is ``"extra_exam"``
+    for the "Ek Sınav" rows, which are exam rights and not sections one can
+    register for.
     """
     soup = make_soup(html)
     table = soup.find("table", id="dersProgramContainer")
@@ -1549,7 +1598,7 @@ def extract_course_schedule_table(
 
         name = cell_texts[2] if len(cell_texts) > 2 else None
         method = cell_texts[3] if len(cell_texts) > 3 else None
-        instructor = cell_texts[4] if len(cell_texts) > 4 else None
+        instructor = _schedule_value(cell_texts[4]) if len(cell_texts) > 4 else None
 
         # Bina / Gün / Saat / Derslik: split on <br/>
         def _split_br(cell_idx: int) -> list[str]:
@@ -1557,13 +1606,15 @@ def extract_course_schedule_table(
                 return []
             inner = cells[cell_idx].decode_contents() if hasattr(cells[cell_idx], "decode_contents") else str(cells[cell_idx])
             parts_html = re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)
-            parts: list[str] = []
+            parts: list[str | None] = []
             for p in parts_html:
                 # Strip any HTML tags (e.g. <a href="...">BBB</a> → BBB)
                 text = re.sub(r"<[^>]+>", "", p)
                 text = clean_text(text)
                 if text:
-                    parts.append(text)
+                    # Placeholders keep their position so that the columns
+                    # still line up session by session.
+                    parts.append(_schedule_value(text))
             return parts
 
         bldgs = _split_br(5)  # Bina: may contain <a> links
@@ -1575,12 +1626,17 @@ def extract_course_schedule_table(
         max_sessions = max(len(bldgs), len(days), len(times), len(rooms))
         sessions: list[dict[str, str | None]] = []
         for i in range(max_sessions):
-            sessions.append({
+            session = {
                 "building": bldgs[i] if i < len(bldgs) else None,
                 "day": days[i] if i < len(days) else None,
                 "time": times[i] if i < len(times) else None,
                 "room": rooms[i] if i < len(rooms) else None,
-            })
+            }
+            if any(session.values()):
+                sessions.append(session)
+        timed = [s for s in sessions if s["day"] and s["time"]]
+        unscheduled = not timed
+        location_announced_later = any(not s["building"] or not s["room"] for s in timed)
 
         capacity = None
         enrolled = None
@@ -1593,7 +1649,8 @@ def extract_course_schedule_table(
         except ValueError:
             pass
 
-        reservation = cell_texts[11] if len(cell_texts) > 11 else None
+        reservation = _schedule_value(cell_texts[11]) if len(cell_texts) > 11 else None
+        reservations, reservation_parsed = _parse_schedule_reservation(reservation)
 
         # Dersi Alabilen Programlar
         eligible_programs: list[str] = []
@@ -1607,7 +1664,7 @@ def extract_course_schedule_table(
             elif eligible_text and eligible_text != "-":
                 eligible_programs = [p.strip() for p in eligible_text.split(",") if p.strip()]
         # OBS sometimes repeats the same program code in this cell's source text.
-        eligible_programs = list(dict.fromkeys(eligible_programs))
+        eligible_programs = list(dict.fromkeys(p for p in eligible_programs if _schedule_value(p)))
 
         # Ders Önşartları: "Detay" link or "-"
         detay_url = None
@@ -1621,8 +1678,18 @@ def extract_course_schedule_table(
                 prereq_text = cell_texts[13] if len(cell_texts) > 13 else None
                 has_prerequisites = bool(prereq_text and prereq_text not in ("-", ""))
 
-        # Başarılan Kredi/Sınıf Önşartı
-        credit_prereq = cell_texts[14] if len(cell_texts) > 14 else None
+        # Başarılan Kredi/Sınıf Önşartı: "-" or a "Detay" link to the course page.
+        # The link text is not a rule, so only free text is reported as one.
+        credit_prereq = None
+        credit_prereq_url = None
+        if len(cells) > 14:
+            credit_anchor = cells[14].find("a", href=True)
+            if credit_anchor:
+                credit_prereq_url = credit_anchor["href"]
+            else:
+                credit_prereq = _schedule_value(cell_texts[14])
+
+        section_kind = "extra_exam" if normalize_lookup_text(method) == "ek sinav" else "regular"
 
         courses.append({
             "crn": crn,
@@ -1632,14 +1699,21 @@ def extract_course_schedule_table(
             "name": name,
             "method": method,
             "instructor": instructor,
+            "section_kind": section_kind,
             "sessions": sessions,
+            "unscheduled": unscheduled,
+            "location_announced_later": location_announced_later,
             "capacity": capacity,
             "enrolled": enrolled,
             "reservation": reservation,
+            "reservations": reservations,
+            **({"reservation_unparsed": True} if reservation and not reservation_parsed else {}),
             "eligible_programs": eligible_programs,
             "has_prerequisites": has_prerequisites,
             "prerequisite_detail_url": detay_url,
-            "credit_prerequisite": credit_prereq if credit_prereq and credit_prereq != "-" else None,
+            "has_credit_prerequisite": bool(credit_prereq or credit_prereq_url),
+            "credit_prerequisite": credit_prereq,
+            "credit_prerequisite_detail_url": credit_prereq_url,
         })
 
     return {

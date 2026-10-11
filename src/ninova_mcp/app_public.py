@@ -11,6 +11,73 @@ from .archive_client import ItuArchiveClient
 from .obs_client import ObsError, ObsPublicClient
 from .public_client import ItuPublicClient
 
+# Link columns of the OBS course information table. Their cell text is only
+# "... İçin Tıklayınız"; the link is the value.
+_CATALOG_LINK_COLUMNS = {
+    "ders katalog bilgisi": "catalog_url",
+    "ders not dagilimi": "grade_distribution_url",
+}
+
+
+def _text_id(value: str | int | None) -> str | None:
+    """A CRN or course number as text; clients send them as JSON numbers too."""
+    if value is None or isinstance(value, bool):
+        return None
+    return str(value).strip() or None
+
+
+def _shape_catalog_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turn raw OBS course information rows into one clean entry per course code.
+
+    OBS prints a Turkish/English pair in one row ("BLG335 -BLG335E",
+    "Algoritma Analizi I / Analysis of Algorithms I", "Türkçe/English"). The
+    parser repeats that row once per code, so each entry here takes its own
+    half of the name and language, and a link is kept only when it points at
+    this entry's course number.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from .archive import COURSE_CODE_PATTERN, normalize_course_code, split_course_code
+    from .parsing import normalize_lookup_text
+
+    shaped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        code = row.get("code")
+        if not code or code in shaped:
+            continue
+        code_cell = str(row.get("Ders Kodu") or row.get("Course Code") or "")
+        row_codes = list(dict.fromkeys(
+            normalize_course_code(match.group(0)) for match in COURSE_CODE_PATTERN.finditer(code_cell)
+        )) or [code]
+        position = row_codes.index(code) if code in row_codes else 0
+
+        def own_part(value: Any, separator: str) -> str | None:
+            cleaned = str(value or "").strip()
+            parts = [part.strip() for part in cleaned.split(separator)]
+            if len(row_codes) > 1 and len(parts) == len(row_codes):
+                return parts[position] or None
+            return cleaned or None
+
+        entry: dict[str, Any] = {
+            "code": code,
+            "name": own_part(row.get("name"), " / "),
+            "language": own_part(row.get("Dil") or row.get("Language"), "/"),
+            "paired_codes": [other for other in row_codes if other != code],
+        }
+        try:
+            number = split_course_code(code)[1].upper()
+        except ValueError:
+            number = ""
+        for key, value in row.items():
+            target = _CATALOG_LINK_COLUMNS.get(normalize_lookup_text(key.removesuffix("_url")))
+            if not target or not key.endswith("_url"):
+                continue
+            linked = (parse_qs(urlparse(str(value)).query).get("dersNo") or [""])[0].upper()
+            if linked == number:
+                entry[target] = value
+        shaped[code] = {key: value for key, value in entry.items() if value not in (None, [])}
+    return list(shaped.values())
+
 
 class PublicCatalogToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies the public clients."""
@@ -26,7 +93,7 @@ class PublicCatalogToolsMixin:
         term = query.strip()
         if len(term) < 2:
             raise ObsError("Enter at least two characters of a course code or name.")
-        bounded_limit = max(1, min(limit, 50))
+        bounded_limit = max(1, min(int(limit), 50))
         try:
             split_course_code(term)
         except ValueError:
@@ -36,18 +103,22 @@ class PublicCatalogToolsMixin:
             source = "course_archive"
             source_url = self.archive.base_url + "/history/codes.json"
         else:
-            results = self.obs_public.search_courses(term)[:bounded_limit]
+            results = _shape_catalog_rows(self.obs_public.search_courses(term))[:bounded_limit]
             source = "official_obs_course_information"
             source_url = "https://obs.itu.edu.tr/public/DersBilgi"
-        return {
+        result: dict[str, Any] = {
             "query": query,
             "count": len(results),
             "courses": results,
+            "limit": bounded_limit,
             "source": source,
             "source_url": source_url,
             "offering_note": "Catalog or archive membership does not establish a current-term offering.",
             "untrusted_external_content": True,
         }
+        if bounded_limit != limit:
+            result["limit_note"] = f"limit must be between 1 and 50; {limit} was changed to {bounded_limit}."
+        return result
 
     def obs_get_course_prerequisites(
         self,
@@ -297,7 +368,7 @@ class PublicCatalogToolsMixin:
         self,
         program_type: str,
         department_code: str,
-        crn: str | None = None,
+        crn: str | int | None = None,
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
@@ -307,7 +378,7 @@ class PublicCatalogToolsMixin:
         ``program_type``: ``"LS"`` / ``"Lisans"``, ``"LU"`` / ``"Lisansüstü"``,
         ``"ÖL"`` / ``"Önlisans"``, ``"LUİ"``.
         ``department_code``: e.g. ``"BLG"``, ``"BBF"``, ``"EHB"``.
-        ``crn``: optional CRN to filter a single course.
+        ``crn``: optional CRN to filter a single course; text or number.
         ``query``: case/accent-insensitive course name or code fragment.
         Filtered/paged calls default to 50 sections. Unfiltered calls are unchanged.
         """
@@ -317,9 +388,10 @@ class PublicCatalogToolsMixin:
         if paging:
             # Validate before issuing any OBS requests.
             filter_course_schedule({}, query=query, limit=limit, offset=offset)
-        if crn:
+        crn_text = _text_id(crn)
+        if crn_text:
             schedule = self.obs_public.get_course_schedule_by_crn(
-                program_type, department_code, crn
+                program_type, department_code, crn_text
             )
         else:
             schedule = self.obs_public.get_course_schedule(program_type, department_code)
@@ -330,18 +402,21 @@ class PublicCatalogToolsMixin:
     def get_public_course_prerequisites(
         self,
         brans_kodu: str,
-        ders_no: str,
+        ders_no: str | int,
     ) -> dict[str, Any]:
         """Read one course's prerequisite rule from the official branch prerequisite table.
 
         ``brans_kodu``: department code, e.g. ``"BLG"``.
-        ``ders_no``: course number, e.g. ``"223E"``.
+        ``ders_no``: course number, e.g. ``"223E"``; a plain number such as 4901 is accepted.
 
         No login required. The rule comes from the public OBS prerequisite
         table of the branch (``ObsPublicClient.get_branch_prerequisites``),
         not from the course's ``/public/DersBilgi`` page.
         """
-        return self.obs_public.get_prerequisite_detail(brans_kodu, ders_no)
+        number = _text_id(ders_no)
+        if not number:
+            raise ObsError("ders_no boş olamaz; '223E' ya da 4901 gibi bir ders numarası verin.")
+        return self.obs_public.get_prerequisite_detail(brans_kodu, number)
 
     def get_public_exam_schedule(self, department_code: str) -> dict[str, Any]:
         """Read the current public final-exam schedule for a course branch."""
@@ -353,8 +428,14 @@ class PublicCatalogToolsMixin:
         program_type: str = "LS",
         min_available_seats: int = 1,
         query: str | None = None,
+        program_code: str | None = None,
     ) -> dict[str, Any]:
-        """Find open sections across selected public OBS department schedules."""
+        """Find sections with seats the student can take, across public OBS schedules.
+
+        A section's free seats can be reserved for named programmes. Without
+        ``program_code`` only the general pool counts; with it (``"CEN_LS"``
+        or ``"CEN"``) the programme's own remaining quota is added.
+        """
         departments = list(dict.fromkeys(code.strip().upper() for code in department_codes if code.strip()))
         if not departments:
             raise ObsError("department_codes boş olamaz.")
@@ -363,21 +444,37 @@ class PublicCatalogToolsMixin:
         schedules = [self.obs_public.get_course_schedule(program_type, code) for code in departments]
         from .planning import find_open_sections
 
-        return find_open_sections(
-            schedules,
-            min_available_seats=min_available_seats,
-            query=query,
-        )
+        try:
+            return find_open_sections(
+                schedules,
+                min_available_seats=min_available_seats,
+                query=query,
+                program_code=program_code,
+            )
+        except ValueError as exc:
+            raise ObsError(str(exc)) from exc
 
     def find_empty_classrooms(
         self,
         department_codes: list[str],
         day: str,
-        time: str,
+        time: str | int,
         program_type: str = "LS",
         building: str | None = None,
     ) -> dict[str, Any]:
-        """Estimate empty rooms from selected public department schedules."""
+        """Estimate empty rooms from selected public department schedules.
+
+        ``day``: Turkish or English weekday name or abbreviation.
+        ``time``: ``10:00``, ``9:45``, ``10.00``, ``0945`` or just ``10``.
+        """
+        from .schedule_utils import normalize_day, parse_time_point
+
+        try:
+            # Checked before any OBS request, so a typo costs no network call.
+            normalize_day(day)
+            parse_time_point(time)
+        except ValueError as exc:
+            raise ObsError(str(exc)) from exc
         departments = list(dict.fromkeys(code.strip().upper() for code in department_codes if code.strip()))
         if not departments:
             raise ObsError("department_codes boş olamaz.")
@@ -389,6 +486,6 @@ class PublicCatalogToolsMixin:
         return find_empty_classrooms(
             schedules,
             day=day,
-            time=time,
+            time=str(time),
             building=building,
         )
