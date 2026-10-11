@@ -17,12 +17,12 @@ NOTE = (
 HIDDEN_KEYS = (
     "kimlikNo", "tcKimlikNo", "TCKN", "pasaportNo", "passportNumber", "ituEPosta", "email", "e_mail",
     "mailAdresi", "telefon", "cepTelefonu", "phone", "gsmNo", "mobil", "cepNo", "cepTel", "tel", "telNo",
-    "hotel", "adres", "address", "ikametgah", "İkamet", "dogumTarihi", "doğumYeri", "birthDate", "anaAdi",
-    "anneAdi", "babaAdi", "motherName", "fatherName",
+    "adres", "address", "ikametgah", "İkamet", "dogumTarihi", "doğumYeri", "birthDate", "anaAdi",
+    "anneAdi", "babaAdi", "motherName", "fatherName", "E-Posta", "Tel No", "tel_no",
 )
 VISIBLE_KEYS = (
-    "E-Posta", "adSoyad", "ogrenciNo", "uyruk", "cinsiyet", "telif", "model", "soyad", "ad", "kimlik",
-    "iban", "fotograf", "Tel No", "tel_no", "kartNo",
+    "hotel", "adSoyad", "ogrenciNo", "uyruk", "cinsiyet", "telif", "model", "soyad", "ad", "kimlik",
+    "iban", "fotograf", "kartNo",
 )
 
 
@@ -43,13 +43,13 @@ class RedactedKeySetTests(unittest.TestCase):
     def test_marker_text(self) -> None:
         self.assertEqual(REDACTED, "***REDACTED***")
 
-    def test_empty_values_stay_and_other_falsy_values_are_hidden(self) -> None:
+    def test_values_without_data_stay_and_are_not_listed(self) -> None:
         result = redact_obs_profile({"mail": None, "tel": "", "adres": [], "phone": {}, "gsm": 0, "mobil": False,
                                      "email": [1], "ikamet": {"il": "Örnek"}})
         self.assertEqual(result, {
-            "mail": None, "tel": "", "adres": [], "phone": {}, "gsm": REDACTED, "mobil": REDACTED,
+            "mail": None, "tel": "", "adres": [], "phone": {}, "gsm": 0, "mobil": False,
             "email": REDACTED, "ikamet": REDACTED,
-            "redacted_fields": ["gsm", "mobil", "email", "ikamet"], "redaction_note": NOTE,
+            "redacted_fields": ["email", "ikamet"], "redaction_note": NOTE,
         })
 
 
@@ -72,7 +72,7 @@ class RedactedFieldsTests(unittest.TestCase):
 
     def test_existing_report_keys_are_overwritten(self) -> None:
         result = redact_obs_profile({"redacted_fields": ["old"], "redaction_note": "old"})
-        self.assertEqual(result, {"redacted_fields": [], "redaction_note": "old"})
+        self.assertEqual(result, {"redacted_fields": []})
 
     def test_a_payload_that_is_not_a_record_is_copied_unchanged(self) -> None:
         for payload in ("text a@b.co", None, 5, ["a@b.co", {"tel": "1"}]):
@@ -157,22 +157,25 @@ class ContactRowTests(unittest.TestCase):
         self.assertEqual(result["iletisimBilgiList"], [
             {"iletisimBilgiList": [{"iletisimTipiAdiTR": "Cep", "degeri": REDACTED}], "iletisimTipiAdiTR": "Cep", "degeri": "kept"},
             [{"iletisimTipiAdiTR": "Cep", "degeri": REDACTED}],
-            "text a@b.co", None, 5,
+            f"text {REDACTED}", None, 5,
             {"iletisimBilgiList": None},
         ])
-        self.assertEqual(result["redacted_fields"], ["iletisimBilgiList: Cep"])
+        self.assertEqual(result["redacted_fields"], ["iletisimBilgiList: Cep", "iletisimBilgiList"])
         single = redact_obs_profile({"x": {"iletisimBilgiList": {"iletisimTipiAdiEN": "Phone", "degeri": "1"}}})
         self.assertEqual(single["x"]["iletisimBilgiList"]["degeri"], REDACTED)
         self.assertEqual(single["redacted_fields"], ["iletisimBilgiList: Phone"])
 
-    def test_only_the_value_of_a_contact_row_is_examined(self) -> None:
-        # Current behaviour, pinned as it is: other fields of a row pass through,
-        # and a label is matched after casefold only (so "İkamet" is not recognised).
+    def test_every_field_of_a_contact_row_is_examined(self) -> None:
+        # Other fields of a row are examined too, and a label is folded with the
+        # Turkish letters in mind (so "İkamet" is recognised).
         rows = [{"iletisimTipiAdiTR": "Web", "degeri": "x", "email": "z@z.zz"},
                 {"iletisimTipiAdiTR": "İkamet", "degeri": "q"}]
         result = self.rows(rows)
-        self.assertEqual(result["iletisimBilgiList"], rows)
-        self.assertEqual(result["redacted_fields"], [])
+        self.assertEqual(result["iletisimBilgiList"], [
+            {"iletisimTipiAdiTR": "Web", "degeri": "x", "email": REDACTED},
+            {"iletisimTipiAdiTR": "İkamet", "degeri": REDACTED},
+        ])
+        self.assertEqual(result["redacted_fields"], ["iletisimBilgiList: Web", "iletisimBilgiList: İkamet"])
 
 
 class IncludeSensitiveGateTests(unittest.TestCase):
