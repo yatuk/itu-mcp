@@ -1,0 +1,178 @@
+"""Tool metadata: course archive history."""
+
+from __future__ import annotations
+
+from typing import Any
+
+ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "archive_list_terms",
+        "title": "Archive: List Terms",
+        "description": (
+            "List every term held in the İTÜ ders arşivi (2016-2017 onward), including "
+            "terms OBS no longer publishes and terms not yet active. Use this to find "
+            "valid term slugs like '2025-2026-guz' for the other archive tools."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "archive_course_history",
+        "title": "Archive: Course History",
+        "description": (
+            "Term-by-term offering history for a course from the archive: which terms it "
+            "ran, how many sections, which instructors, and which season it opens in. "
+            "Answers 'is this course ever offered in the spring?', which OBS cannot."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "course_code": {
+                    "type": "string",
+                    "description": "Course code, e.g. 'BLG 102E' or 'CEN 4901E'.",
+                },
+                "limit_terms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "default": 10,
+                    "description": "How many recent terms to include.",
+                },
+            },
+            "required": ["course_code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_who_taught",
+        "title": "Archive: Who Taught",
+        "description": (
+            "List every instructor who has taught a course across archived terms, ranked "
+            "by how many terms they taught it, with their most recent term and average "
+            "section fill rate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "course_code": {"type": "string", "description": "Course code, e.g. 'BLG 102E'."},
+                "limit_terms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "description": "Only consider this many recent terms (default: all).",
+                },
+            },
+            "required": ["course_code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_instructor_courses",
+        "title": "Archive: Instructor Courses",
+        "description": (
+            "List the courses one instructor has taught across archived terms, newest "
+            "first. Returns candidate matches when the name is ambiguous."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "instructor": {"type": "string", "description": "Instructor name or fragment."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 40},
+            },
+            "required": ["instructor"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_term_sections",
+        "title": "Archive: Term Sections",
+        "description": (
+            "List archived sections for a term, filtered by branch, course code, or "
+            "instructor. Critically, the archive holds terms OBS has not published yet, "
+            "so upcoming-term offerings can be checked instead of guessed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "term": {"type": "string", "description": "Term slug, e.g. '2025-2026-guz'."},
+                "branch": {"type": "string", "description": "Branch code, e.g. 'BLG'."},
+                "course_code": {"type": "string", "description": "Course code; implies its branch."},
+                "instructor": {"type": "string", "description": "Instructor name fragment."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},
+            },
+            "required": ["term"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_fill_rate",
+        "title": "Archive: Fill Rate",
+        "description": (
+            "How full a section got. With a CRN, reads that term's quota time series. "
+            "With a course code, reports capacity vs enrolment across every past section "
+            "so you can judge whether the course reliably fills up."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "crn": {"type": "string", "description": "Section CRN."},
+                "course_code": {"type": "string", "description": "Course code, for historical fill rates."},
+                "term": {"type": "string", "description": "Term slug (default: archive's current term)."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_search_courses",
+        "title": "Archive: Search Courses",
+        "description": (
+            "Search the archive's full course index by code or name fragment, across every "
+            "term it has ever seen — not just the active one. Use this to find the exact "
+            "code archive_course_history needs when only a name fragment is known."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Course code or name fragment."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_list_branches",
+        "title": "Archive: List Branches",
+        "description": (
+            "List every branch present in one term's archive dump, with section and course "
+            "counts. Answers 'does this branch even have a döküm for this term?' directly, "
+            "instead of probing archive_term_sections branch by branch."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "term": {"type": "string", "description": "Term slug, e.g. '2025-2026-guz'."},
+            },
+            "required": ["term"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "archive_compare_terms",
+        "title": "Archive: Compare Terms",
+        "description": (
+            "Diff one course's sections between two archived terms: instructor turnover, "
+            "section-count delta, and capacity/fill movement, named explicitly rather than "
+            "left for two separate archive_term_sections calls to be compared by eye."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "course_code": {"type": "string", "description": "Course code, e.g. 'BLG 322E'."},
+                "term_a": {"type": "string", "description": "First term slug."},
+                "term_b": {"type": "string", "description": "Second term slug."},
+            },
+            "required": ["course_code", "term_a", "term_b"],
+            "additionalProperties": False,
+        },
+    },
+]
