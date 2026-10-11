@@ -1,9 +1,14 @@
 # Changelog
 
-## Yayınlanmamış
+## v1.2.1
 
 ### Düzeltmeler
 
+- Birden fazla öğrenci kaydı olan hesaplarda (yatay geçiş, çift anadal) OBS girişten sonra bir
+  kimlik seçim ekranı gösteriyor ve bütün `obs_*` araçları hata veriyordu. Artık durumu "Aktif"
+  olan tek kayıt kendiliğinden açılıyor. Birden fazla aktif kayıt varsa ya da başka bir kayıt
+  kullanılacaksa `NINOVA_OBS_STUDENT_NUMBER` ayarına öğrenci numarası yazılır. Personel
+  kimlikleri seçilmez
 - Herkese açık OBS sayfaları, sunucu karakter kümesini bildirmediğinde önce UTF-8 olarak okunuyor.
   Eskiden kodlama tahmin ediliyordu ve kısa cevaplarda Türkçe harfler bozulabiliyordu
 - CI testleri `pytest` ile çalışıyor. Bütün sayfa çıktısını özet olarak saklayan ayrıştırıcı
