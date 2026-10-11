@@ -112,11 +112,49 @@ def extract_announcements_list(html: str, page_url: str, base_url: str) -> list[
 _HELP_BOX_RE = re.compile(r"\bYardım\s+Diğer sınıflarınıza\b")
 
 
+def _read_announcement_card(card: Tag, content: Tag) -> tuple[str | None, str | None, str]:
+    """``(title, published_at, body_text)`` from the announcement's own card.
+
+    The first date-like ``span.tarih`` is the publication date; when it sits
+    inside the content it is taken out, so the date is not repeated in the body.
+    """
+    heading = card.find(["h1", "h2", "h3"])
+    title = clean_text(heading.get_text(" ", strip=True)) if heading is not None else None
+    published_at: str | None = None
+    for span in card.select("span.tarih"):
+        candidate = clean_text(span.get_text(" ", strip=True))
+        if _looks_like_date(candidate):
+            published_at = candidate
+            if content in span.parents:
+                span.decompose()
+            break
+    return title or None, published_at, clean_text(content.get_text(" ", strip=True))
+
+
+def _split_flat_announcement(page_text: str, title: str) -> tuple[str | None, str]:
+    """``(published_at, body_text)`` from the page text when there is no card.
+
+    The body is what follows the title and the first date, up to the page's
+    help box (or, failing that, the last "Yardım" of the footer).
+    """
+    body_text = page_text
+    if title in body_text:
+        body_text = body_text.split(title, 1)[1]
+    published_at_match = DATE_RE.search(body_text)
+    published_at = published_at_match.group(0) if published_at_match else None
+    if published_at:
+        body_text = body_text.split(published_at, 1)[1]
+    help_box = _HELP_BOX_RE.search(body_text)
+    if help_box:
+        body_text = body_text[: help_box.start()]
+    elif "Yardım" in body_text:
+        body_text = body_text.rsplit("Yardım", 1)[0]
+    return published_at, body_text
+
+
 def extract_announcement_detail(html: str, page_url: str, base_url: str) -> dict[str, Any]:
     page = parse_html_page(page_url, html, base_url=base_url)
     title = page["headings"][0]["text"] if page["headings"] else page["title"]
-    published_at: str | None = None
-    body_text: str | None = None
 
     # The announcement has its own card; reading it keeps the page's help box
     # and footer, which also say "Yardım", out of the body.
@@ -124,30 +162,10 @@ def extract_announcement_detail(html: str, page_url: str, base_url: str) -> dict
     card = soup.select_one("div.duyuruGoruntule")
     content = card.select_one("div.icerik") if card else None
     if card is not None and content is not None:
-        heading = card.find(["h1", "h2", "h3"])
-        if heading is not None and clean_text(heading.get_text(" ", strip=True)):
-            title = clean_text(heading.get_text(" ", strip=True))
-        for span in card.select("span.tarih"):
-            candidate = clean_text(span.get_text(" ", strip=True))
-            if published_at is None and _looks_like_date(candidate):
-                published_at = candidate
-                if content in span.parents:
-                    span.decompose()
-        body_text = clean_text(content.get_text(" ", strip=True))
-
-    if body_text is None:
-        body_text = page["text"]
-        if title in body_text:
-            body_text = body_text.split(title, 1)[1]
-        published_at_match = DATE_RE.search(body_text)
-        published_at = published_at_match.group(0) if published_at_match else None
-        if published_at:
-            body_text = body_text.split(published_at, 1)[1]
-        help_box = _HELP_BOX_RE.search(body_text)
-        if help_box:
-            body_text = body_text[: help_box.start()]
-        elif "Yardım" in body_text:
-            body_text = body_text.rsplit("Yardım", 1)[0]
+        card_title, published_at, body_text = _read_announcement_card(card, content)
+        title = card_title or title
+    else:
+        published_at, body_text = _split_flat_announcement(page["text"], title)
     return {
         "title": title,
         "url": page["url"],
