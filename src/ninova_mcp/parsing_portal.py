@@ -133,8 +133,8 @@ def extract_help_tickets(
 
 
 def _is_checked(control: Tag | None) -> bool:
-    """True for ``checked="checked"``. A bare ``checked`` parses to an empty value and is not counted."""
-    return bool(control and "checked" in (control.get("checked") or ""))
+    """True when the control has the ``checked`` attribute, bare or with any value."""
+    return control is not None and control.has_attr("checked")
 
 
 def _checked_meal_type(soup: BeautifulSoup) -> str | None:
@@ -163,34 +163,39 @@ def _cafeteria_dish(li: Tag) -> dict[str, Any] | None:
     }
 
 
-def _cafeteria_selectable_group(food_list: Tag) -> dict[str, Any] | None:
-    """The "Seçmeli 4. Çeşit" group: a ``<b>`` title followed by a sub-list of options."""
+def _cafeteria_selectable_group(food_list: Tag) -> tuple[dict[str, Any] | None, Tag | None]:
+    """The "Seçmeli 4. Çeşit" group and its list element: a ``<b>`` title followed by a sub-list of options."""
     header = food_list.find("b")
     if header is None:
-        return None
+        return None, None
     options_list = header.find_next("ul", class_="secmeli-yemek")
     if options_list is None:
-        return None
+        return None, None
     options = [
-        name
+        dish["name"]
         for li in options_list.find_all("li", class_="lunch-menu__list-item")
-        if (name := clean_text(li.get_text(" ", strip=True)))
+        if (dish := _cafeteria_dish(li)) is not None
     ]
     if not options:
-        return None
-    return {
+        return None, None
+    group = {
         "name": clean_text(header.get_text(" ", strip=True)),
         "options": options,
         "is_selectable_group": True,
     }
+    return group, options_list
 
 
 def _cafeteria_items(food_list: Tag) -> list[dict[str, Any]]:
-    # The options of the selectable group are list items too, so they are
-    # listed once as dishes and once more inside the group.
-    dishes = [_cafeteria_dish(li) for li in food_list.find_all("li", class_="lunch-menu__list-item", recursive=True)]
+    # The options of the selectable group are list items too. They are listed
+    # once, inside the group, and left out of the plain dishes.
+    group, options_list = _cafeteria_selectable_group(food_list)
+    dishes = [
+        _cafeteria_dish(li)
+        for li in food_list.find_all("li", class_="lunch-menu__list-item", recursive=True)
+        if options_list is None or not any(parent is options_list for parent in li.parents)
+    ]
     items = [dish for dish in dishes if dish is not None]
-    group = _cafeteria_selectable_group(food_list)
     if group is not None:
         items.append(group)
     return items
@@ -214,9 +219,8 @@ def extract_cafeteria_menu(
 
     title_el = soup.select_one('span[data-placement="food-title"]')
     title = clean_text(title_el.get_text(" ", strip=True)) if title_el else None
-    # The title wins; the checked radio is the fallback. An empty title with
-    # no checked radio stays an empty string instead of becoming None.
-    meal_type = title or _checked_meal_type(soup) or title
+    # The title wins; the checked radio is the fallback.
+    meal_type = title or _checked_meal_type(soup) or None
 
     date_input = soup.select_one("#food-date")
     date = (date_input.get("value") or None) if date_input else None
