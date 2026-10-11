@@ -32,7 +32,7 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_notifications",
         "title": "Portal Notifications",
-        "description": "Read İTÜ Portal notifications (requires login).",
+        "description": "Read İTÜ Portal notifications (requires login). status is \"ok\" or \"unavailable\". When the read failed, count and notifications are null and reason says why: that is not an empty inbox. api_fallback=true marks rows taken from the Portal homepage markup instead of the notification service.",
         "inputSchema": {
             "type": "object",
             "properties": {
