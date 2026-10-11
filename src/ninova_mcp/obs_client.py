@@ -10,6 +10,7 @@ import base64
 import os
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -838,7 +839,9 @@ class ObsPublicClient:
         except ObsError:
             parsed["semester"] = None
 
-        self._cache.set(cache_key, parsed)
+        # Stamped once per real fetch, so a cached copy still says how old it is.
+        parsed["fetched_at"] = datetime.now(tz=UTC).isoformat()
+        self._cache.set(cache_key, parsed, ttl_seconds=self._schedule_cache_ttl)
         return parsed
 
     def get_course_schedule_by_crn(
