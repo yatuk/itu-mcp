@@ -580,6 +580,8 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
         }
         with self._patch(get_course_history=lambda branch: {"BLG 102E": COURSE_ENTRY}), \
              patch.object(self.app.obs, "get_graduation_remaining", return_value=graduation), \
+             patch.object(self.app.obs, "resolve_semester", return_value={"akademikDonemId": 1}), \
+             patch.object(self.app.obs, "list_registered_courses", return_value={"kayitSinifResultList": []}), \
              patch.object(self.app.obs, "default_program_id", return_value=1):
             result = self.app.plan_remaining_courses()
         # summarize_graduation_plan routes the grupName entry into open_elective_slots,
@@ -605,6 +607,8 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
         }
         with self._patch(get_course_history=lambda branch: {}), \
              patch.object(self.app.obs, "get_graduation_remaining", return_value=graduation), \
+             patch.object(self.app.obs, "resolve_semester", return_value={"akademikDonemId": 1}), \
+             patch.object(self.app.obs, "list_registered_courses", return_value={"kayitSinifResultList": []}), \
              patch.object(self.app.obs, "default_program_id", return_value=1):
             result = self.app.plan_remaining_courses()
         self.assertEqual(result["resolved_count"], 0)

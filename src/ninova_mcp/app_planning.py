@@ -307,6 +307,22 @@ class PlanningToolsMixin:
             os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD")
         )
 
+    def _courses_in_progress(self) -> tuple[list[dict[str, Any]], str | None]:
+        """Courses the student is taking now: ``(courses, note)``.
+
+        Registered courses of the latest term that have no letter grade yet,
+        in the shape ``gpa_simulation`` reads them (key, code, crns, name,
+        names, credit). An unreadable list gives no courses and a note, never
+        an exception.
+        """
+        from .gpa_simulation import _read_registered
+
+        try:
+            rows = self._registered_course_rows()
+        except Exception as exc:  # noqa: BLE001 - an optional lookup must never fail the tool
+            return [], f"Bu dönemin kayıtlı dersleri okunamadı ({type(exc).__name__}); devam eden dersler işaretlenmedi."
+        return _read_registered([row for row in rows if not str(row.get("harfNotu") or "").strip()]), None
+
     def _registered_course_rows(self) -> list[dict[str, Any]]:
         """Registered courses of the student's latest term, as OBS lists them."""
         resolved = self.obs.resolve_semester(None)
@@ -724,11 +740,11 @@ class PlanningToolsMixin:
     ) -> dict[str, Any]:
         """Combine graduation-remaining required courses with archive scheduling history.
 
-        For every course still needed to graduate, looks up which season it
-        opens in and who has taught it, and produces a one-line scheduling
-        recommendation per course — the manual "call archive_course_history
-        once per remaining course and mentally merge the results" workflow,
-        done in one call.
+        The remaining required courses are split in two: the ones the student
+        is taking this term (``in_progress``) and the ones still to plan. Only
+        the second group gets an archive lookup: which season it opens in, who
+        has taught it, and a one-line scheduling recommendation. Open elective
+        slots are listed with their credits.
         """
         from .archive import recommend_course_timing, seasonality, who_taught
 
@@ -736,47 +752,142 @@ class PlanningToolsMixin:
         graduation = self.obs.get_graduation_remaining(pid)
         summary = summarize_graduation_plan(graduation)
         remaining = summary.get("remaining_required_courses") or []
+        registered, registered_note = self._courses_in_progress()
+        matches, other_registered = match_courses_in_progress(remaining, registered)
 
+        in_progress: list[dict[str, Any]] = []
         plans: list[dict[str, Any]] = []
         unresolved: list[dict[str, Any]] = []
-        for course in remaining:
+        to_plan_credits: list[float] = []
+        for index, course in enumerate(remaining):
             code = course.get("course_code")
-            if not code:
-                # Named electives ("8th Sems. Elect. Course I (MT)") have no
-                # fixed course code and can't be looked up in the archive.
-                unresolved.append({
-                    "course_code": None,
-                    "course_name": course.get("course_name"),
-                    "reason": "Bu bir seçmeli slot; sabit bir ders kodu yok.",
-                })
+            base = {
+                "course_code": code,
+                "course_name": course.get("course_name"),
+                "credit": course.get("credit"),
+                "semester": course.get("semester"),
+            }
+            if index in matches:
+                in_progress.append({**base, "in_progress": True, **matches[index]})
                 continue
+            to_plan_credits.append(float(course.get("credit") or 0.0))
             try:
-                canonical, entry = self._archive_course_entry(code)
+                canonical, entry = self._archive_course_entry(str(code or ""), course.get("course_name"))
             except ItuArchiveError as exc:
-                unresolved.append({"course_code": code, "reason": str(exc)})
+                unresolved.append({**base, "in_progress": False, "reason": str(exc)})
                 continue
 
             seasonality_summary = seasonality(entry.get("terms") or [])
             taught = who_taught(entry, limit_terms=limit_terms)
             top_instructors = taught["instructors"][:3]
             plans.append({
+                **base,
                 "course_code": canonical,
-                "course_name": course.get("course_name"),
-                "credit": course.get("credit"),
-                "semester": course.get("semester"),
+                "in_progress": False,
                 "seasonality": seasonality_summary,
                 "top_instructors": top_instructors,
                 "recommendation": recommend_course_timing(canonical, seasonality_summary, top_instructors),
             })
 
-        return {
+        slots = [
+            {"slot": slot.get("slot"), "credit": slot.get("credit"), "semester": slot.get("semester")}
+            for slot in summary.get("open_elective_slots") or []
+        ]
+        slot_credits = round(math.fsum(float(slot["credit"] or 0.0) for slot in slots), 2)
+        result: dict[str, Any] = {
             "program_id": pid,
             "remaining_course_count": len(remaining),
+            "in_progress_count": len(in_progress),
+            "to_plan_count": len(plans) + len(unresolved),
             "resolved_count": len(plans),
-            "unresolved_courses": unresolved,
+            "in_progress": in_progress,
             "plans": plans,
+            "unresolved_courses": unresolved,
+            "open_elective_slots": slots,
+            "open_elective_slot_count": len(slots),
+            "open_elective_credits": slot_credits,
+            "credits": {
+                "in_progress": round(math.fsum(float(item["credit"] or 0.0) for item in in_progress), 2),
+                "to_plan": round(math.fsum(to_plan_credits), 2),
+                "open_elective_slots": slot_credits,
+            },
+            "other_registered_courses": other_registered,
+            "registered_courses_status": "unavailable" if registered_note else "read",
+            "note": (
+                "in_progress: bu dönem alınan zorunlu dersler; geçilirse kalan listesinden çıkar. "
+                "plans ve unresolved_courses: henüz planlanması gereken zorunlu dersler. "
+                "open_elective_slots: boş seçmeli slotlar. other_registered_courses içindeki bir ders "
+                "bu slotlardan birini dolduruyor olabilir; OBS bunu not girilmeden göstermez."
+            ),
             "untrusted_external_content": True,
         }
+        if registered_note:
+            result["registered_courses_note"] = registered_note
+        return result
+
+
+def match_courses_in_progress(
+    remaining: list[dict[str, Any]], registered: list[dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
+    """Pair remaining plan courses with the courses registered now.
+
+    ``remaining`` are ``remaining_required_courses`` rows of the graduation
+    summary; ``registered`` is what ``gpa_simulation._read_registered``
+    returns. A pair is the same course code, or the likely-equivalent rule of
+    the GPA simulation for a changed department code: the same normalized
+    name and the same credit, with exactly one candidate on each side. When
+    the registration carries no credit the name alone decides and the match
+    says so. Returns ``{index in remaining: match}`` and the registered
+    courses that matched nothing.
+    """
+    from .gpa import course_key
+    from .gpa_simulation import _name_key, _same
+
+    def describe(course: dict[str, Any], basis: str, plan_code: Any) -> dict[str, Any]:
+        match: dict[str, Any] = {"crn": ", ".join(course["crns"]) or None, "matched_by": basis}
+        if basis != "code":
+            match["registered_as"] = course["code"]
+            match["match_note"] = (
+                f"{plan_code} plandaki kodla kayıtlı değil; aynı adı"
+                + (" ve krediyi" if basis == "name_and_credit" else "")
+                + f" taşıyan {course['code']} bu dönem alınıyor. Eşdeğerlik OBS'de doğrulanmadı."
+            )
+        return match
+
+    by_key = {course["key"]: course for course in registered}
+    matches: dict[int, dict[str, Any]] = {}
+    used: set[str] = set()
+    for index, course in enumerate(remaining):
+        key = course_key(course.get("course_code")) if course.get("course_code") else ""
+        if key and key in by_key and key not in used:
+            matches[index] = describe(by_key[key], "code", course.get("course_code"))
+            used.add(key)
+
+    def candidates(course: dict[str, Any]) -> list[dict[str, Any]]:
+        name = _name_key(course.get("course_name"))
+        credit = course.get("credit")
+        return [
+            other for other in registered
+            if other["key"] not in used and name and name in other["names"]
+            and (other["credit"] is None or _same(other["credit"], float(credit) if credit else None))
+        ]
+
+    open_indexes = [index for index in range(len(remaining)) if index not in matches]
+    found = {index: candidates(remaining[index]) for index in open_indexes}
+    for index, options in found.items():
+        if len(options) != 1:
+            continue
+        other = options[0]
+        rivals = [i for i, rival_options in found.items() if any(o["key"] == other["key"] for o in rival_options)]
+        if len(rivals) == 1:
+            basis = "name_and_credit" if other["credit"] is not None else "name"
+            matches[index] = describe(other, basis, remaining[index].get("course_code"))
+            used.add(other["key"])
+    others = [
+        {"code": course["code"], "crn": ", ".join(course["crns"]) or None, "name": course["name"]}
+        for course in registered if course["key"] not in used
+    ]
+    return matches, others
 
 
 def _publish_parameter_schema(function: Any, **annotations: Any) -> None:

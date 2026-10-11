@@ -294,7 +294,10 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "seasonality and who_taught history for each, producing a one-line scheduling "
             "recommendation per course (e.g. 'only offered in Güz, usually taught by X, "
             "average fill 0.95 — plan for Güz'). Replaces manually calling "
-            "archive_course_history once per remaining course."
+            "archive_course_history once per remaining course. The result keeps three things "
+            "apart: in_progress (required courses the student is registered in this term, with "
+            "CRN; do not present them as untaken), plans and unresolved_courses (still to plan), "
+            "and open_elective_slots with their credits."
         ),
         "inputSchema": {
             "type": "object",
