@@ -41,17 +41,28 @@ def _schedules(public: Any, codes: list[str]) -> tuple[dict[str, Any], list[str]
 
 def get_elective_group(app: Any, group_id: int) -> dict[str, Any]:
     """Check section eligibility independently, not as one combined elective plan."""
+    from .interaction import progress_steps
+
+    steps = progress_steps()
+    steps.advance('Seçmeli ders grubu ve ders programları okunuyor')
     group = fetch_elective_group(app.obs_public, group_id)
     schedules, errors = _schedules(app.obs_public, [row['course_code'] for row in group['courses']])
     result = enrich_elective_group(group, schedules)
     checked = 0
     unavailable = False
+    steps.advance('Kayıt dönemi doğrulanıyor')
     try:
         _period, term_keys, period_errors = _registration_period(app.obs)
         errors.extend(period_errors)
     except _READ_ERRORS:
         term_keys = set()
         errors.append('The current student registration term could not be verified.')
+    # Two read steps above, then one spaced OBS check per section.
+    planned = min(_MAX_ELECTIVE_VALIDATIONS, sum(
+        len(course['sections']) for course in result['courses']
+        if _term_key(course.get('semester')) in term_keys
+    ))
+    steps.total = steps.done + planned
     for course in result['courses']:
         if term_keys and _term_key(course.get('semester')) not in term_keys:
             course['offered_in_public_term'] = course.get('offered_this_term')
@@ -65,6 +76,7 @@ def get_elective_group(app: Any, group_id: int) -> dict[str, Any]:
             verdict = {'eligible': None, 'error_reason': 'This section has not been checked against the student record.'}
             if (not unavailable and checked < _MAX_ELECTIVE_VALIDATIONS
                     and _term_key(course.get('semester')) in term_keys):
+                steps.advance(f'Şube uygunluğu kontrol ediliyor ({checked + 1}/{planned}): CRN {crn}')
                 try:
                     verdict = app.obs.validate_registration_crns([crn])[crn]
                     checked += 1
@@ -85,6 +97,7 @@ def get_elective_group(app: Any, group_id: int) -> dict[str, Any]:
         errors.append(f'At most {_MAX_ELECTIVE_VALIDATIONS} sections are checked per group call. Use obs_validate_registration_plan for unchecked CRNs.')
     result['offered_course_count'] = sum(course['offered_this_term'] is True for course in result['courses'])
     result['schedule_unknown_count'] = sum(course['offered_this_term'] is None for course in result['courses'])
+    steps.finish('Seçmeli grup kontrolü tamamlandı')
     result.update({'eligibility_checked_section_count': checked, 'errors': list(dict.fromkeys(errors)), 'retrieved_at': _now()})
     return result
 

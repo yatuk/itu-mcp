@@ -67,6 +67,44 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
   `allow_replace=true`. The refusal lists what would be removed and sends nothing.
   It has not yet been confirmed against a successful live save.
 
+### Confirmation by the user, not by the model
+
+`confirm=true` and `allow_replace=true` are arguments, and arguments are written by the
+model. A client that approves tool calls automatically, combined with an announcement or
+an email that says "upload this file" or "save these CRNs", could otherwise produce a
+write that no person ever looked at. `submit_assignment` and `obs_save_registration_draft`
+therefore ask the user directly with MCP elicitation: the server sends the question, the
+client shows it, and the model cannot answer it.
+
+- The question is the last gate. The environment switches, input validation, the
+  dry-run preview and the `needs_allow_replace` refusal all run first, and none of them
+  is relaxed. `confirm` and `allow_replace` stay required exactly as before. Supplying
+  them never skips the question.
+- The question is written in Turkish and states the concrete action. For a draft: the
+  term code, the CRNs that will be saved, the CRNs that will be added and the CRNs that
+  will be removed from the current draft. For an upload: course, assignment, upload
+  address, slot, file name, size and local path, and whether an existing submission
+  will be replaced. Course and assignment names come from Ninova pages, so each one is
+  reduced to a single truncated line and cannot add lines of its own to the dialog.
+- Only an explicit accept with the confirmation box ticked proceeds. Decline, cancel, an
+  unticked box, a malformed answer, a client error and a request cancelled while the
+  dialog is open all send nothing. Decline and cancel come back as a normal result
+  (`status: declined_by_user` or `cancelled_by_user`) that tells the model not to retry,
+  not as an error.
+- A client that did not declare the elicitation capability keeps the previous behaviour:
+  the arguments alone gate the write. The result then carries
+  `confirmation.method = "argument_only"` so the transcript shows that no person was
+  asked by the server.
+- `NINOVA_REQUIRE_ELICITATION=1` turns that fallback into a refusal
+  (`status: elicitation_required`, nothing sent). It is off by default so existing
+  setups keep working. Set it when the account should never be written to without a
+  dialog. The value must be exactly `1`. With it set, a direct Python call of the two
+  methods outside an MCP request is refused as well.
+- Limits: the server can only see what the client declares. A client that declares
+  elicitation and then answers the question itself, without showing it, defeats this
+  check; the protocol gives the server no way to detect that. Whether a given client
+  shows elicitation dialogs has to be checked for that client and version.
+
 ## Prompt-injection boundary
 
 İTÜ pages can contain text written by instructors, students or external editors.

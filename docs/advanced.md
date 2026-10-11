@@ -46,6 +46,7 @@ export NINOVA_COMPACT_DEFAULT="0"                    # 1 = shrink heavy tool pay
 export NINOVA_SESSION_PERSIST="1"                    # cache cookies under NINOVA_STATE_DIR
 export NINOVA_SESSION_MAX_AGE_SECONDS="43200"        # 12h default
 export NINOVA_ALLOW_UPLOADS="1"
+export NINOVA_REQUIRE_ELICITATION="0"                # 1 = refuse account writes unless the client can ask the user
 export NINOVA_OBS_BASE_URL="https://obs.itu.edu.tr"  # OBS student portal
 export NINOVA_OBS_JWT_TTL_SECONDS="1500"
 export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
@@ -246,6 +247,45 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - Set `NINOVA_ALLOW_UPLOADS=0` to disable uploads entirely.
 - Remote HTTP transport does **not** expose upload tools (local stdio only).
 - Always verify the target course/assignment/slot with the user before `confirm=true`.
+
+### Confirmation dialogs (elicitation)
+
+`submit_assignment` and `obs_save_registration_draft` ask the user to confirm through the
+MCP client itself, just before anything is sent. This is in addition to `confirm` and
+`allow_replace`, which stay required.
+
+- Client supports elicitation: a Turkish dialog lists exactly what will be uploaded or
+  saved. The result contains `confirmation.method = "elicitation"`. If the user declines
+  or closes the dialog, nothing is sent and the result has
+  `status: declined_by_user` or `cancelled_by_user`.
+- Client does not support elicitation: behaviour is unchanged and the result contains
+  `confirmation.method = "argument_only"`.
+- `NINOVA_REQUIRE_ELICITATION=1`: clients without elicitation are refused with
+  `status: elicitation_required`. Default is off.
+
+Other tool calls on the same server wait while a dialog is open, because tool calls are
+handled one at a time.
+
+### Progress notifications
+
+Four tools make many requests and can run for tens of seconds: `sync_all_courses`,
+`crawl_course`, `obs_get_course_prerequisites` (the postrequisite scan reads every branch
+table on a cold cache) and `obs_get_elective_group` (spaced OBS checks). When the client
+sends a `progressToken` with the call, they emit `notifications/progress` while they
+run, with a short Turkish message naming the current step:
+
+| Tool | `progress` / `total` |
+| --- | --- |
+| `sync_all_courses` | courses finished / courses to sync |
+| `obs_get_course_prerequisites` | branch tables read / branches to scan |
+| `obs_get_elective_group` | two read steps, then one step per checked section |
+| `crawl_course` | pages read, no total (the page count is not known in advance) |
+
+Without a progress token nothing is sent. These six tools run in a worker thread so the
+notifications and the dialog answer can travel while the tool is still working; all
+other tools run as before. On the remote HTTP transport the server answers each call
+with a single JSON response, so progress only reaches a client that keeps the optional
+server-to-client stream open.
 
 ### Mail read-only scope
 
