@@ -6,98 +6,116 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from bs4 import Tag
+from bs4 import BeautifulSoup, Tag
 
 from .parsing_common import TURKIYE_TZ, clean_text, make_soup, normalize_lookup_text
 from .parsing_page import _find_table_by_headers, _table_after_heading, parse_html_page
+
+
+def _attendance_student_name(soup: BeautifulSoup) -> str | None:
+    student_table = _find_table_by_headers(soup, ["Öğrenci"])
+    if student_table is None:
+        return None
+    rows = student_table.find_all("tr")
+    if len(rows) < 2:
+        return None
+    cells = rows[1].find_all("td")
+    return clean_text(cells[0].get_text(" ", strip=True)) if cells else None
+
+
+def _find_attendance_table(soup: BeautifulSoup) -> Tag | None:
+    """The first table whose first header is "Hafta"."""
+    for table in soup.find_all("table"):
+        headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
+        if headers and normalize_lookup_text(headers[0]) == "hafta":
+            return table
+    return None
+
+
+def _attendance_source_system(soup: BeautifulSoup, attendance_table: Tag | None) -> str | None:
+    # Ninova pages show attendance from two independent systems (native Ninova
+    # and Kepler) under separate headings; instructors may use either one, and
+    # the page itself warns the two can disagree. Report which table this data
+    # actually came from so callers don't mistake Kepler data for a native
+    # Ninova record.
+    if attendance_table is None:
+        return None
+    if attendance_table is _table_after_heading(soup, "Kepler Yoklama Bilgileri"):
+        return "kepler"
+    if attendance_table is _table_after_heading(soup, "Ninova Yoklama Bilgileri"):
+        return "ninova"
+    return None
+
+
+def _attendance_session(column_name: str, value: str, node: Tag) -> dict[str, Any]:
+    """The marks of one session cell; ``zero_count`` is settled by the week it belongs to."""
+    marks = re.findall(r"[01]", value)
+    session: dict[str, Any] = {
+        "name": column_name,
+        "value": value,
+        "present_count": marks.count("1"),
+        "zero_count": marks.count("0"),
+    }
+    # Tooltips or image labels, when the page has them, are passed
+    # on untouched: they may say what a zero means.
+    hints = [
+        clean_text(str(tag.get(attribute)))
+        for tag in [node, *node.find_all(True)]
+        for attribute in ("title", "alt")
+        if tag.get(attribute)
+    ]
+    if hints:
+        session["hints"] = list(dict.fromkeys(hints))
+    return session
+
+
+def _attendance_week(headers: list[str], row: Tag) -> dict[str, Any] | None:
+    """One row of the grid, or None for a row without cells.
+
+    The grid prints 0 both for "absent" and for a session nobody has entered
+    yet (a whole term of future weeks shows as zeros). A zero is therefore
+    counted as an absence only in a week that also holds a 1, which shows
+    attendance was taken that week. Every other zero is "unmarked or absent".
+    """
+    nodes = row.find_all("td")
+    cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
+    if not cells:
+        return None
+    sessions = [
+        _attendance_session(column_name, value, node)
+        for column_name, value, node in zip(headers[1:], cells[1:], nodes[1:], strict=False)
+    ]
+    recorded = any(session["present_count"] for session in sessions)
+    for session in sessions:
+        zeros = session.pop("zero_count")
+        session["absent_count"] = zeros if recorded else 0
+        session["unmarked_or_absent_count"] = 0 if recorded else zeros
+    return {
+        "week": cells[0],
+        "status": "recorded" if recorded else "unmarked_or_absent",
+        "sessions": sessions,
+    }
 
 
 def extract_attendance(html: str, page_url: str, base_url: str) -> dict[str, Any]:
     soup = make_soup(html)
     page = parse_html_page(page_url, html, base_url=base_url)
 
-    student_name = None
-    student_table = _find_table_by_headers(soup, ["Öğrenci"])
-    if student_table is not None:
-        rows = student_table.find_all("tr")
-        if len(rows) >= 2:
-            cells = rows[1].find_all("td")
-            if cells:
-                student_name = clean_text(cells[0].get_text(" ", strip=True))
-
-    attendance_table: Tag | None = None
-    for table in soup.find_all("table"):
-        headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
-        if headers and normalize_lookup_text(headers[0]) == "hafta":
-            attendance_table = table
-            break
-
-    # Ninova pages show attendance from two independent systems (native Ninova
-    # and Kepler) under separate headings; instructors may use either one, and
-    # the page itself warns the two can disagree. Report which table this data
-    # actually came from so callers don't mistake Kepler data for a native
-    # Ninova record.
-    source_system = None
-    if attendance_table is not None:
-        if attendance_table is _table_after_heading(soup, "Kepler Yoklama Bilgileri"):
-            source_system = "kepler"
-        elif attendance_table is _table_after_heading(soup, "Ninova Yoklama Bilgileri"):
-            source_system = "ninova"
-
+    attendance_table = _find_attendance_table(soup)
     disclaimer_tag = soup.find(class_="uyari")
-    disclaimer = clean_text(disclaimer_tag.get_text(" ", strip=True)) if disclaimer_tag else None
 
-    # The grid prints 0 both for "absent" and for a session nobody has entered
-    # yet (a whole term of future weeks shows as zeros). A zero is therefore
-    # counted as an absence only in a week that also holds a 1, which shows
-    # attendance was taken that week. Every other zero is "unmarked or absent".
     headers: list[str] = []
     weeks: list[dict[str, Any]] = []
     if attendance_table is not None:
         headers = [clean_text(cell.get_text(" ", strip=True)) for cell in attendance_table.find_all("th")]
-        for row in attendance_table.find_all("tr")[1:]:
-            nodes = row.find_all("td")
-            cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
-            if not cells:
-                continue
-            sessions = []
-            for column_name, value, node in zip(headers[1:], cells[1:], nodes[1:], strict=False):
-                marks = re.findall(r"[01]", value)
-                session: dict[str, Any] = {
-                    "name": column_name,
-                    "value": value,
-                    "present_count": marks.count("1"),
-                    "zero_count": marks.count("0"),
-                }
-                # Tooltips or image labels, when the page has them, are passed
-                # on untouched: they may say what a zero means.
-                hints = [
-                    clean_text(str(tag.get(attribute)))
-                    for tag in [node, *node.find_all(True)]
-                    for attribute in ("title", "alt")
-                    if tag.get(attribute)
-                ]
-                if hints:
-                    session["hints"] = list(dict.fromkeys(hints))
-                sessions.append(session)
-            recorded = any(session["present_count"] for session in sessions)
-            for session in sessions:
-                zeros = session.pop("zero_count")
-                session["absent_count"] = zeros if recorded else 0
-                session["unmarked_or_absent_count"] = 0 if recorded else zeros
-            weeks.append(
-                {
-                    "week": cells[0],
-                    "status": "recorded" if recorded else "unmarked_or_absent",
-                    "sessions": sessions,
-                }
-            )
+        parsed_rows = (_attendance_week(headers, row) for row in attendance_table.find_all("tr")[1:])
+        weeks = [week for week in parsed_rows if week is not None]
 
     result: dict[str, Any] = {
         "url": page["url"],
-        "student_name": student_name,
-        "source_system": source_system,
-        "disclaimer": disclaimer,
+        "student_name": _attendance_student_name(soup),
+        "source_system": _attendance_source_system(soup, attendance_table),
+        "disclaimer": clean_text(disclaimer_tag.get_text(" ", strip=True)) if disclaimer_tag else None,
         "headers": headers,
         "count": len(weeks),
         "weeks": weeks,
