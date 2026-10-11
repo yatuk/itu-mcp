@@ -74,6 +74,61 @@ def _postrequisite_result(
     }
 
 
+def _unknown_prerequisite_detail(code: str, branch: str, number: str) -> dict[str, Any]:
+    """The detail of a course before anything is known about its rule."""
+    return {
+        "course_id": code,
+        "course_code": code,
+        "brans_kodu": branch,
+        "ders_no": number,
+        "title": code,
+        "prerequisites": [],
+        "requirement_tree": None,
+        "prerequisite_status": "unknown",
+        "available": False,
+        "parse_warnings": None,
+        "raw_tables": [],
+        "text_excerpt": "",
+        "untrusted_external_content": True,
+    }
+
+
+def _course_references(leaves: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each course a rule names, once per minimum grade, in the order of the rule."""
+    references: list[dict[str, Any]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for leaf in leaves:
+        identity = (leaf["code"], leaf.get("min_grade"))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        references.append({
+            "code": leaf["code"], "name": None,
+            "min_grade": leaf.get("min_grade"),
+            "type": "prerequisite_reference", "group": None,
+        })
+    return references
+
+
+def _detail_from_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    """The detail fields that the official rule of a course determines."""
+    from .prerequisites import flatten_courses
+
+    leaves = flatten_courses(rule.get("requirement_tree"))
+    requires_something = leaves or rule.get("credit_requirement") is not None
+    return {
+        "prerequisites": _course_references(leaves),
+        "available": True,
+        "prerequisite_status": "has_prerequisites" if requires_something else "unknown",
+        "official_prerequisite": rule,
+        "requirement_tree": rule.get("requirement_tree"),
+        "credit_requirement": rule.get("credit_requirement"),
+        "credit_requirement_text": rule.get("credit_requirement_text"),
+        "text_excerpt": rule.get("expression") or "",
+        "prerequisite_status_note": "The prerequisite list contains references, not a list of courses that are all mandatory. Use the full requirement_tree for AND/OR alternatives and minimum grades.",
+    }
+
+
 class ObsPublicPrerequisites(ObsPublicCatalog):
     """Prerequisites of a course and the courses that require it."""
 
@@ -180,7 +235,6 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
     ) -> dict[str, Any]:
         """Read the authoritative branch rule for an exact course code."""
         from .archive import normalize_course_code, split_course_code
-        from .prerequisites import flatten_courses
 
         try:
             code = normalize_course_code(f"{brans_kodu} {ders_no}")
@@ -191,21 +245,7 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached  # type: ignore[return-value]
-        parsed: dict[str, Any] = {
-            "course_id": code,
-            "course_code": code,
-            "brans_kodu": branch,
-            "ders_no": number,
-            "title": code,
-            "prerequisites": [],
-            "requirement_tree": None,
-            "prerequisite_status": "unknown",
-            "available": False,
-            "parse_warnings": None,
-            "raw_tables": [],
-            "text_excerpt": "",
-            "untrusted_external_content": True,
-        }
+        parsed = _unknown_prerequisite_detail(code, branch, number)
         try:
             branch_rules = self.get_branch_prerequisites(branch)
         except ObsError as exc:
@@ -217,44 +257,32 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
             parsed["url"] = branch_rules.get("url")
             parsed["prerequisite_source"] = branch_rules.get("url")
             if rule is not None:
-                leaves = flatten_courses(rule.get("requirement_tree"))
-                seen: set[tuple[str, str | None]] = set()
-                for leaf in leaves:
-                    identity = (leaf["code"], leaf.get("min_grade"))
-                    if identity in seen:
-                        continue
-                    seen.add(identity)
-                    parsed["prerequisites"].append({
-                        "code": leaf["code"], "name": None,
-                        "min_grade": leaf.get("min_grade"),
-                        "type": "prerequisite_reference", "group": None,
-                    })
-                parsed["available"] = True
-                parsed["prerequisite_status"] = "has_prerequisites" if leaves or rule.get("credit_requirement") is not None else "unknown"
-                parsed["official_prerequisite"] = rule
-                parsed["requirement_tree"] = rule.get("requirement_tree")
-                parsed["credit_requirement"] = rule.get("credit_requirement")
-                parsed["credit_requirement_text"] = rule.get("credit_requirement_text")
-                parsed["text_excerpt"] = rule.get("expression") or ""
-                parsed["prerequisite_status_note"] = "The prerequisite list contains references, not a list of courses that are all mandatory. Use the full requirement_tree for AND/OR alternatives and minimum grades."
+                parsed.update(_detail_from_rule(rule))
             elif branch_rules.get("table_parsed"):
-                # An invalid code is also absent from the prerequisite table.
-                # Verify its catalog identity before claiming it has no rule.
-                try:
-                    catalog = self.search_courses(code)
-                except ObsError:
-                    catalog = []
-                if any(row.get("code") == code for row in catalog):
-                    parsed["available"] = True
-                    parsed["prerequisite_status"] = "no_prerequisites"
-                    parsed["prerequisite_status_note"] = f"{code} exists in the official catalog and has no entry in the parsed {branch} prerequisite table."
-                else:
-                    parsed["prerequisite_status_note"] = "The course is absent from the prerequisite table, but its exact catalog identity could not be verified."
+                parsed.update(self._detail_without_rule(code, branch))
             else:
                 parsed["prerequisite_status_note"] = "The official branch prerequisite table could not be parsed; an empty result is not evidence of no prerequisites."
         if parsed["prerequisite_status"] != "unknown":
             self._cache.set(cache_key, parsed)
         return parsed
+
+    def _detail_without_rule(self, code: str, branch: str) -> dict[str, Any]:
+        """What can be said about a course that a parsed branch table does not list."""
+        # An invalid code is also absent from the prerequisite table.
+        # Verify its catalog identity before claiming it has no rule.
+        try:
+            catalog = self.search_courses(code)
+        except ObsError:
+            catalog = []
+        if any(row.get("code") == code for row in catalog):
+            return {
+                "available": True,
+                "prerequisite_status": "no_prerequisites",
+                "prerequisite_status_note": f"{code} exists in the official catalog and has no entry in the parsed {branch} prerequisite table.",
+            }
+        return {
+            "prerequisite_status_note": "The course is absent from the prerequisite table, but its exact catalog identity could not be verified.",
+        }
 
     def get_branch_prerequisites(self, branch: str) -> dict[str, Any]:
         """Return the official prerequisite rules for every course in a branch.
