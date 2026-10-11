@@ -22,6 +22,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "Term-by-term offering history for a course from the archive: which terms it "
             "ran, how many sections, which instructors, and which season it opens in. "
             "Answers 'is this course ever offered in the spring?', which OBS cannot."
+            "A course whose department code changed keeps its earlier terms under the old code "
+            "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
+            "call again with that code for the earlier history."
         ),
         "inputSchema": {
             "type": "object",
@@ -49,6 +52,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "List every instructor who has taught a course across archived terms, ranked "
             "by how many terms they taught it, with their most recent term and average "
             "section fill rate."
+            "A course whose department code changed keeps its earlier terms under the old code "
+            "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
+            "call again with that code for the earlier history."
         ),
         "inputSchema": {
             "type": "object",
@@ -110,6 +116,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "How full a section got. With a CRN, reads that term's quota time series. "
             "With a course code, reports capacity vs enrolment across every past section "
             "so you can judge whether the course reliably fills up."
+            "A course whose department code changed keeps its earlier terms under the old code "
+            "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
+            "call again with that code for the earlier history."
         ),
         "inputSchema": {
             "type": "object",
@@ -127,7 +136,11 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Search the archive's full course index by code or name fragment, across every "
             "term it has ever seen — not just the active one. Use this to find the exact "
-            "code archive_course_history needs when only a name fragment is known."
+            "code archive_course_history needs when only a name fragment is known. "
+            "Matching ignores case, accents and spacing ('cen411e', 'yazilim'). The index holds "
+            "one name per course, in its language of instruction: a course taught in English "
+            "(code ending in E) is found by its English name or its code, not by a Turkish "
+            "name. An empty result carries a hint saying so."
         ),
         "inputSchema": {
             "type": "object",
