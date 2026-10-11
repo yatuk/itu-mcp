@@ -149,6 +149,40 @@ hatalar aşağıda, alan alan.
 - `build_degree_plan`: AKTS artık sayı, dersler bir kez listeleniyor
 - `obs_search_courses` her ders kodu için tek ve temiz bir kayıt döndürüyor
 
+### Sadeleştirme sırasında bulunan hatalar
+
+Kod sadeleştirilirken (en karmaşık fonksiyon 64'ten 15'e indi, `parsing.py` ve `obs_client.py`
+alanlara bölündü) fark edilen hatalar ayrı bir turda düzeltildi.
+
+- **Ödev yükleme sonucu:** `submit_assignment` artık yalnızca seçilen dosya alanına bakarak karar
+  veriyor. Sayfanın başka yerindeki "yüklediniz" gibi ifadeler başarı sayılmıyor. Yeni `status`
+  alanı: `uploaded`, `not_confirmed` (Ninova'dan elle kontrol et) ya da `failed`. `ok` yalnızca
+  `uploaded` için doğru. Var olan dosya değiştirilirken tarih ya da ad değişmediyse başarı
+  bildirilmiyor
+- **Profil gizleme:** büyük İ ile başlayan etiketler ("İkamet") ve "E-Posta", "Tel No" gibi
+  yazımlar artık tanınıyor. Hassas bir iletişim satırının bütün metin alanları gizleniyor. Hangi
+  alanda olursa olsun e-posta, Türkiye telefon numarası ve 11 haneli kimlik numarası
+  maskeleniyor. Öğrenci numarası, CRN, dönem kodu ve tarihlere dokunulmuyor
+- **Portal bildirimleri:** `obs_get_notifications` servisi sayfanın kendi gönderdiği `all`
+  parametresiyle çağırıyor ve artık bildirimleri döndürüyor. Yeni `include_all` parametresi,
+  `unread_count`, `is_read`, `summary`. Bir bildirimin tam metni yalnızca `notification_id` ile
+  istenince döner
+- **İki GANO aracı aynı kararı veriyor:** `obs_calculate_gpa` ile `obs_simulate_cumulative_gpa`
+  seçmeli ders kredisini, ders adı karşılaştırmasını, plan satırı okumayı ve senaryo anahtarı
+  eşleştirmesini artık tek bir yerden (`gpa_common`) alıyor. İkisinin her dönem için aynı krediyi
+  ve aynı ortalamayı bulduğu ortak bir testle sınanıyor
+- Kredisi 0 olan dersler (BL gibi) artık "kredisi eksik" sayılmıyor. Metin olmayan not değerleri
+  "tanınmayan not" yerine "henüz not yok" olarak ele alınıyor
+- Takvim dışa aktarma: takvimden gelen tarihler hatalıysa hata mesajı her tarihin kaynağını
+  söylüyor. Bozuk bir takvim satırı ya da okunamayan tarih artık çökertmiyor
+- Kayıt durumu: sayı olarak gelen sınıf düzeyi tanınıyor, aynı başlangıç ve bitişe sahip
+  pencereler tek pencere sayılıyor, boş ders satırı kanıt sayılmıyor
+- Açık OBS: boş bölüm kodu rastgele bir bölüme çözülmüyor. Yalnızca rakamdan oluşan girdi (ör. bir
+  CRN) ders kodu olarak çözülmüyor. Boş dönem metni en son dönem anlamına geliyor
+- Pano: kendi kodu bulunamayan ders komşu dersin kodunu ve CRN'ini almıyor
+- Boşluktan ibaret ödev ya da ders adı başlıksız bir ödevle eşleşmiyor
+- Bir test verisinde kalmış gerçek ad sahte adla değiştirildi
+
 ### Daha kısa cevaplar
 
 - OBS araçları varsayılan olarak kısaltılmış sonuç döndürüyor: özet önce gelir, ham OBS yanıtı
@@ -177,6 +211,9 @@ hatalar aşağıda, alan alan.
 
 ### Yükseltirken bilmen gerekenler
 
+- `submit_assignment` sonucunda `ok: true` artık yalnızca yükleme seçilen alanda doğrulandıysa
+  gelir. `status: "not_confirmed"` başarı değildir, Ninova'dan kontrol edilmelidir
+- `obs_get_notifications` listesinde `content` alanı yok, tam metin `notification_id` ile gelir
 - Ham OBS verisini okuyan bir betiğin varsa ilgili araca `include_raw=true` eklemen gerekir.
   `obs_calculate_gpa` içinde kaldırılan sabit alanların (`note`, `scale`, `calculated_term_gpa`,
   `credit_fallback_courses` ve benzerleri) geri alma seçeneği yoktur

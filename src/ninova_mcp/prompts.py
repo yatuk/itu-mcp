@@ -174,6 +174,8 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
         "`unmatched_projected_keys` doluysa senaryo eksik uygulanmıştır: "
         "`valid_projected_keys` içinden doğru anahtarla yeniden dene. "
         "`credit_ambiguity` varsa kredisi iki değerli dersleri adıyla söyle. "
+        "`credit_ambiguity.status` `partly_resolved_by_official_average` ise yalnız "
+        "`credit_choice` taşıyan derslerin kredisi kesinleşmiştir. "
         "Derslerdeki `attempts` alanı aynı dersin başka dönemlerini verir; "
         "`likely_equivalent` kesin bilgi değil, olasılıktır.\n\n"
         "Bu hesabın bilgi amaçlı olduğunu, resmî GANO için OBS transkriptine "
