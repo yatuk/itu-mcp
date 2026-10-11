@@ -32,12 +32,13 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_notifications",
         "title": "Portal Notifications",
-        "description": "Read İTÜ Portal notifications (requires login). status is \"ok\" or \"unavailable\". When the read failed, count and notifications are null and reason says why: that is not an empty inbox. api_fallback=true marks rows taken from the Portal homepage markup instead of the notification service.",
+        "description": "Read İTÜ Portal notifications (requires login). By default the recent ones the Portal home page shows; include_all=true reads the whole list. Returns unread_count, total_count, scope (\"recent\" or \"all\") and per notification id, title, summary, created_at, age (relative time as the Portal prints it), is_read and unread. The body is not in the list: pass notification_id to get the content of that one notification. status is \"ok\" or \"unavailable\". When the read failed, count and notifications are null and reason says why: that is not an empty inbox. api_fallback=true marks rows taken from the Portal homepage markup instead of the notification service.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "notification_id": {"type": "string", "description": "Optional id for full notification detail."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "notification_id": {"type": "string", "description": "Optional id of one notification (the id field of a listed row). Returns that notification with its content as plain text, cut at 8000 characters."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum rows returned; 20 when omitted. A value larger than the recent list makes the tool read the whole list."},
+                "include_all": {"type": "boolean", "default": False, "description": "Read every notification instead of only the recent ones shown on the Portal home page."},
             },
             "additionalProperties": False,
         },
