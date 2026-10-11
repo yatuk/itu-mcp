@@ -38,140 +38,55 @@ class PlanningToolsMixin:
         those override the actual grade, which is useful for "what-if"
         scenarios. A key is a course code or a CRN of the term.
         """
-        from .archive import normalize_course_code
         from .gpa import (
-            attempt_notes,
             calculate_gpa,
             compact_term_result,
-            parse_credit,
             plan_credit_table,
             plan_rows,
             reconcile_credit_candidates,
             resolve_projection_keys,
             validate_projected_grades,
         )
-        from .gpa_reference import attach_official_reference, official_term_reference
-        from .grading import LETTER_TO_GRADE, normalize_grade
+        from .gpa_reference import attach_official_reference
+        from .gpa_term import (
+            credits_still_needed,
+            every_course_failed,
+            projection_status,
+            read_official_reference,
+            registered_rows,
+            term_course,
+            unmatched_projection_report,
+        )
         from .output_shape import term_reference
-        from .parsing import normalize_lookup_text
 
         # A bad grade is rejected before OBS is contacted.
         validate_projected_grades(projected_grades)
         resolved = self.obs.resolve_semester(semester)
-        payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
-        if not isinstance(payload, dict) or (
-            "statusCode" in payload and (type(payload["statusCode"]) is not int or payload["statusCode"] != 0)
-        ):
-            raise NinovaError("Registered courses could not be read successfully; GPA was not calculated.")
-        registered = payload.get("kayitSinifResultList")
-        if not isinstance(registered, list) or any(not isinstance(item, dict) for item in registered):
-            raise NinovaError("Registered-course data has an unrecognized shape; GPA was not calculated.")
+        registered = registered_rows(self.obs.list_registered_courses(resolved["akademikDonemId"]))
 
-        # The registered-course endpoint can omit usable credit. Preserve the
-        # reported value and identify degree-plan credit used for the estimate.
-        # A course's credit does not depend on the attempt, so a plan row of
-        # another term is accepted when this term has none.
-        #
-        # Separately, observed on at least one account: this endpoint's
-        # harfNotu comes back None for every course in every term, including
-        # terms years in the past, not just "not graded yet". When that
-        # happens the tool would otherwise silently compute gpa=None every
-        # time. Fall back to the same graduation-remaining payload for
-        # grades too, scoped to this term's donemKodu: a retaken course has
-        # one entry per attempt with a different grade each time, so a
-        # code-only lookup would risk picking the wrong attempt's grade here.
+        # The graduation payload is read once. It supplies the credit and the
+        # grade the registered-course endpoint leaves out (see gpa_term) and
+        # the other attempts of each course.
         term_code = resolved.get("donemKodu")
         graduation_info = self._fetch_graduation_info()
-        rows = plan_rows(graduation_info)
-        credit_table = plan_credit_table(rows, term_code)
+        plan = plan_rows(graduation_info)
+        credit_table = plan_credit_table(plan, term_code)
         plan_grades = self._plan_grade_lookup(graduation_info, term_code)
 
         courses: list[dict[str, Any]] = []
         missing_credits: list[str] = []
         for item in registered:
-            code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
-            try:
-                code_key = normalize_course_code(code)
-            except ValueError:
-                code_key = None
-            plan = credit_table.get(code_key) or {}
-            credit = item.get("kredi")
-            credit_source = "registration"
-            try:
-                numeric = float(str(credit).replace(",", "."))
-            except (TypeError, ValueError):
-                numeric = 0.0
-            if isinstance(credit, bool) or not math.isfinite(numeric) or numeric <= 0:
-                fallback = plan.get("credit")
-                if fallback:
-                    credit = fallback
-                    credit_source = (
-                        "degree_plan_other_term" if plan["scope"] == "other_term" else "degree_plan"
-                    )
-                else:
-                    missing_credits.append(code)
-
-            grade = item.get("harfNotu")
-            grade_source = "registration"
-            if not grade:
-                fallback_grade = plan_grades.get(code_key)
-                if fallback_grade:
-                    grade = fallback_grade
-                    grade_source = "degree_plan"
-
-            course = {
-                "code": code,
-                "name": item.get("dersAdiTR") or item.get("dersAdiEN", ""),
-                "credit": credit,
-                "recorded_credit": item.get("kredi"),
-                "plan_credit": plan.get("credit"),
-                "credit_source": credit_source,
-                "grade": grade,
-                "grade_source": grade_source,
-                "crn": item.get("crn"),
-            }
-            counted = plan.get("counted_credit")
-            if counted is not None:
-                course["counted_credit"] = counted
-                # Only a plan row that itself carries two different values makes
-                # the weight ambiguous. Nothing else is ever tried as a credit.
-                if credit_source != "registration" and counted != credit:
-                    course["credit_candidates"] = sorted({credit, counted})
-            known_credits = {value for value in (parse_credit(credit), counted) if value}
-            names = {
-                "".join(ch for ch in normalize_lookup_text(str(item.get(field) or "")) if ch.isalnum())
-                for field in ("dersAdiTR", "dersAdiEN")
-            }
-            attempts = attempt_notes(rows, code=code_key, term_code=term_code,
-                                     names=names, credits=known_credits)
-            if attempts:
-                course["attempts"] = attempts
+            course, credit_missing = term_course(
+                item, credit_table=credit_table, plan_grades=plan_grades, plan=plan, term_code=term_code,
+            )
             courses.append(course)
+            if credit_missing:
+                missing_credits.append(course["code"])
 
-        # OBS reports an average of 0 with 0 earned credits both for a term that
-        # is not graded yet and for a term in which every course was failed.
-        # The grades of this term tell the two apart.
-        coefficients = [LETTER_TO_GRADE.get(normalize_grade(course["grade"]), -1.0)
-                        if course["grade"] else -1.0 for course in courses]
-        every_course_failed = (
-            any(value == 0 for value in coefficients)
-            and all(value is None or value == 0 for value in coefficients)
+        reference = read_official_reference(
+            lambda: self.obs.get_registration_status(), term_code,
+            requested=include_official, zero_average_is_final=every_course_failed(courses),
         )
-
-        official_payload = {}
-        reference_error = None
-        if include_official:
-            try:
-                official_payload = self.obs.get_registration_status()
-            except (NinovaError, ValueError):
-                reference_error = "Official term record could not be read."
-        reference = official_term_reference(
-            official_payload, term_code, zero_average_is_final=every_course_failed,
-        )
-        if not include_official:
-            reference["status"] = "not_requested"
-        if reference_error:
-            reference["error"] = reference_error
 
         # Settled on the actual grades, before any what-if grade is applied.
         ambiguity = reconcile_credit_candidates(courses, reference.get("gpa"))
@@ -186,24 +101,10 @@ class PlanningToolsMixin:
         if ambiguity:
             result["credit_ambiguity"] = ambiguity
         if projected_grades:
-            result["projection_status"] = (
-                "applied" if not result["unused_projected_courses"]
-                else "partially_applied" if result["applied_projection_count"] else "not_applied"
-            )
+            result["projection_status"] = projection_status(result)
         if unmatched_keys:
-            result["unmatched_projected_keys"] = unmatched_keys
-            result["valid_projected_keys"] = [
-                {"code": course["code"], "crn": None if course["crn"] is None else str(course["crn"])}
-                for course in courses
-            ]
-            result["projection_warning"] = (
-                "No course of this term matches: " + ", ".join(unmatched_keys)
-                + ". Use a code or CRN from valid_projected_keys."
-            )
-        # A course whose grade stays out of the average (BL, BZ and the like)
-        # needs no credit: a pass/fail course of zero credit is not a gap.
-        credit_not_needed = {course.get("code") for course in result["excluded_courses"]}
-        unresolved = [code for code in missing_credits if code not in credit_not_needed]
+            result.update(unmatched_projection_report(unmatched_keys, courses))
+        unresolved = credits_still_needed(missing_credits, result["excluded_courses"])
         if unresolved:
             result["credits_unresolved"] = unresolved
         return compact_term_result(result, projection_requested=bool(projected_grades))
