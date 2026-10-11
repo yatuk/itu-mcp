@@ -117,7 +117,9 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "title": "OBS Attendance",
         "description": (
             "Read the official attendance record for an OBS class, with a computed "
-            "absence-risk summary by default. For attendance as recorded in the Ninova LMS "
+            "absence-risk summary by default. summary.status is ok, no_attendance_recorded "
+            "(the instructor has not entered any attendance for the class yet; this is not zero "
+            "absences) or unavailable. For attendance as recorded in the Ninova LMS "
             "by the instructor, use get_course_attendance instead."
         ),
         "inputSchema": {
