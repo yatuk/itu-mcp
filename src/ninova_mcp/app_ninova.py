@@ -794,12 +794,13 @@ class NinovaCourseToolsMixin:
             )
 
             entries.extend(listing["entries"])
-            follow = recursive and depth < max_depth
-            for folder in (entry for entry in listing["entries"] if entry["entry_type"] == "folder"):
-                if follow:
-                    queue.append((folder["url"], depth + 1, folder["path"]))
-                elif self._strip_fragment(folder["url"]) not in visited:
-                    unvisited_folders.append(folder["url"])
+            folders = [entry for entry in listing["entries"] if entry["entry_type"] == "folder"]
+            if recursive and depth < max_depth:
+                queue.extend((folder["url"], depth + 1, folder["path"]) for folder in folders)
+            else:
+                unvisited_folders.extend(
+                    folder["url"] for folder in folders if self._strip_fragment(folder["url"]) not in visited
+                )
 
         if unvisited_folders:
             errors.append({"path": start_url, "error": "file_depth_or_recursion_limit"})
