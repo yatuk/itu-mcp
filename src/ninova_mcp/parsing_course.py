@@ -250,63 +250,41 @@ def _pairs_from_rows(rows: list[Any]) -> dict[str, Any]:
     return result
 
 
+def _course_identity(rows: list[Any]) -> dict[str, Any]:
+    """The identity table: label/value rows, with the course name given once per language."""
+    identity: dict[str, Any] = {}
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        if row[:2] == ["Ders Adı", "Türkçe"] and len(row) >= 3:
+            identity["Ders Adı Türkçe"] = row[2]
+        elif row and row[0] == "İngilizce" and len(row) >= 2:
+            identity["Ders Adı İngilizce"] = row[1]
+        elif len(row) == 2:
+            identity[row[0]] = row[1]
+        else:
+            identity.setdefault("_extras", []).append(row)
+    return identity
+
+
+def _weekly_schedule(rows: list[Any]) -> list[dict[str, str]]:
+    return [{"time": row[0], "location": row[1]} for row in rows if isinstance(row, list) and len(row) >= 2]
+
+
 def extract_course_info(html: str, page_url: str, base_url: str) -> dict[str, Any]:
     page = parse_html_page(page_url, html, base_url=base_url)
-    tables = [table for table in page["tables"] if not _is_noise_table(table)]
-    identity: dict[str, Any] = {}
-    class_meta: dict[str, Any] = {}
-    weekly_schedule: list[dict[str, str]] = []
-    course_details: dict[str, Any] = {}
-    weekly_plan: list[dict[str, Any] | list[str]] = []
-
-    if len(tables) >= 1:
-        for row in tables[0]["rows"]:
-            if not isinstance(row, list):
-                continue
-            if row[:2] == ["Ders Adı", "Türkçe"] and len(row) >= 3:
-                identity["Ders Adı Türkçe"] = row[2]
-            elif row and row[0] == "İngilizce" and len(row) >= 2:
-                identity["Ders Adı İngilizce"] = row[1]
-            elif len(row) == 2:
-                identity[row[0]] = row[1]
-            else:
-                identity.setdefault("_extras", []).append(row)
-
-    if len(tables) >= 2:
-        class_meta = _pairs_from_rows(tables[1]["rows"])
-
-    if len(tables) >= 3:
-        for row in tables[2]["rows"]:
-            if isinstance(row, list) and len(row) >= 2:
-                weekly_schedule.append({"time": row[0], "location": row[1]})
-
-    if len(tables) >= 4:
-        details_rows = tables[3]["rows"]
-        structured_details: dict[str, Any] = {}
-        extras: list[list[str]] = []
-        for row in details_rows:
-            if not isinstance(row, list):
-                continue
-            if len(row) == 2:
-                structured_details[row[0]] = row[1]
-            else:
-                extras.append(row)
-        if extras:
-            structured_details["_extras"] = extras
-        course_details = structured_details
-
-    if len(tables) >= 5:
-        weekly_plan = tables[4]["rows"]
+    # The page is read by position: identity, class, weekly schedule, details, weekly plan.
+    tables = [table["rows"] for table in page["tables"] if not _is_noise_table(table)]
 
     return {
         "url": page["url"],
         "title": page["title"],
         "headings": page["headings"],
-        "identity": identity,
-        "class_meta": class_meta,
-        "weekly_schedule": weekly_schedule,
-        "course_details": course_details,
-        "weekly_plan": weekly_plan,
+        "identity": _course_identity(tables[0]) if len(tables) >= 1 else {},
+        "class_meta": _pairs_from_rows(tables[1]) if len(tables) >= 2 else {},
+        "weekly_schedule": _weekly_schedule(tables[2]) if len(tables) >= 3 else [],
+        "course_details": _pairs_from_rows(tables[3]) if len(tables) >= 4 else {},
+        "weekly_plan": tables[4] if len(tables) >= 5 else [],
     }
 
 
