@@ -1,6 +1,7 @@
 """Read-only client for the İTÜ ders arşivi (yatuk/itu-archive).
 
-OBS only publishes the currently active term. The archive scrapes it daily and
+OBS only publishes the currently active term. The archive scrapes it during
+registration and add/drop weeks (it pauses in between) and
 keeps every past term, so questions OBS cannot answer — who taught a course five
 years ago, which season it opens in, how fast a section filled — become
 answerable. The archive is static JSON on GitHub Pages, so this client is a
@@ -29,8 +30,9 @@ class ItuArchiveError(RuntimeError):
 class ItuArchiveClient:
     """Fetch static archive JSON with a TTL cache.
 
-    The archive is regenerated once a day, so a long default TTL is correct:
-    re-fetching more often only costs latency.
+    The archive is regenerated about once a day while its scraper runs and not
+    at all while it is paused, so a long default TTL is correct: re-fetching
+    more often only costs latency.
     """
 
     DEFAULT_BASE_URL = "https://itu-ders.com/data"

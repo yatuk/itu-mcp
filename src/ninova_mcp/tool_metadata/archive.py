@@ -34,7 +34,8 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "Answers 'is this course ever offered in the spring?', which OBS cannot. "
             "Read seasonality.pattern before claiming a season: insufficient_data (fewer than 3 "
             "term records) means the archive cannot tell, not that the course runs in one term; "
-            "summer school is counted apart from Güz and Bahar."
+            "summer school is counted apart from Güz and Bahar. An offering marked "
+            "enrolment_not_captured has no enrolled count or fill ratio (unknown, not zero). "
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
@@ -64,7 +65,10 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "List every instructor who has taught a course across archived terms, ranked "
             "by how many terms they taught it, with their most recent term and average "
-            "section fill rate."
+            "section fill rate. Sections with no announced instructor are counted in "
+            "unannounced_section_count, never listed as a person. Terms whose enrolment the "
+            "archive never captured (enrolment_not_captured_terms) add nothing to the average; "
+            "fill_ratio_section_count says how many sections the average rests on. "
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
@@ -107,7 +111,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "List archived sections for a term, filtered by branch, course code, or "
             "instructor. Critically, the archive holds terms OBS has not published yet, "
-            "so upcoming-term offerings can be checked instead of guessed."
+            "so upcoming-term offerings can be checked instead of guessed. A null instructor "
+            "means none was announced; enrolment_not_captured means the term's enrolled "
+            "counts were never recorded (null, not zero)."
         ),
         "inputSchema": {
             "type": "object",
@@ -135,7 +141,11 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "How full a section got. With a CRN, reads that term's quota time series. "
             "With a course code, reports capacity vs enrolment across every past section "
             "so you can judge whether the course reliably fills up; add a term to narrow "
-            "the course answer to that one term (term_filter says which). "
+            "the course answer to that one term (term_filter says which). An offering marked "
+            "enrolment_not_captured has no enrolled count: the archive took that term's dump "
+            "before any enrolment existed, so it is unknown, not zero, and is left out of every "
+            "average. The CRN note states how old the last snapshot is and whether the archive "
+            "is scanning now (scan_active); the numbers are never live. "
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
