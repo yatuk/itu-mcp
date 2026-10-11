@@ -15,18 +15,24 @@ from .assignment_upload import (
     DRY_RUN_MESSAGE,
     LocalUpload,
     UploadPage,
+    FAILED,
+    LOGIN_PAGE_AFTER_POST,
+    UploadVerdict,
     choose_upload_slot,
     find_assignment,
+    judge_upload,
     multipart_fields,
+    page_error_message,
+    page_success_phrase,
+    page_texts,
     read_upload_once,
     slot_after_upload,
-    text_reports_success,
     upload_link_of,
     upload_preview,
     upload_result,
     uploads_disabled,
 )
-from .client import NinovaAuthError, NinovaClient, NinovaError
+from .client import NinovaClient, NinovaError
 from .local_files import LocalFileError, resolve_upload_file
 from .tool_params import publish_include_raw
 from .parsing import (
@@ -375,6 +381,7 @@ class NinovaCourseToolsMixin:
             resolved["url"] + "/SinifDosyalari",
             recursive=recursive,
             max_depth=max_depth,
+            scope="class_files",
         )
         payload["course"] = resolved
         payload["scope"] = "class_files"
@@ -392,6 +399,7 @@ class NinovaCourseToolsMixin:
             resolved["url"] + "/DersDosyalari",
             recursive=recursive,
             max_depth=max_depth,
+            scope="lesson_files",
         )
         payload["course"] = resolved
         payload["scope"] = "lesson_files"
@@ -495,7 +503,7 @@ class NinovaCourseToolsMixin:
         post_response, result_html = self._post_upload(page, slot, upload)
         return {
             **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
-            **self._read_upload_outcome(post_response, result_html, slot, preview),
+            **self._read_upload_outcome(post_response, result_html, slot, preview, page),
         }
 
     def _read_local_upload(self, file_path: str) -> LocalUpload:
@@ -511,10 +519,9 @@ class NinovaCourseToolsMixin:
         html, response = self.client.get_html(upload_url)
         page_ids = self._require_upload_page_url(response.url, "The upload page")
         form = extract_assignment_upload_form(html, response.url, base_url=self.client.base_url)
-        if not form.get("ok"):
-            raise NinovaError(form.get("error") or "Could not parse assignment upload form.")
-        if not form.get("submit_event_target"):
-            raise NinovaError(form.get("error") or "Submit control not found on upload page.")
+        # The parser names the problem itself whenever it finds no form or no submit control.
+        if not form.get("ok") or not form.get("submit_event_target"):
+            raise NinovaError(form["error"])
         # The form's action is page content. The file is posted only to the
         # upload page of the same assignment on the Ninova host.
         post_url = form.get("form_url") or response.url
@@ -523,7 +530,7 @@ class NinovaCourseToolsMixin:
                 "The upload form's target belongs to a different assignment than the upload page. "
                 "Nothing was sent."
             )
-        return UploadPage(response.url, form, post_url)
+        return UploadPage(response.url, form, post_url, page_texts(html))
 
     def _post_upload(self, page: UploadPage, slot: dict[str, Any], upload: LocalUpload) -> tuple[Any, str]:
         """Post the bytes that were read to the checked form target; return the response and its HTML."""
@@ -534,27 +541,49 @@ class NinovaCourseToolsMixin:
             files=files,
             referer=page.url,
         )
-        result_html = self.client._decode_response(post_response)
-        if self.client._looks_like_login_page(post_response, html=result_html):
-            raise NinovaAuthError("Session expired during assignment upload.")
-        return post_response, result_html
+        return post_response, self.client._decode_response(post_response)
 
     def _read_upload_outcome(
-        self, post_response: Any, result_html: str, slot: dict[str, Any], preview: dict[str, Any],
+        self,
+        post_response: Any,
+        result_html: str,
+        slot: dict[str, Any],
+        preview: dict[str, Any],
+        page: UploadPage | None = None,
     ) -> dict[str, Any]:
-        """Report what the page answering the POST shows for the chosen slot."""
+        """Report what the page answering the POST proves about the chosen slot.
+
+        The verdict is about that slot only: ``uploaded`` when it is seen to
+        hold the new file, ``failed`` when the login page or an error message
+        came back, ``not_confirmed`` otherwise.
+        """
+        if self.client._looks_like_login_page(post_response, html=result_html):
+            return upload_result(
+                preview, slot, {}, None,
+                verdict=UploadVerdict(FAILED, LOGIN_PAGE_AFTER_POST), response_url=post_response.url,
+            )
         after = extract_assignment_upload_form(
             result_html,
             post_response.url,
             base_url=self.client.base_url,
         )
         after_slot = slot_after_upload(after, slot)
-        success = bool(after_slot and after_slot.get("uploaded"))
-        if not success:
-            # Fallback: compare status text / page markers.
-            page = parse_html_page(post_response.url, result_html, self.client.base_url)
-            success = text_reports_success(page.get("text_excerpt"))
-        return upload_result(preview, slot, after, after_slot, success=success, response_url=post_response.url)
+        before = page.texts if page is not None else frozenset()
+        verdict = judge_upload(
+            slot, after, after_slot,
+            file_name=preview["file"]["name"],
+            error_message=page_error_message(result_html, before),
+            success_phrase=page_success_phrase(result_html, before),
+            answered_from=None if self._is_upload_page_of(post_response.url, preview["upload_url"]) else post_response.url,
+        )
+        return upload_result(preview, slot, after, after_slot, verdict=verdict, response_url=post_response.url)
+
+    def _is_upload_page_of(self, url: str, upload_url: str) -> bool:
+        """Whether ``url`` is the upload page of the same assignment as ``upload_url``."""
+        try:
+            return self._require_upload_page_url(url, "url") == self._require_upload_page_url(upload_url, "url")
+        except (NinovaError, ValueError):
+            return False
 
     def _resolve_assignment_upload_url(
         self,
@@ -566,7 +595,8 @@ class NinovaCourseToolsMixin:
         if upload_url:
             return self._upload_target_at_url(upload_url)
 
-        if not course or not assignment:
+        # A blank reference is a missing one: it names no course and no assignment.
+        if not course or not assignment or not str(course).strip() or not str(assignment).strip():
             raise NinovaError(
                 "Provide upload_url, or both course and assignment "
                 "(assignment title / URL / partial name)."
@@ -761,6 +791,7 @@ class NinovaCourseToolsMixin:
         *,
         recursive: bool,
         max_depth: int,
+        scope: str = "class_files",
     ) -> dict[str, Any]:
         start_url = normalize_url(root_url, self.client.base_url)
         queue: list[tuple[str, int, str]] = [(start_url, 0, "/")]
@@ -778,7 +809,7 @@ class NinovaCourseToolsMixin:
             visited.add(normalized)
 
             try:
-                response_url, listing, observation = self._read_directory_page(current_url, current_path)
+                response_url, listing, observation = self._read_directory_page(current_url, current_path, scope)
             except Exception as exc:
                 errors.append({"path": current_url, "error": str(exc)})
                 continue
@@ -822,13 +853,15 @@ class NinovaCourseToolsMixin:
             "errors": errors,
         }
 
-    def _read_directory_page(self, url: str, current_path: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    def _read_directory_page(
+        self, url: str, current_path: str, scope: str = "class_files",
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
         """Read one directory page: where it ended up, its listing and how completely it was read."""
         html, response = self.client.get_html(url)
         listing = extract_file_directory(
             html, response.url, base_url=self.client.base_url, current_path=current_path,
         )
-        observation = scope_coverage(html, response.url, url, "class_files", listing)
+        observation = scope_coverage(html, response.url, url, scope, listing)
         return response.url, listing, observation
 
     def _extract_course_root_path(self, url: str) -> str:

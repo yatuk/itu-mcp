@@ -387,7 +387,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Upload a local file to one Ninova assignment slot via the official "
             "multipart form. Requires confirm=true to actually post; without it, "
-            "returns a dry-run preview only. Ask the user before confirming."
+            "returns a dry-run preview only. Ask the user before confirming. "
+            "After a real upload read `status`: `uploaded` means the chosen slot was seen to hold "
+            "the new file; `not_confirmed` means the POST went through but the slot does not show "
+            "it, so tell the user to check Ninova manually and never report it as submitted; "
+            "`failed` means Ninova answered with an error or its login page. `ok` is true only "
+            "for `uploaded`; relay `message`, which says what was seen."
         ),
         "inputSchema": {
             "type": "object",

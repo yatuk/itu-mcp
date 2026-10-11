@@ -83,7 +83,8 @@ def _own_rows_text(table: Tag) -> tuple[list[str], list[list[str]]]:
         if not cells:
             continue
         if not rows and all(cell.name == "th" for cell in nodes):
-            headers = cells
+            # A copy: the row is rewritten later, the headers never are.
+            headers = list(cells)
         rows.append(cells)
     return headers, rows
 
