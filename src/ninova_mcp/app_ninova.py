@@ -72,6 +72,46 @@ def match_upload_slot(*args: Any, **kwargs: Any) -> Any:
     return server_namespace().match_upload_slot(*args, **kwargs)
 
 
+def _names_a_course_url(reference: str) -> bool:
+    return (
+        "/Sinif/" in reference
+        or reference.startswith("/")
+        or urlparse(reference).scheme.lower() in {"http", "https"}
+    )
+
+
+def _crn_of_course(item: dict[str, Any]) -> str | None:
+    if item.get("crn"):
+        return str(item["crn"])
+    # Course lists cached or stored before the crn field existed.
+    match = re.search(r"\bCRN\s*:?\s*(\d{3,6})\b", str(item.get("context") or ""), re.I)
+    return match.group(1) if match else None
+
+
+def _describe_course(item: dict[str, Any]) -> str:
+    """One candidate of an ambiguous reference, with what tells it apart from the others."""
+    details = [str(item.get("title") or "?")]
+    section = item.get("section")
+    crn = _crn_of_course(item)
+    if section and not (crn and crn in str(section)):
+        details.append(f"section {section}")
+    if crn:
+        details.append(f"CRN {crn}")
+    details.append(item["url"])
+    return f"{item.get('code') or '?'} ({'; '.join(details)})"
+
+
+def _course_label(item: dict[str, Any]) -> str:
+    if item.get("code") and item.get("title"):
+        return f"{item.get('code')} ({item['title']})"
+    return str(item.get("code") or item.get("title") or item["url"])
+
+
+def _available_courses_hint(courses: list[dict[str, Any]]) -> str:
+    available = ", ".join(_course_label(item) for item in courses[:12])
+    return f" Available courses: {available}." if available else " Course list is empty."
+
+
 class NinovaCourseToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and the course cache."""
 
@@ -590,54 +630,23 @@ class NinovaCourseToolsMixin:
             raise NinovaError("course must be a non-empty string.")
 
         courses = self.list_courses()["courses"]
-
-        if "/Sinif/" in course or course.startswith("/") or urlparse(course).scheme.lower() in {"http", "https"}:
-            normalized = normalize_url(course, self.client.base_url)
-            root_path = self._extract_course_root_path(normalized)
-            root_url = f"{self.client.base_url}{root_path}"
-            for item in courses:
-                if item["url"] == root_url:
-                    return item
-            return {"code": None, "title": None, "url": root_url, "context": course}
+        if _names_a_course_url(course):
+            return self._course_at_url(course, courses)
 
         from .course_matching import EXACT_TIERS, match_courses
-
-        def crn_of_course(item: dict[str, Any]) -> str | None:
-            if item.get("crn"):
-                return str(item["crn"])
-            # Course lists cached or stored before the crn field existed.
-            match = re.search(r"\bCRN\s*:?\s*(\d{3,6})\b", str(item.get("context") or ""), re.I)
-            return match.group(1) if match else None
-
-        def describe(item: dict[str, Any]) -> str:
-            details = [str(item.get("title") or "?")]
-            section = item.get("section")
-            crn = crn_of_course(item)
-            if section and not (crn and crn in str(section)):
-                details.append(f"section {section}")
-            if crn:
-                details.append(f"CRN {crn}")
-            details.append(item["url"])
-            return f"{item.get('code') or '?'} ({'; '.join(details)})"
 
         tier, found = match_courses(
             course,
             courses,
             codes=lambda item: (item.get("code"), item.get("title")),
             names=lambda item: (item.get("title"),),
-            crn=crn_of_course,
+            crn=_crn_of_course,
             partial_text=lambda item: (item.get("code"), item.get("title"), item.get("context"), item.get("section")),
         )
         if not found:
-            available = ", ".join(
-                f"{item.get('code')} ({item['title']})" if item.get("code") and item.get("title")
-                else str(item.get("code") or item.get("title") or item["url"])
-                for item in courses[:12]
-            )
-            hint = f" Available courses: {available}." if available else " Course list is empty."
-            raise NinovaError(f"Course not found: {course}.{hint}")
+            raise NinovaError(f"Course not found: {course}.{_available_courses_hint(courses)}")
         if len(found) > 1:
-            options = "; ".join(describe(item) for item in found[:8])
+            options = "; ".join(_describe_course(item) for item in found[:8])
             raise NinovaError(
                 f"Ambiguous course reference: {course}. Matches: {options}. "
                 "Pass the URL of the one you mean."
@@ -646,6 +655,16 @@ class NinovaCourseToolsMixin:
             return found[0]
         # A tolerant match is never silent: the caller sees what was matched and how.
         return {**found[0], "matched_by": tier, "requested": course}
+
+    def _course_at_url(self, course_url: str, courses: list[dict[str, Any]]) -> dict[str, Any]:
+        """The listed course at a course URL, or a bare record for a course that is not listed."""
+        normalized = normalize_url(course_url, self.client.base_url)
+        root_path = self._extract_course_root_path(normalized)
+        root_url = f"{self.client.base_url}{root_path}"
+        for item in courses:
+            if item["url"] == root_url:
+                return item
+        return {"code": None, "title": None, "url": root_url, "context": course_url}
 
     def _empty_list_warning(self, html: str, page_url: str, *, scope: str) -> str | None:
         """Return a diagnostic when a list page parsed to zero items but holds items.
