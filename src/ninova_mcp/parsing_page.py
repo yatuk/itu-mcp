@@ -71,30 +71,40 @@ def _extract_links(soup: BeautifulSoup, base_url: str, page_url: str) -> list[di
     return _unique_links(links)
 
 
-def _table_to_rows(table: Tag) -> dict[str, Any]:
+def _own_rows_text(table: Tag) -> tuple[list[str], list[list[str]]]:
+    """``(headers, rows)`` of a table as cell texts; an all-``th`` first row is also the headers."""
     # Nested date/layout tables belong to their enclosing cell, not this table.
     own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
-    headers = []
+    headers: list[str] = []
     rows: list[list[str]] = []
     for row in own_rows:
         nodes = row.find_all(["td", "th"], recursive=False)
         cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
-        if cells:
-            if not rows and all(cell.name == "th" for cell in nodes):
-                headers = cells
-            rows.append(cells)
+        if not cells:
+            continue
+        if not rows and all(cell.name == "th" for cell in nodes):
+            headers = cells
+        rows.append(cells)
+    return headers, rows
+
+
+def _rewrite_date_ranges(row: list[str]) -> dict[int, dict[str, Any]]:
+    """Put each start/end cell of the row in reading order; return the ranges by cell position."""
+    found: dict[int, dict[str, Any]] = {}
+    for position, cell_text in enumerate(row):
+        date_range = split_date_range(cell_text)
+        if date_range:
+            found[position] = date_range
+            row[position] = f"{date_range['start']} - {date_range['end']}"
+    return found
+
+
+def _table_to_rows(table: Tag) -> dict[str, Any]:
+    headers, rows = _own_rows_text(table)
 
     # A start/end cell is rewritten in reading order, and its two ends are
     # also given separately under "date_ranges" (with the original text).
-    ranges_by_row: list[dict[int, dict[str, Any]]] = []
-    for row in rows:
-        found: dict[int, dict[str, Any]] = {}
-        for position, cell_text in enumerate(row):
-            date_range = split_date_range(cell_text)
-            if date_range:
-                found[position] = date_range
-                row[position] = f"{date_range['start']} - {date_range['end']}"
-        ranges_by_row.append(found)
+    ranges_by_row = [_rewrite_date_ranges(row) for row in rows]
 
     structured_rows: list[dict[str, Any] | list[str]] = []
     if headers and rows and len(headers) == len(rows[0]):
