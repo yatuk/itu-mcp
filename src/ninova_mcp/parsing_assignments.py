@@ -161,43 +161,26 @@ def extract_assignment_detail(html: str, page_url: str, base_url: str) -> dict[s
     }
 
 
-def _parse_upload_row(cells: list[Tag], page_url: str, *, index: int) -> dict[str, Any]:
-    status_text = clean_text(cells[0].get_text(" ", strip=True))
-    normalized_status = normalize_lookup_text(status_text)
-    anchors = [
-        anchor
-        for anchor in cells[0].find_all("a", href=True)
-        if not clean_text(anchor.get("href", "")).startswith("javascript:")
-    ]
-    file_anchor = next((anchor for anchor in anchors if clean_text(anchor.get_text(" ", strip=True))), None)
-    uploaded = False
+def _slot_is_uploaded(normalized_status: str, has_file_link: bool) -> bool:
+    """Whether a slot already holds a file: the status sentence decides, then the file link."""
     if "henuz gondermediniz" in normalized_status:
-        uploaded = False
-    elif any(token in normalized_status for token in ("gonderdiniz", "yuklediniz", "teslim ettiniz")):
-        uploaded = True
-    elif file_anchor is not None:
-        uploaded = True
+        return False
+    if any(token in normalized_status for token in ("gonderdiniz", "yuklediniz", "teslim ettiniz")):
+        return True
+    return has_file_link
 
-    description = None
-    strong = cells[0].find("strong")
-    if strong:
-        description = clean_text(strong.get_text(" ", strip=True))
 
-    file_input = cells[0].find("input", attrs={"type": "file"}) or (
-        cells[1].find("input", attrs={"type": "file"}) if len(cells) > 1 else None
-    )
-    if file_input is None:
-        for cell in cells:
-            file_input = cell.find("input", attrs={"type": "file"})
-            if file_input is not None:
-                break
+def _slot_file_input(cells: list[Tag]) -> Tag | None:
+    """The slot's ``<input type="file">``, from the first cell that has one."""
+    for cell in cells:
+        file_input = cell.find("input", attrs={"type": "file"})
+        if file_input is not None:
+            return file_input
+    return None
 
-    extensions = clean_text(cells[1].get_text(" ", strip=True)) if len(cells) > 1 else None
-    # Prefer extensions cell without the file input text noise.
-    if len(cells) > 1 and file_input is not None and file_input in cells[1].descendants:
-        # extensions usually live in last non-file cell; keep raw cell text.
-        pass
 
+def _allowed_extensions(extensions: str | None) -> list[str]:
+    """``"*.pdf; .zip"`` as ``[".pdf", ".zip"]``; pieces without a leading dot are dropped."""
     allowed_extensions: list[str] = []
     if extensions:
         for piece in re.split(r"[;,\s]+", extensions):
@@ -206,14 +189,32 @@ def _parse_upload_row(cells: list[Tag], page_url: str, *, index: int) -> dict[st
                 allowed_extensions.append(piece[1:])  # ".pdf"
             elif piece.startswith(".") and len(piece) > 1:
                 allowed_extensions.append(piece)
+    return allowed_extensions
+
+
+def _parse_upload_row(cells: list[Tag], page_url: str, *, index: int) -> dict[str, Any]:
+    status_text = clean_text(cells[0].get_text(" ", strip=True))
+    anchors = [
+        anchor
+        for anchor in cells[0].find_all("a", href=True)
+        if not clean_text(anchor.get("href", "")).startswith("javascript:")
+    ]
+    file_anchor = next((anchor for anchor in anchors if clean_text(anchor.get_text(" ", strip=True))), None)
+
+    strong = cells[0].find("strong")
+    description = clean_text(strong.get_text(" ", strip=True)) if strong else None
+
+    file_input = _slot_file_input(cells)
+    # The raw text of the extensions cell is kept, whatever else the cell holds.
+    extensions = clean_text(cells[1].get_text(" ", strip=True)) if len(cells) > 1 else None
 
     return {
         "index": index,
         "description": description or status_text,
         "extensions": extensions,
-        "allowed_extensions": allowed_extensions,
+        "allowed_extensions": _allowed_extensions(extensions),
         "status_text": status_text,
-        "uploaded": uploaded,
+        "uploaded": _slot_is_uploaded(normalize_lookup_text(status_text), file_anchor is not None),
         "file_name": clean_text(file_anchor.get_text(" ", strip=True)) if file_anchor else None,
         "file_url": urljoin(page_url, file_anchor["href"]) if file_anchor else None,
         "field_name": file_input.get("name") if file_input is not None else None,
