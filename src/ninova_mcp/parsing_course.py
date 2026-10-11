@@ -179,6 +179,14 @@ def extract_announcement_detail(html: str, page_url: str, base_url: str) -> dict
     }
 
 
+_EMPTY_DIRECTORY_MARKER = normalize_lookup_text("herhangi bir dosya bulunmamaktadır")
+
+
+def _is_empty_directory_message(text: str | None) -> bool:
+    """True for the one-cell row Ninova prints in a folder without files."""
+    return _EMPTY_DIRECTORY_MARKER in normalize_lookup_text(text)
+
+
 def extract_file_directory(
     html: str,
     page_url: str,
@@ -193,7 +201,7 @@ def extract_file_directory(
             cells = row.find_all("td")
             if not cells:
                 continue
-            if len(cells) == 1 and "herhangi bir dosya bulunmamaktadır" in normalize_lookup_text(cells[0].get_text(" ", strip=True)):
+            if len(cells) == 1 and _is_empty_directory_message(cells[0].get_text(" ", strip=True)):
                 continue
             if len(cells) < 3:
                 continue

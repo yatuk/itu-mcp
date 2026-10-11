@@ -738,8 +738,8 @@
   "synthetic:generic_page": {
    "parse_html_page": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "Genel Sayfa", "headings": [{"level": 1, "text": "Baslik Bir"}, {"level": 3, "text": "Alt Baslik"}], "links": [{"text": "Dosya", "url": "https://ninova.itu.edu.tr/Sinif/1.2/Dosya%201.pdf", "kind": "file", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Dis baglanti", "url": "https://example.org/x", "kind": "external", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "posta", "url": "mailto:kisi@example.org", "kind": "external", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Ders", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "kind": "page", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Goreli", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678/relative/page", "kind": "page", "context": "Metin Dosya js bos posta Ders Ders Goreli"}], "attachments": [{"text": "Dosya", "url": "https://ninova.itu.edu.tr/Sinif/1.2/Dosya%201.pdf", "kind": "file", "context": "Metin Dosya js bos posta Ders Ders Goreli"}], "tables": [{"index": 1, "title": "Tablo Basligi", "headers": ["Ad", "Aralik"], "rows": [{"Ad": "Bir", "Aralik": "25 Şubat 00:00 - 31 Aralık 18:00", "date_ranges": {"Aralik": {"start": "25 Şubat 00:00", "end": "31 Aralık 18:00", "raw": "25 Şubat - 31 Aralık 00:00 18:00"}}}, {"Ad": "Iki", "Aralik": "01 Mart 2031 09:00 - 02 Mart 2031 10:00", "date_ranges": {"Aralik": {"start": "01 Mart 2031 09:00", "end": "02 Mart 2031 10:00", "raw": "01 Mart 2031 09:00 - 02 Mart 2031 10:00", "start_iso": "2031-03-01T09:00:00+03:00", "end_iso": "2031-03-02T10:00:00+03:00"}}}]}, {"index": 2, "title": null, "headers": [], "rows": [["basliksiz", "01 Ocak - 02 Ocak"], ["tek"]]}, {"index": 3, "title": null, "headers": ["Dis"], "rows": [{"Dis": "ic 1 ic 2"}]}, {"index": 4, "title": null, "headers": [], "rows": [["ic 1"], ["ic 2"]]}, {"index": 5, "title": null, "headers": ["date_ranges", "X"], "rows": [{"date_ranges": "01 Ocak - 02 Ocak", "X": "y"}]}], "text": "Genel Sayfa Baslik Bir Alt Baslik Metin Dosya js bos posta Ders Ders Goreli Tablo Basligi Ad Aralik Bir 25 Şubat - 31 Aralık 00:00 18:00 Iki 01 Mart 2031 09:00 - 02 Mart 2031 10:00 fazla basliksiz 01 Ocak - 02 Ocak tek Dis ic 1 ic 2 date_ranges X 01 Ocak - 02 Ocak y", "text_hash": "ebce66275b64c7186f0af350ac5785ed5ff6ebbf6991313ed0cbcb0061f6f8a7", "text_excerpt": "Genel Sayfa Baslik Bir Alt Baslik Metin Dosya js bos posta Ders Ders Goreli Tablo Basligi Ad Aralik Bir 25 Şubat - 31 Aralık 00:00 18:00 Iki 01 Mart 2031 09:00 - 02 Mart 2031 10:00 fazla basliksiz 01 Ocak - 02 Ocak tek Dis ic 1 ic 2 date_ranges X 01 Ocak - 02 Ocak y"},
    "make_snapshot_payload": {"label": "etiket", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "Genel Sayfa", "headings": [{"level": 1, "text": "Baslik Bir"}, {"level": 3, "text": "Alt Baslik"}], "links": [{"text": "Dosya", "url": "https://ninova.itu.edu.tr/Sinif/1.2/Dosya%201.pdf", "kind": "file", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Dis baglanti", "url": "https://example.org/x", "kind": "external", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "posta", "url": "mailto:kisi@example.org", "kind": "external", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Ders", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "kind": "page", "context": "Metin Dosya js bos posta Ders Ders Goreli"}, {"text": "Goreli", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678/relative/page", "kind": "page", "context": "Metin Dosya js bos posta Ders Ders Goreli"}], "attachments": [{"text": "Dosya", "url": "https://ninova.itu.edu.tr/Sinif/1.2/Dosya%201.pdf", "kind": "file", "context": "Metin Dosya js bos posta Ders Ders Goreli"}], "tables": [{"index": 1, "title": "Tablo Basligi", "headers": ["Ad", "Aralik"], "rows": [{"Ad": "Bir", "Aralik": "25 Şubat 00:00 - 31 Aralık 18:00", "date_ranges": {"Aralik": {"start": "25 Şubat 00:00", "end": "31 Aralık 18:00", "raw": "25 Şubat - 31 Aralık 00:00 18:00"}}}, {"Ad": "Iki", "Aralik": "01 Mart 2031 09:00 - 02 Mart 2031 10:00", "date_ranges": {"Aralik": {"start": "01 Mart 2031 09:00", "end": "02 Mart 2031 10:00", "raw": "01 Mart 2031 09:00 - 02 Mart 2031 10:00", "start_iso": "2031-03-01T09:00:00+03:00", "end_iso": "2031-03-02T10:00:00+03:00"}}}]}, {"index": 2, "title": null, "headers": [], "rows": [["basliksiz", "01 Ocak - 02 Ocak"], ["tek"]]}, {"index": 3, "title": null, "headers": ["Dis"], "rows": [{"Dis": "ic 1 ic 2"}]}, {"index": 4, "title": null, "headers": [], "rows": [["ic 1"], ["ic 2"]]}, {"index": 5, "title": null, "headers": ["date_ranges", "X"], "rows": [{"date_ranges": "01 Ocak - 02 Ocak", "X": "y"}]}], "text": "Genel Sayfa Baslik Bir Alt Baslik Metin Dosya js bos posta Ders Ders Goreli Tablo Basligi Ad Aralik Bir 25 Şubat - 31 Aralık 00:00 18:00 Iki 01 Mart 2031 09:00 - 02 Mart 2031 10:00 fazla basliksiz 01 Ocak - 02 Ocak tek Dis ic 1 ic 2 date_ranges X 01 Ocak - 02 Ocak y", "text_hash": "ebce66275b64c7186f0af350ac5785ed5ff6ebbf6991313ed0cbcb0061f6f8a7"},
-   "summarize_dashboard": {"__sha256__": "86d2be34ea37054c79b6", "chars": 1152},
-   "extract_courses": [{"code": null, "title": "Ders", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "context": "Metin Dosya js bos posta Ders Ders Goreli", "section": null, "crn": null}],
+   "summarize_dashboard": {"__sha256__": "e3a5e2d75b14a12a1d53", "chars": 1176},
+   "extract_courses": [{"code": null, "title": "Ders", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "context": "Metin Dosya js bos posta Ders Ders Goreli", "section": null, "crn": null, "code_uncertain": true}],
    "extract_announcement_detail": {"__sha256__": "a307787b978e0450a384", "chars": 291},
    "extract_assignment_detail": {"__sha256__": "48ca434dfcf9f7c90e03", "chars": 214},
    "extract_course_info": {"__sha256__": "ed9658a9e950e7e6e99a", "chars": 397},
@@ -750,8 +750,8 @@
   "synthetic:generic_page|no_tables": {
    "parse_html_page": {"__sha256__": "91c0e3214afa935a97ab", "chars": 1332},
    "make_snapshot_payload": {"__sha256__": "f58f67cbf9aaaa39ae1f", "chars": 1256},
-   "summarize_dashboard": {"__sha256__": "86d2be34ea37054c79b6", "chars": 1152},
-   "extract_courses": {"__sha256__": "95fff9c8868443b8a32a", "chars": 165},
+   "summarize_dashboard": {"__sha256__": "e3a5e2d75b14a12a1d53", "chars": 1176},
+   "extract_courses": {"__sha256__": "cffe9e321fcb5c405f25", "chars": 189},
    "extract_announcement_detail": {"__sha256__": "8e4570d1195eac02f209", "chars": 198},
    "extract_assignment_detail": {"__sha256__": "48ca434dfcf9f7c90e03", "chars": 214},
    "extract_course_info": {"__sha256__": "8a76316f71a020a01d32", "chars": 266},
@@ -762,8 +762,8 @@
   "synthetic:generic_page|drop_last_cell": {
    "parse_html_page": {"__sha256__": "dd5d639e79bebd177e55", "chars": 1869},
    "make_snapshot_payload": {"__sha256__": "aebed71100a597abef26", "chars": 1688},
-   "summarize_dashboard": {"__sha256__": "86d2be34ea37054c79b6", "chars": 1152},
-   "extract_courses": {"__sha256__": "95fff9c8868443b8a32a", "chars": 165},
+   "summarize_dashboard": {"__sha256__": "e3a5e2d75b14a12a1d53", "chars": 1176},
+   "extract_courses": {"__sha256__": "cffe9e321fcb5c405f25", "chars": 189},
    "extract_announcement_detail": {"__sha256__": "8951d6e76cc2d323fc72", "chars": 245},
    "extract_assignment_detail": {"__sha256__": "48ca434dfcf9f7c90e03", "chars": 214},
    "extract_course_info": {"__sha256__": "f5a67594554f1986bece", "chars": 292},
@@ -774,8 +774,8 @@
   "synthetic:generic_page|extra_cell": {
    "parse_html_page": {"__sha256__": "26213611b9120f4ed009", "chars": 2805},
    "make_snapshot_payload": {"__sha256__": "871c6ffc7050d88ef65e", "chars": 2505},
-   "summarize_dashboard": {"__sha256__": "86d2be34ea37054c79b6", "chars": 1152},
-   "extract_courses": {"__sha256__": "95fff9c8868443b8a32a", "chars": 165},
+   "summarize_dashboard": {"__sha256__": "e3a5e2d75b14a12a1d53", "chars": 1176},
+   "extract_courses": {"__sha256__": "cffe9e321fcb5c405f25", "chars": 189},
    "extract_announcement_detail": {"__sha256__": "6fc4f06a4437ba8f9b34", "chars": 318},
    "extract_assignment_detail": {"__sha256__": "48ca434dfcf9f7c90e03", "chars": 214},
    "extract_course_info": {"__sha256__": "c8afe2ae23b664e4bba8", "chars": 416},
@@ -792,8 +792,8 @@
   "synthetic:dashboard_codes": {
    "parse_html_page": {"__sha256__": "60c59fcdfcbaa9ec92c9", "chars": 3054},
    "make_snapshot_payload": {"__sha256__": "6d21ad4be11e41344c05", "chars": 2739},
-   "summarize_dashboard": {"__sha256__": "c3ce96a3e8c140031352", "chars": 3658},
-   "extract_courses": [{"code": "ZZT 101E", "title": "Sentetik Giris", "url": "https://ninova.itu.edu.tr/Sinif/100.1", "context": "ZZT 101E CRN: 12345", "section": "CRN: 12345", "crn": "12345"}, {"code": "QQQ 202", "title": "QQQ 202 Sube A", "url": "https://ninova.itu.edu.tr/Sinif/200.1", "context": "Kod yok QQQ 202 Sube A", "section": null, "crn": null, "code_source": "section_label", "code_uncertain": true}, {"code": "ZZT 101E", "title": "ZZT 2030 Yaz Staji", "url": "https://ninova.itu.edu.tr/Sinif/300.1", "context": "ZZT 101E CRN: 12345 Kod yok QQQ 202 Sube A ZZT 2030 Yaz Staji ZZT 500 Bir Iki Tekrar", "section": null, "crn": null, "code_source": "section_label", "code_uncertain": true}, {"code": "ZZT 101E", "title": "", "url": "https://ninova.itu.edu.tr/Sinif/400.1", "context": "ZZT 101E CRN: 12345 Kod yok QQQ 202 Sube A ZZT 2030 Yaz Staji ZZT 500 Bir Iki Tekrar", "section": null, "crn": null, "code_source": "section_label", "code_uncertain": true}, {"code": "ZZT 500", "title": "Bir", "url": "https://ninova.itu.edu.tr/Sinif/500.1", "context": "ZZT 500 Bir Iki Tekrar", "section": null, "crn": null}, {"code": "ZZT 500", "title": "Iki", "url": "https://ninova.itu.edu.tr/Sinif/500.2", "context": "ZZT 500 Bir Iki Tekrar", "section": null, "crn": null}],
+   "summarize_dashboard": {"__sha256__": "a75d676ca112e0e76d45", "chars": 3432},
+   "extract_courses": [{"code": "ZZT 101E", "title": "Sentetik Giris", "url": "https://ninova.itu.edu.tr/Sinif/100.1", "context": "ZZT 101E CRN: 12345", "section": "CRN: 12345", "crn": "12345"}, {"code": "QQQ 202", "title": "QQQ 202 Sube A", "url": "https://ninova.itu.edu.tr/Sinif/200.1", "context": "Kod yok QQQ 202 Sube A", "section": null, "crn": null, "code_source": "section_label", "code_uncertain": true}, {"code": null, "title": "ZZT 2030 Yaz Staji", "url": "https://ninova.itu.edu.tr/Sinif/300.1", "context": "ZZT 2030 Yaz Staji", "section": null, "crn": null, "code_uncertain": true}, {"code": null, "title": "", "url": "https://ninova.itu.edu.tr/Sinif/400.1", "context": "", "section": null, "crn": null, "code_uncertain": true}, {"code": "ZZT 500", "title": "Bir", "url": "https://ninova.itu.edu.tr/Sinif/500.1", "context": "ZZT 500 Bir Iki Tekrar", "section": null, "crn": null}, {"code": "ZZT 500", "title": "Iki", "url": "https://ninova.itu.edu.tr/Sinif/500.2", "context": "ZZT 500 Bir Iki Tekrar", "section": null, "crn": null}],
    "extract_named_table:Son Odevler": [{"Ödev": "Odev 1", "Tarih": "12 Kasım 23:59"}, {"Ödev": "Odev 2", "Tarih": "25 Şubat 00:00 - 31 Aralık 18:00", "date_ranges": {"Tarih": {"start": "25 Şubat 00:00", "end": "31 Aralık 18:00", "raw": "25 Şubat - 31 Aralık 00:00 18:00"}}}, {"Ödev": "Odev 3", "Tarih": "01 Ocak 2031 10:00"}],
    "extract_announcement_detail": {"__sha256__": "c3d2e11aac2a3aab5cdf", "chars": 196},
    "extract_assignment_detail": {"__sha256__": "3de72662017d5c9bcf6a", "chars": 213},
@@ -804,8 +804,8 @@
   "synthetic:dashboard_codes|no_tables": {
    "parse_html_page": {"__sha256__": "e3efe5a445a553f72f9d", "chars": 2031},
    "make_snapshot_payload": {"__sha256__": "1cfc47db03d5a5cf6d3d", "chars": 1883},
-   "summarize_dashboard": {"__sha256__": "97b8e5fe7b9438b3c7e8", "chars": 2940},
-   "extract_courses": {"__sha256__": "57577a462ad61cca7fc2", "chars": 1249},
+   "summarize_dashboard": {"__sha256__": "727ffe6984001b2bdc35", "chars": 2714},
+   "extract_courses": {"__sha256__": "e2e26a07fcff3c7cdb09", "chars": 1023},
    "extract_announcement_detail": {"__sha256__": "2f50e3567138a1cc1ebe", "chars": 282},
    "extract_assignment_detail": {"__sha256__": "3de72662017d5c9bcf6a", "chars": 213},
    "extract_course_info": {"__sha256__": "93720a8d31cd3dcc8477", "chars": 332},
@@ -815,8 +815,8 @@
   "synthetic:dashboard_codes|drop_last_cell": {
    "parse_html_page": {"__sha256__": "cdb8a5dedfb8c0b01e0d", "chars": 2490},
    "make_snapshot_payload": {"__sha256__": "2fb8d9ce6f58772f3607", "chars": 2283},
-   "summarize_dashboard": {"__sha256__": "fee68b93ae914c5f8601", "chars": 3165},
-   "extract_courses": {"__sha256__": "57577a462ad61cca7fc2", "chars": 1249},
+   "summarize_dashboard": {"__sha256__": "17ee8480b0d47247b662", "chars": 2939},
+   "extract_courses": {"__sha256__": "e2e26a07fcff3c7cdb09", "chars": 1023},
    "extract_named_table:Son Odevler": {"__sha256__": "16eec014aa4997969d1b", "chars": 60},
    "extract_announcement_detail": {"__sha256__": "fe895979026d313168ce", "chars": 341},
    "extract_assignment_detail": {"__sha256__": "3de72662017d5c9bcf6a", "chars": 213},
@@ -827,8 +827,8 @@
   "synthetic:dashboard_codes|extra_cell": {
    "parse_html_page": {"__sha256__": "f63d5cf3d48a8648c060", "chars": 3156},
    "make_snapshot_payload": {"__sha256__": "64d8c15a9d01b1a4f9e9", "chars": 2820},
-   "summarize_dashboard": {"__sha256__": "6b748c6abfc0b642e3cb", "chars": 3627},
-   "extract_courses": {"__sha256__": "57577a462ad61cca7fc2", "chars": 1249},
+   "summarize_dashboard": {"__sha256__": "eafa12c14502c6292d92", "chars": 3401},
+   "extract_courses": {"__sha256__": "e2e26a07fcff3c7cdb09", "chars": 1023},
    "extract_named_table:Son Odevler": {"__sha256__": "340fde583b97bbb10c1a", "chars": 323},
    "extract_announcement_detail": {"__sha256__": "fb6a89d86def929a309a", "chars": 199},
    "extract_assignment_detail": {"__sha256__": "3de72662017d5c9bcf6a", "chars": 213},
@@ -849,15 +849,15 @@
   "synthetic:dashboard_deep_anchor": {
    "parse_html_page": {"__sha256__": "12910d392eea774e0ed5", "chars": 373},
    "make_snapshot_payload": {"__sha256__": "2921f0c6b859fad0540c", "chars": 359},
-   "summarize_dashboard": {"page": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "", "headings": []}, "courses": [{"code": null, "title": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "context": "Derin", "section": null, "crn": null}], "recent_announcements": [], "recent_assignments": [], "recent_messages": [], "links": [{"text": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "kind": "page", "context": "Derin"}]},
-   "extract_courses": [{"code": null, "title": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "context": "Derin", "section": null, "crn": null}],
+   "summarize_dashboard": {"page": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "", "headings": []}, "courses": [{"code": null, "title": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "context": "Derin", "section": null, "crn": null, "code_uncertain": true}], "recent_announcements": [], "recent_assignments": [], "recent_messages": [], "links": [{"text": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "kind": "page", "context": "Derin"}]},
+   "extract_courses": [{"code": null, "title": "Derin", "url": "https://ninova.itu.edu.tr/Sinif/700.1", "context": "Derin", "section": null, "crn": null, "code_uncertain": true}],
    "extract_prerequisite_list": {"__sha256__": "57610ef1429d08055b6e", "chars": 167}
   },
   "synthetic:dashboard_lone_anchor": {
    "parse_html_page": {"__sha256__": "21c90c2f0e24b927a214", "chars": 349},
    "make_snapshot_payload": {"__sha256__": "e03be7d1e89d51d32284", "chars": 345},
-   "summarize_dashboard": {"page": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "", "headings": []}, "courses": [{"code": null, "title": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "context": "Tek", "section": null, "crn": null}], "recent_announcements": [], "recent_assignments": [], "recent_messages": [], "links": [{"text": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "kind": "page", "context": "Tek"}]},
-   "extract_courses": [{"code": null, "title": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "context": "Tek", "section": null, "crn": null}],
+   "summarize_dashboard": {"page": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "title": "", "headings": []}, "courses": [{"code": null, "title": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "context": "Tek", "section": null, "crn": null, "code_uncertain": true}], "recent_announcements": [], "recent_assignments": [], "recent_messages": [], "links": [{"text": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "kind": "page", "context": "Tek"}]},
+   "extract_courses": [{"code": null, "title": "Tek", "url": "https://ninova.itu.edu.tr/Sinif/800.1", "context": "Tek", "section": null, "crn": null, "code_uncertain": true}],
    "extract_prerequisite_list": {"__sha256__": "e6906f32242559084ea1", "chars": 157}
   },
   "synthetic:dashboard_year_like_only": {
@@ -1179,8 +1179,8 @@
   "synthetic:upload_statuses": {
    "parse_html_page": {"__sha256__": "54df1412ccf3411b6acf", "chars": 2280},
    "make_snapshot_payload": {"__sha256__": "7cde0813f3a77f62292d", "chars": 2014},
-   "summarize_dashboard": {"__sha256__": "306821af57b34efa43cb", "chars": 1332},
-   "extract_courses": [{"code": null, "title": "Geri", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "context": "English Vazgec Geri Ödevi Gönder Açıklama Uzantılar Rapor Bu dosyayı henüz göndermediniz. *.pdf; *.docx Kod Bu dosyayı gönderdiniz. sil kod.zip .zip, tar Veri veri.csv *.csv . Aciklamasiz tek hucre Dosyayı yüklediniz *.PDF Odevi teslim ettiniz -", "section": null, "crn": null}],
+   "summarize_dashboard": {"__sha256__": "4c08f6d1b977c586cf9b", "chars": 1356},
+   "extract_courses": [{"code": null, "title": "Geri", "url": "https://ninova.itu.edu.tr/Sinif/1.2", "context": "English Vazgec Geri Ödevi Gönder Açıklama Uzantılar Rapor Bu dosyayı henüz göndermediniz. *.pdf; *.docx Kod Bu dosyayı gönderdiniz. sil kod.zip .zip, tar Veri veri.csv *.csv . Aciklamasiz tek hucre Dosyayı yüklediniz *.PDF Odevi teslim ettiniz -", "section": null, "crn": null, "code_uncertain": true}],
    "extract_announcement_detail": {"__sha256__": "68c14c8889c01fc8b11f", "chars": 392},
    "extract_assignment_detail": {"__sha256__": "8e0733f274d21dcfec16", "chars": 620},
    "extract_assignment_upload_status": {"requested_file_count": 6, "uploaded_file_count": 4, "upload_items": [{"index": 1, "description": "Rapor", "extensions": "*.pdf; *.docx", "allowed_extensions": [".pdf", ".docx"], "status_text": "Rapor Bu dosyayı henüz göndermediniz.", "uploaded": false, "file_name": null, "file_url": null, "field_name": "f1", "field_id": "id1"}, {"index": 2, "description": "Kod", "extensions": ".zip, tar", "allowed_extensions": [".zip"], "status_text": "Kod Bu dosyayı gönderdiniz. sil kod.zip", "uploaded": true, "file_name": "kod.zip", "file_url": "https://ninova.itu.edu.tr/dosya/kod.zip", "field_name": "f2", "field_id": null}, {"index": 3, "description": "Veri veri.csv", "extensions": "*.csv .", "allowed_extensions": [".csv"], "status_text": "Veri veri.csv", "uploaded": true, "file_name": "veri.csv", "file_url": "https://ninova.itu.edu.tr/dosya/veri.csv", "field_name": null, "field_id": "id3"}, {"index": 4, "description": "Aciklamasiz", "extensions": "", "allowed_extensions": [], "status_text": "Aciklamasiz", "uploaded": false, "file_name": null, "file_url": null, "field_name": null, "field_id": null}, {"index": 5, "description": "Dosyayı yüklediniz", "extensions": "*.PDF", "allowed_extensions": [".pdf"], "status_text": "Dosyayı yüklediniz", "uploaded": true, "file_name": null, "file_url": null, "field_name": null, "field_id": null}, {"index": 6, "description": "Odevi teslim ettiniz", "extensions": "-", "allowed_extensions": [], "status_text": "Odevi teslim ettiniz", "uploaded": true, "file_name": null, "file_url": null, "field_name": null, "field_id": null}]},
@@ -1192,8 +1192,8 @@
   "synthetic:upload_statuses|no_tables": {
    "parse_html_page": {"__sha256__": "574426fada6d99c4015c", "chars": 517},
    "make_snapshot_payload": {"__sha256__": "da93b621867f93a2d21e", "chars": 464},
-   "summarize_dashboard": {"__sha256__": "420f69ad25d43a4e7f36", "chars": 523},
-   "extract_courses": {"__sha256__": "6c805d3f452b46d9ff7f", "chars": 156},
+   "summarize_dashboard": {"__sha256__": "c270cb5ffba512e14a98", "chars": 547},
+   "extract_courses": {"__sha256__": "6952fc26a8657a252c31", "chars": 180},
    "extract_announcement_detail": {"__sha256__": "9966c1dc0a4649a0d8bd", "chars": 179},
    "extract_assignment_detail": {"__sha256__": "11e8ab45d9428ae56d27", "chars": 215},
    "extract_assignment_upload_form": {"__sha256__": "4169699316c6f9e55d22", "chars": 452},
@@ -1204,8 +1204,8 @@
   "synthetic:upload_statuses|drop_last_cell": {
    "parse_html_page": {"__sha256__": "fe4cec14cb26f46cc4da", "chars": 1952},
    "make_snapshot_payload": {"__sha256__": "3f500ed618fef1794968", "chars": 1738},
-   "summarize_dashboard": {"__sha256__": "343749f9b5ac8b517167", "chars": 1233},
-   "extract_courses": {"__sha256__": "f3d4e5b1fb2b910ee0ff", "chars": 317},
+   "summarize_dashboard": {"__sha256__": "fc15f6c9fe51432bb7d4", "chars": 1257},
+   "extract_courses": {"__sha256__": "3f67ff34ce70b0708716", "chars": 341},
    "extract_announcement_detail": {"__sha256__": "a954e913522172943fb3", "chars": 340},
    "extract_assignment_detail": {"__sha256__": "11e8ab45d9428ae56d27", "chars": 215},
    "extract_assignment_upload_form": {"__sha256__": "4169699316c6f9e55d22", "chars": 452},
@@ -1216,8 +1216,8 @@
   "synthetic:upload_statuses|extra_cell": {
    "parse_html_page": {"__sha256__": "a19254de417c740cd3bc", "chars": 2423},
    "make_snapshot_payload": {"__sha256__": "db67d157dc2b624c7b5d", "chars": 2133},
-   "summarize_dashboard": {"__sha256__": "30874b65a0064f05a37a", "chars": 1356},
-   "extract_courses": {"__sha256__": "92fd6a445f6f74efad1e", "chars": 393},
+   "summarize_dashboard": {"__sha256__": "10ab4369c2535ac89b46", "chars": 1380},
+   "extract_courses": {"__sha256__": "83ab58875c6119bb72b0", "chars": 417},
    "extract_announcement_detail": {"__sha256__": "ccb2ac0f714978e45302", "chars": 416},
    "extract_assignment_detail": {"__sha256__": "11e8ab45d9428ae56d27", "chars": 215},
    "extract_assignment_upload_form": {"__sha256__": "4169699316c6f9e55d22", "chars": 452},
@@ -1373,8 +1373,8 @@
   "synthetic:course_sections": {
    "parse_html_page": {"__sha256__": "b5fe24aaf584c5ba5901", "chars": 1445},
    "make_snapshot_payload": {"__sha256__": "567d92a7c3d172676ce3", "chars": 1400},
-   "summarize_dashboard": {"__sha256__": "2ef53e7dc44f6f930ec4", "chars": 1484},
-   "extract_courses": [{"code": null, "title": "Ana", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678", "context": "Ana Duyurular Tekrar Baska ders Diger Goreli", "section": null, "crn": null}],
+   "summarize_dashboard": {"__sha256__": "6565b7e0b00bad0cc840", "chars": 1508},
+   "extract_courses": [{"code": null, "title": "Ana", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678", "context": "Ana Duyurular Tekrar Baska ders Diger Goreli", "section": null, "crn": null, "code_uncertain": true}],
    "extract_course_sections": [{"name": "Ana", "path": "/", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678"}, {"name": "Duyurular", "path": "Duyurular", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Duyurular"}, {"name": "Goreli", "path": "Odevler", "url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Odevler/"}],
    "extract_prerequisite_list": {"__sha256__": "738ca905cc49f74b61de", "chars": 198}
   },
