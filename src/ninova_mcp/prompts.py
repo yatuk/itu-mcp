@@ -287,7 +287,7 @@ def registration_week(candidates: str) -> str:
     return "\n".join(lines)
 
 
-# Metadata mirrors the TOOLS list in server.py so both transports register the
+# Metadata mirrors the TOOLS list in tool_registry.py so both transports register the
 # same surface from one source.
 PROMPTS: list[dict[str, Any]] = [
     {

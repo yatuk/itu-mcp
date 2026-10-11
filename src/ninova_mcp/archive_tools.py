@@ -3,7 +3,8 @@
 Grade distributions, catalog entries, the reverse prerequisite index, the
 term-wide section search index, exam schedules and the scraper status file.
 The tool methods live in a mixin and their MCP metadata in
-``ARCHIVE_DATASET_TOOLS`` so that ``server.py`` only has to wire them in.
+``ARCHIVE_DATASET_TOOLS`` so that ``app.py`` and ``tool_registry.py`` only have
+to wire them in.
 
 Every tool here is read-only, needs no credentials, and reads through
 ``ItuArchiveClient`` (host allowlist, TTL cache, safe redirects). Bad input

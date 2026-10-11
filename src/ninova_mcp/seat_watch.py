@@ -19,7 +19,8 @@ Three rules shape everything here.
   in. An entry from another term is never compared with the current schedule.
 
 The tool methods live in a mixin and their MCP metadata in
-``SEAT_WATCH_TOOLS`` so that ``server.py`` only has to wire them in.
+``SEAT_WATCH_TOOLS`` so that ``app.py`` and ``tool_registry.py`` only have to
+wire them in.
 """
 
 from __future__ import annotations
