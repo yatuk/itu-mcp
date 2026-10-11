@@ -332,7 +332,7 @@ def scenarios() -> dict[str, dict[str, Any]]:
     cases["past_and_upcoming_window"] = with_windows(window(*day(10), 3), window(*day(20), 3))
     cases["several_reopenings"] = with_windows(
         window(*day(17), 3), window(*day(19), None), window(*day(25), None), window(*day(10), None))
-    cases["ambiguous_reopenings_are_dropped_silently"] = with_windows(
+    cases["ambiguous_reopenings_carry_a_reason"] = with_windows(
         window(*day(17), 3), window(*day(19, "10:00", "13:00"), None), window(*day(19, "10:00", "14:00"), None))
 
     # Malformed windows.
@@ -349,7 +349,8 @@ def scenarios() -> dict[str, dict[str, Any]]:
     cases["window_in_another_utc_offset"] = with_windows(
         window("2026-09-17T07:00:00+00:00", "2026-09-17T10:00:00+00:00", 3))
 
-    # Rows with no fields at all: an empty row is still a row.
+    # Rows with no fields at all. An empty status row is still a program; an
+    # empty lesson row is not evidence of one and is related to nothing.
     cases["university_overall_with_empty_lesson_row"] = case(status_payload(overall_program()), lesson_payload({}))
     cases["university_overall_active_with_empty_lesson_row"] = case(
         status_payload(overall_program(durum="Aktif")), lesson_payload({}))
