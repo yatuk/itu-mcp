@@ -7,7 +7,6 @@ exchanges them for a short-lived JWT via ``/ogrenci/auth/jwt``.
 from __future__ import annotations
 
 import os
-import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -39,8 +38,6 @@ class ObsSessionCore:
         self._ninova = ninova_client
         self._jwt: str | None = None
         self._jwt_obtained_at: float | None = None
-        self._registration_check_lock = threading.Lock()
-        self._last_registration_check: float | None = None
         self._jwt_ttl_seconds = float(os.getenv("NINOVA_OBS_JWT_TTL_SECONDS") or "1500")
 
     @property

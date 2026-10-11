@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Callable
 
+from .client import NinovaClient
 from .obs_session import ObsSessionCore
 
 
 class ObsRegistrationApi(ObsSessionCore):
     """Registration status, the saved draft and the independent CRN check."""
+
+    def __init__(
+        self,
+        ninova_client: NinovaClient | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        super().__init__(ninova_client, base_url)
+        # CRN checks through one client are serialised and spaced apart.
+        self._registration_check_lock = threading.Lock()
+        self._last_registration_check: float | None = None
 
     def get_registration_status(self) -> dict[str, Any]:
         return self.api_get("/api/ogrenci/KayitDurumu")
