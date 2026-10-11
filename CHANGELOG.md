@@ -1,5 +1,14 @@
 # Changelog
 
+## Yayınlanmamış
+
+### Düzeltmeler
+
+- Herkese açık OBS sayfaları, sunucu karakter kümesini bildirmediğinde önce UTF-8 olarak okunuyor.
+  Eskiden kodlama tahmin ediliyordu ve kısa cevaplarda Türkçe harfler bozulabiliyordu
+- CI testleri `pytest` ile çalışıyor. Bütün sayfa çıktısını özet olarak saklayan ayrıştırıcı
+  kayıtları yalnızca kaydedildikleri Python ve libxml2 sürümünde karşılaştırılıyor
+
 ## v1.2.0
 
 ### Yeni araçlar

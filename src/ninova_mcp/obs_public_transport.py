@@ -99,7 +99,12 @@ class ObsPublicTransport:
                 f"OBS public endpoint {path} returned HTTP {response.status_code}"
             )
         if not response.encoding or response.encoding.lower() == "iso-8859-1":
-            response.encoding = response.apparent_encoding or response.encoding
+            # OBS serves UTF-8 without saying so. Guessing is the fallback only:
+            # on a short body the guess depends on which detector is installed.
+            try:
+                return response.content.decode("utf-8"), response.url
+            except UnicodeDecodeError:
+                response.encoding = response.apparent_encoding or response.encoding
         return response.text, response.url
 
     def _post_json(self, path: str, *, data: dict[str, Any]) -> Any:
