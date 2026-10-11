@@ -8,7 +8,6 @@ import math
 import mimetypes
 import os
 import re
-import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -16,24 +15,18 @@ from urllib.parse import urlparse
 
 from pydantic import Field, StrictBool
 
-from .cache import TtlCache, parse_ttl_seconds
-from .client import NinovaAuthError, NinovaClient, NinovaError
-from .compact import maybe_compact
-from .env import load_ninova_env
+from .client import NinovaAuthError, NinovaError
 from . import toolsets as _toolsets
-from .archive_client import ItuArchiveClient, ItuArchiveError
+from .archive_client import ItuArchiveError
 from .archive_tools import ArchiveDatasetToolsMixin
 from .seat_watch import SeatWatchToolsMixin
 from .calendar_export import CalendarExportToolsMixin
 from .public_resources import PUBLIC_RESOURCE_URIS, RESOURCE_TEMPLATE_URIS, register_public_resources
-from .community_data import CrossCheckDataClient, CrossCheckDataError
+from .community_data import CrossCheckDataError
 from .graduation import summarize_graduation_plan
 from .prompts import PROMPT_NAMES, PROMPTS
 from .resources import RESOURCE_URIS, RESOURCES
-from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
-from .public_client import ItuPublicClient
-from .library_client import LibraryClient
-from .mail_client import ItuMailClient
+from .obs_client import ObsError, redact_obs_profile
 from .parsing import (
     SnapshotReference,
     compare_snapshot_payloads,
@@ -76,6 +69,8 @@ from .tracking import (
     load_tracking_state, merge_course_snapshot, merge_updates, save_tracking_state, utc_now_iso,
 )
 from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
+from .app_base import AppBase
+from .app_core import SessionToolsMixin
 from .server_info import SERVER_INSTRUCTIONS, SERVER_NAME, SERVER_VERSION
 from .tool_registry import (
     DESTRUCTIVE_TOOL_NAMES,
@@ -86,13 +81,21 @@ from .tool_registry import (
 )
 
 # Still part of this module's surface: moved names, and names the tests patch here.
+from .env import load_ninova_env  # noqa: F401
+from .client import NinovaClient  # noqa: F401
+from .obs_client import ObsClient  # noqa: F401
+from .obs_client import ObsPublicClient  # noqa: F401
+from .public_client import ItuPublicClient  # noqa: F401
+from .library_client import LibraryClient  # noqa: F401
+from .mail_client import ItuMailClient  # noqa: F401
+from .archive_client import ItuArchiveClient  # noqa: F401
+from .community_data import CrossCheckDataClient  # noqa: F401
 from .tool_registry import MAIL_TOOL_NAMES  # noqa: F401
 from .tool_registry import REMOTE_EXCLUDED_TOOLS  # noqa: F401
 from .tool_registry import REMOTE_TOOL_NAMES  # noqa: F401
+from .app_base import COURSES_CACHE_KEY, DEFAULT_COURSE_CACHE_TTL_SECONDS  # noqa: F401
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
-COURSES_CACHE_KEY = "courses"
 RegistrationDraftCrns = Annotated[
     list[Annotated[str, Field(strict=True, pattern=r"^[0-9]{4,5}$")]],
     Field(min_length=1, max_length=12, json_schema_extra={"uniqueItems": True}),
@@ -115,154 +118,13 @@ def _confirm_draft_write(plan: dict[str, Any]) -> dict[str, Any] | None:
 
 
 
-class NinovaMcpApp(ArchiveDatasetToolsMixin, SeatWatchToolsMixin, CalendarExportToolsMixin):
-    def __init__(self) -> None:
-        load_ninova_env()
-        self._client: NinovaClient | None = None
-        self._obs: ObsClient | None = None
-        self._obs_public: ObsPublicClient | None = None
-        self._itu_public: ItuPublicClient | None = None
-        self._library: LibraryClient | None = None
-        self._mail: ItuMailClient | None = None
-        self._archive: ItuArchiveClient | None = None
-        self._prereq_crosscheck: CrossCheckDataClient | None = None
-        # One lock for every lazy client property below. The remote HTTP
-        # transport dispatches these synchronous tool methods to a thread
-        # pool, so two concurrent requests can otherwise both observe a
-        # None client and each construct their own — each running its own
-        # independent login, with whichever assignment lands last silently
-        # orphaning the other's session (a leak) while callers still holding
-        # the orphaned reference continue against a disconnected cookie jar.
-        # Contention is negligible since this only runs once per client.
-        # RLock, not Lock: obs's property constructs its client while still
-        # holding the lock, and does so by reading self.client — which would
-        # otherwise try to re-acquire the same lock on the same thread.
-        self._client_lock = threading.RLock()
-        state_root = os.getenv("NINOVA_STATE_DIR") or str(Path.home() / ".ninova_state")
-        self.state_dir = Path(state_root)
-        self.snapshot_dir = self.state_dir / "snapshots"
-        self.tracking_state_path = self.state_dir / "tracking-state.json"
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        course_ttl = parse_ttl_seconds(
-            os.getenv("NINOVA_COURSE_CACHE_TTL_SECONDS"),
-            DEFAULT_COURSE_CACHE_TTL_SECONDS,
-        )
-        self._course_cache: TtlCache[list[dict[str, Any]]] = TtlCache(course_ttl)
-        self._course_cache_ttl_seconds = course_ttl
-
-    @property
-    def client(self) -> NinovaClient:
-        if self._client is None:
-            with self._client_lock:
-                if self._client is None:
-                    self._client = NinovaClient()
-        return self._client
-
-    @property
-    def obs(self) -> ObsClient:
-        if self._obs is None:
-            with self._client_lock:
-                if self._obs is None:
-                    self._obs = ObsClient(ninova_client=self.client)
-        return self._obs
-
-    @property
-    def obs_public(self) -> ObsPublicClient:
-        if self._obs_public is None:
-            with self._client_lock:
-                if self._obs_public is None:
-                    # Public OBS tools must work without credentials and must
-                    # not send authenticated SSO cookies to no-auth endpoints.
-                    self._obs_public = ObsPublicClient()
-        return self._obs_public
-
-    @property
-    def itu_public(self) -> ItuPublicClient:
-        if self._itu_public is None:
-            with self._client_lock:
-                if self._itu_public is None:
-                    self._itu_public = ItuPublicClient()
-        return self._itu_public
-
-    @property
-    def library(self) -> LibraryClient:
-        if self._library is None:
-            with self._client_lock:
-                if self._library is None:
-                    self._library = LibraryClient()
-        return self._library
-
-    @property
-    def mail(self) -> ItuMailClient:
-        if self._mail is None:
-            with self._client_lock:
-                if self._mail is None:
-                    self._mail = ItuMailClient()
-        return self._mail
-
-    @property
-    def archive(self) -> ItuArchiveClient:
-        if self._archive is None:
-            with self._client_lock:
-                if self._archive is None:
-                    self._archive = ItuArchiveClient()
-        return self._archive
-
-    @property
-    def prereq_crosscheck(self) -> CrossCheckDataClient:
-        if self._prereq_crosscheck is None:
-            with self._client_lock:
-                if self._prereq_crosscheck is None:
-                    self._prereq_crosscheck = CrossCheckDataClient()
-        return self._prereq_crosscheck
-
-    def invalidate_caches(self) -> None:
-        self._course_cache.clear()
-        if self._obs_public is not None:
-            self._obs_public._cache.clear()
-        if self._itu_public is not None:
-            self._itu_public._cache.clear()
-        if self._library is not None:
-            self._library._cache.clear()
-        if self._archive is not None:
-            self._archive._cache.clear()
-        if self._prereq_crosscheck is not None:
-            self._prereq_crosscheck._cache.clear()
-
-    def _out(self, payload: dict[str, Any], compact: bool = False) -> dict[str, Any]:
-        # Per-call compact=True wins; otherwise honor NINOVA_COMPACT_DEFAULT.
-        from .compact import compact_default_enabled
-
-        enabled = True if compact else compact_default_enabled()
-        return maybe_compact(payload, compact=enabled)
-
-    def auth_status(self) -> dict[str, Any]:
-        credentials_present = bool(os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD"))
-        status: dict[str, Any] = {
-            "credentials_present": credentials_present,
-            "state_dir": str(self.state_dir),
-            "course_cache_ttl_seconds": self._course_cache_ttl_seconds,
-        }
-        if not credentials_present:
-            status["authenticated"] = False
-            status["message"] = "Set NINOVA_USERNAME and NINOVA_PASSWORD to enable login."
-            return status
-
-        try:
-            session = self.client.ensure_logged_in(verify=True)
-            status["authenticated"] = True
-            status["session"] = session
-        except NinovaAuthError as exc:
-            status["authenticated"] = False
-            status["message"] = str(exc)
-            return status
-
-        try:
-            status["obs"] = self.obs.ensure_ready()
-        except Exception as exc:  # pragma: no cover - optional subsystem
-            status["obs"] = {"jwt_present": False, "error": str(exc)}
-        return status
-
+class NinovaMcpApp(
+    AppBase,
+    SessionToolsMixin,
+    ArchiveDatasetToolsMixin,
+    SeatWatchToolsMixin,
+    CalendarExportToolsMixin,
+):
     def mail_status(self) -> dict[str, Any]:
         """Check the read-only İTÜ Mail connection and inbox counts."""
         return self.mail.status()
@@ -305,21 +167,6 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin, SeatWatchToolsMixin, CalendarExport
             TextContent(type="text", text=metadata),
             Image(data=image_bytes, format=image_format),
         ]
-
-    def refresh_session(self) -> dict[str, Any]:
-        self.invalidate_caches()
-        session = self.client.login(force=True)
-        if self._obs is not None:
-            # A forced Ninova relogin does nothing for OBS-backed tools on
-            # its own: ObsClient caches its JWT independently and, without
-            # this, would keep reusing the old token (tied to the now-dead
-            # session) until its TTL happens to expire on its own.
-            self._obs._jwt = None
-            self._obs._jwt_obtained_at = None
-        return {
-            "authenticated": True,
-            "session": session,
-        }
 
     def get_dashboard(self, compact: bool = False) -> dict[str, Any]:
         dashboard = self._read_dashboard()
@@ -907,17 +754,6 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin, SeatWatchToolsMixin, CalendarExport
             "pages": pages,
             "downloads": downloads[:500],
         }
-
-    # ------------------------------------------------------------------
-    # OBS (obs.itu.edu.tr) tools
-    # ------------------------------------------------------------------
-
-    def obs_auth_status(self) -> dict[str, Any]:
-        try:
-            ready = self.obs.ensure_ready()
-            return {"ok": True, **ready}
-        except (NinovaAuthError, ObsError) as exc:
-            return {"ok": False, "error": str(exc)}
 
     def obs_get_profile(self, include_sensitive: bool = False) -> dict[str, Any]:
         payload = self.obs.get_profile()
