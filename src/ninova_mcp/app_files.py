@@ -33,6 +33,7 @@ from .parsing import (
 from .text_extract import (
     DEFAULT_MAX_CHARS as TEXT_EXTRACT_DEFAULT_MAX_CHARS,
     MAX_EXTRACT_BYTES,
+    SUPPORTED_EXTENSIONS as TEXT_EXTRACT_SUPPORTED_EXTENSIONS,
     extract_text_from_bytes,
     extract_text_from_path,
     guess_extension,
@@ -236,7 +237,22 @@ class PageFileToolsMixin:
                 "This file type can run code when opened, so '.download' was appended to its name. "
                 "Rename it yourself only if you trust the file."
             )
+        elif target_path.suffix.lower() in TEXT_EXTRACT_SUPPORTED_EXTENSIONS and written <= MAX_EXTRACT_BYTES:
+            # The saved file is searchable by content afterwards (search_content).
+            pages: list[tuple[int | None, str]] = []
+            try:
+                extract_text_from_path(target_path, max_chars=1_000, pages_out=pages)
+            # The download itself succeeded; a file that cannot be parsed is only not indexed.
+            except Exception:  # nosec B110
+                pass
+            self._feed_search_index(pages, title=target_path.name, url=response.url)
         return result
+
+    def _feed_search_index(self, pages: list[tuple[int | None, str]], **source: Any) -> None:
+        """Hand extracted text to the search index when the app has one (``SearchToolsMixin``)."""
+        feeder = getattr(self, "_index_file_text", None)
+        if feeder is not None and pages:
+            feeder(pages, **source)
 
     @staticmethod
     def _oversize_message(max_bytes: int) -> str:
@@ -281,8 +297,10 @@ class PageFileToolsMixin:
                 local_path = resolve_readable_file(path, state_dir=self.state_dir)
             except LocalFileError as exc:
                 raise NinovaError(str(exc)) from exc
-            extracted = extract_text_from_path(local_path, max_chars=max_chars)
+            pages: list[tuple[int | None, str]] = []
+            extracted = extract_text_from_path(local_path, max_chars=max_chars, pages_out=pages)
             extracted["source"] = "path"
+            self._feed_search_index(pages, title=local_path.name, path=str(local_path))
             return extracted
 
         if url is None:  # narrowed above; keep runtime safety under python -O
@@ -330,7 +348,9 @@ class PageFileToolsMixin:
                 handle.write(data)
             saved_path = str(target_path)
 
-        extracted = extract_text_from_bytes(data, extension=extension, max_chars=max_chars)
+        url_pages: list[tuple[int | None, str]] = []
+        extracted = extract_text_from_bytes(data, extension=extension, max_chars=max_chars, pages_out=url_pages)
+        self._feed_search_index(url_pages, title=resolved_name, url=response.url)
         extracted.update(
             {
                 "source": "url",

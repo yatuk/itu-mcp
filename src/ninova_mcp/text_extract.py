@@ -110,7 +110,9 @@ def _truncate(text: str, max_chars: int) -> tuple[str, bool]:
     return text[:max_chars], True
 
 
-def _extract_pdf(data: bytes) -> tuple[str, dict[str, Any]]:
+def _extract_pdf(
+    data: bytes, pages_out: list[tuple[int | None, str]] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Return the text of at most ``MAX_PDF_PAGES`` pages and what was skipped."""
     try:
         from pypdf import PdfReader
@@ -131,6 +133,8 @@ def _extract_pdf(data: bytes) -> tuple[str, dict[str, Any]]:
         page_text = page_text.strip()
         if page_text:
             parts.append(f"--- page {index} ---\n{page_text}")
+            if pages_out is not None:
+                pages_out.append((index, page_text))
     details: dict[str, Any] = {"page_count": page_count, "pages_read": min(page_count, MAX_PDF_PAGES)}
     if page_count > MAX_PDF_PAGES:
         details["pages_truncated"] = True
@@ -201,7 +205,10 @@ def extract_text_from_bytes(
     *,
     extension: str,
     max_chars: int = DEFAULT_MAX_CHARS,
+    pages_out: list[tuple[int | None, str]] | None = None,
 ) -> dict[str, Any]:
+    """Extract text. ``pages_out``, when given, receives the untruncated text as
+    ``(page, text)`` pairs: one per PDF page, one with page ``None`` otherwise."""
     ext = extension.lower() if extension.startswith(".") else f".{extension.lower()}" if extension else ""
     details: dict[str, Any] = {}
     if ext not in SUPPORTED_EXTENSIONS and ext not in {".htm"}:
@@ -238,7 +245,7 @@ def extract_text_from_bytes(
         }
     try:
         if ext == ".pdf":
-            text, pdf_details = _extract_pdf(data)
+            text, pdf_details = _extract_pdf(data, pages_out)
             details.update(pdf_details)
         elif ext == ".docx":
             text = _extract_docx(data)
@@ -258,6 +265,8 @@ def extract_text_from_bytes(
         }
 
     text = (text or "").strip()
+    if pages_out is not None and ext != ".pdf" and text:
+        pages_out.append((None, text))
     truncated_text, truncated = _truncate(text, max_chars)
     return {
         "ok": True,
@@ -277,6 +286,7 @@ def extract_text_from_path(
     *,
     max_chars: int = DEFAULT_MAX_CHARS,
     extension: str | None = None,
+    pages_out: list[tuple[int | None, str]] | None = None,
 ) -> dict[str, Any]:
     file_path = Path(path).expanduser().resolve()
     if not file_path.is_file():
@@ -306,7 +316,7 @@ def extract_text_from_path(
         # Bounded read: the file may grow between the size check and here.
         data = handle.read(MAX_EXTRACT_BYTES + 1)
     ext = extension or guess_extension(path=file_path)
-    result = extract_text_from_bytes(data, extension=ext, max_chars=max_chars)
+    result = extract_text_from_bytes(data, extension=ext, max_chars=max_chars, pages_out=pages_out)
     result["path"] = str(file_path)
     result["size_bytes"] = len(data)
     return result

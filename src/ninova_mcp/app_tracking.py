@@ -6,11 +6,15 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
+
+from pydantic import Field
+
 
 from .app_base import COURSES_CACHE_KEY
 from .cache import parse_ttl_seconds
-from .client import NinovaClient
+from .change_summary import filter_since, summarize_updates
+from .client import NinovaClient, NinovaError
 from .parsing import (
     extract_announcements_list,
     extract_attendance,
@@ -254,26 +258,42 @@ class TrackingToolsMixin:
         state["updates"] = merge_updates(state["updates"], updates)
         self._save_tracking_state_document(state)
 
-        return {
+        result: dict[str, Any] = {
             "synced_at": synced_at,
             "baseline_created": baseline,
             "course_count": len(course_results),
             "update_count": len(updates),
+            "change_summary": summarize_updates(updates),
             "courses": course_results,
             "updates": updates[:100],
             "errors": errors,
             "enrollment_coverage": observed_enrollment,
             "tracking_state_path": str(self.tracking_state_path),
         }
+        # What was just read becomes searchable (search_content). No request is made for it.
+        indexer = getattr(self, "_index_tracking_state", None)
+        indexed = indexer(state) if indexer is not None else None
+        if indexed is not None:
+            result["search_index"] = indexed
+        return result
 
     def get_updates(
         self,
         limit: int = 100,
         course: str | int | None = None,
         entity_type: str | None = None,
+        summary: Annotated[bool, Field(description=(
+            "Return change_summary (headline and short Turkish lines grouped by course) instead of the raw updates list."
+        ))] = False,
+        since: Annotated[str | None, Field(description=(
+            "Only changes detected at or after this ISO date or date-time, e.g. 2026-10-05 or 2026-10-05T08:00:00+03:00."
+        ))] = None,
     ) -> dict[str, Any]:
         state = self._load_tracking_state_document()
-        updates = list(state["updates"])
+        try:
+            updates = filter_since(state["updates"], since)
+        except ValueError as exc:
+            raise NinovaError(str(exc)) from exc
 
         if course is not None:
             resolved = self._resolve_course(course)
@@ -288,6 +308,7 @@ class TrackingToolsMixin:
             ]
 
         total = len(updates)
+        matching = updates
         updates = updates[: max(1, min(limit, 500))]
         freshness = snapshot_freshness(state, max_age_seconds=tracking_max_age_seconds())
         result: dict[str, Any] = {
@@ -300,6 +321,11 @@ class TrackingToolsMixin:
             "total_count": total,
             "updates": updates,
         }
+        if summary:
+            # The summary is bounded by itself, so it covers every matching change.
+            del result["updates"]
+            result["count"] = total
+            result["change_summary"] = summarize_updates(matching, since)
         if freshness["stale_courses"]:
             result["stale_courses"] = freshness["stale_courses"]
         if freshness["status"] == "no_snapshot":

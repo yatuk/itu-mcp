@@ -56,7 +56,9 @@ TRACKING_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Fetch all visible courses, store a tracking snapshot, and return newly "
             "detected changes since the previous sync. Assignment detail pages are "
-            "skipped by default for speed."
+            "skipped by default for speed. change_summary is the short readable version of the "
+            "changes (Turkish lines grouped by course); updates keeps the full records. What was "
+            "read is also indexed for search_content."
         ),
         "inputSchema": {
             "type": "object",
@@ -98,7 +100,9 @@ TRACKING_TOOLS: list[dict[str, Any]] = [
             "It never contacts Ninova, so nothing newer than last_sync_at is listed. "
             "The result carries snapshot_age_hours and stale: stale=true means the stored data is older than the limit (12 hours by default, NINOVA_TRACKING_MAX_AGE_SECONDS) and must not be presented as the current state. status is ok, stale_snapshot or no_snapshot; when it is not ok an "
             "empty list does not mean nothing changed: run sync_all_courses first. count is the "
-            "number returned, total_count the number matching before the limit."
+            "number returned, total_count the number matching before the limit. With summary=true "
+            "the raw list is replaced by change_summary: a headline and short Turkish lines grouped "
+            "by course, for 'what changed since Monday' questions."
         ),
         "inputSchema": {
             "type": "object",
@@ -116,6 +120,21 @@ TRACKING_TOOLS: list[dict[str, Any]] = [
                 "entity_type": {
                     "type": "string",
                     "description": "Optional entity type filter such as assignments, announcements, grades, or message_topics.",
+                },
+                "summary": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Return change_summary (headline and short lines grouped by course) instead of "
+                        "the raw updates list. It covers every matching change, not only the first limit."
+                    ),
+                },
+                "since": {
+                    "type": "string",
+                    "description": (
+                        "Only changes detected at or after this ISO date or date-time, e.g. 2026-10-05 "
+                        "or 2026-10-05T08:00:00+03:00. A value without a zone is read as UTC."
+                    ),
                 },
             },
             "additionalProperties": False,
