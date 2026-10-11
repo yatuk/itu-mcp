@@ -302,7 +302,7 @@ class PortalToolsMixin:
         self, query: str | None = None, limit: int = 20, include_details: bool = False,
     ) -> dict[str, Any]:
         """List help tickets. Detail pages are opened only when include_details is true."""
-        from .help_tickets import SUMMARY_FIELDS
+        from .help_tickets import LIST_VIEW_ABSENT_FIELDS, SUMMARY_FIELDS
 
         tickets, payload = self._help_ticket_rows()
         if query:
@@ -325,10 +325,23 @@ class PortalToolsMixin:
                     item["detail_available"] = True
                     if detail.get("parse_warning"):
                         item["detail_warning"] = detail["parse_warning"]
-            item["missing_fields"] = [key for key in SUMMARY_FIELDS if item.get(key) is None]
+            # Without the ticket page, fields the list never carries are not
+            # "missing": they are named apart so nobody reads them as a fault.
+            absent = [key for key in SUMMARY_FIELDS if item.get(key) is None]
+            listed_only = item.get("detail_available") is not True
+            item["not_in_list_view"] = [key for key in absent if listed_only and key in LIST_VIEW_ABSENT_FIELDS]
+            item["missing_fields"] = [key for key in absent if key not in item["not_in_list_view"]]
         payload["tickets"] = selected
         payload["count"] = len(selected)
-        payload["metadata_complete"] = all(not item["missing_fields"] for item in selected)
+        payload["metadata_complete"] = all(
+            not item["missing_fields"] and not item["not_in_list_view"] for item in selected
+        )
+        if any(item["not_in_list_view"] for item in selected):
+            payload["full_fields_hint"] = (
+                "The list view does not carry the fields named in not_in_list_view. Call "
+                "obs_get_help_tickets with include_details=true, or get_help_ticket with the ticket "
+                "id, to read unit, category, created_at, updated_at and has_reply."
+            )
         payload["untrusted_external_content"] = True
         return payload
 

@@ -45,13 +45,13 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_help_tickets",
         "title": "Portal Help Tickets",
-        "description": "List the user's help tickets. Search by ID, title or status. Returns id, title, unit, category, status, created_at, updated_at, url and has_reply. Selected rows are enriched from the help desk by default. Set include_details=false for a quick Portal-only read. Unavailable fields are null with missing_fields. Requires login.",
+        "description": "List the user's help tickets. Search by ID, title or status. The default is a quick Portal list read: id, title, status and url, plus list_date, the one date the list carries (it does not say whether that is the creation or the last update). unit, category, created_at, updated_at and has_reply are not in the list view and are named in not_in_list_view. Set include_details=true to open each selected ticket page and fill them (one request per ticket), or call get_help_ticket for one ticket. missing_fields names fields that should have been present and were not. Requires login.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Match ticket ID, title or status."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-                "include_details": {"type": "boolean", "default": False, "description": "Also open each selected ticket page for unit, category and dates. Off by default because it costs one request per ticket."},
+                "include_details": {"type": "boolean", "default": False, "description": "Also open each selected ticket page for unit, category, created_at, updated_at and has_reply. Off by default because it costs one request per ticket."},
             },
             "additionalProperties": False,
         },
