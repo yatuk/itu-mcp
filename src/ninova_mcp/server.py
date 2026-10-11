@@ -22,6 +22,7 @@ from .compact import maybe_compact
 from .env import load_ninova_env
 from .archive_client import ItuArchiveClient, ItuArchiveError
 from .archive_tools import ARCHIVE_DATASET_TOOLS, ArchiveDatasetToolsMixin
+from .seat_watch import SEAT_WATCH_STATEFUL_TOOL_NAMES, SEAT_WATCH_TOOLS, SeatWatchToolsMixin
 from .community_data import CrossCheckDataClient, CrossCheckDataError
 from .graduation import summarize_graduation_plan
 from .prompts import PROMPT_NAMES, PROMPTS
@@ -142,7 +143,7 @@ SERVER_INSTRUCTIONS = (
 )
 
 
-class NinovaMcpApp(ArchiveDatasetToolsMixin):
+class NinovaMcpApp(ArchiveDatasetToolsMixin, SeatWatchToolsMixin):
     def __init__(self) -> None:
         load_ninova_env()
         self._client: NinovaClient | None = None
@@ -5611,6 +5612,7 @@ TOOLS: list[dict[str, Any]] = [
 
 
 TOOLS.extend(ARCHIVE_DATASET_TOOLS)
+TOOLS.extend(SEAT_WATCH_TOOLS)
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",
@@ -5657,6 +5659,7 @@ STATEFUL_TOOL_NAMES = {
     "obs_validate_registration_plan",
     "obs_get_elective_group",
 }
+STATEFUL_TOOL_NAMES |= SEAT_WATCH_STATEFUL_TOOL_NAMES
 DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft"}
 
 
