@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from bs4 import Tag
+from bs4 import BeautifulSoup, Tag
 
 from .parsing_common import (
     DATE_RE,
@@ -37,75 +37,79 @@ def _join_virtual_path(parent_path: str, name: str) -> str:
     return f"{parent}/{name}"
 
 
+def _announcement_cards(soup: BeautifulSoup) -> list[Tag]:
+    cards = soup.select("div.duyuruGoruntule")
+    if cards:
+        return cards
+    # Fallback: any block that looks like an announcement card with h2>a to Duyuru.
+    return [
+        anchor.find_parent("div")
+        for anchor in soup.select("h2 a[href*='Duyuru'], h2 a[href*='duyuru']")
+        if anchor.find_parent("div") is not None
+    ]
+
+
+def _announcement_class(content: Tag | None, page_url: str) -> tuple[str | None, str | None, str | None]:
+    """``(course_title, class_name, class_url)`` named at the top of a card's content."""
+    if not content:
+        return None, None, None
+    strong = content.find("strong")
+    course_title = clean_text(strong.get_text(" ", strip=True)) if strong else None
+    class_anchor = content.find("a", href=True)
+    if class_anchor and "/Sinif/" in class_anchor["href"] and "/Duyuru/" not in class_anchor["href"]:
+        return course_title, clean_text(class_anchor.get_text(" ", strip=True)), urljoin(page_url, class_anchor["href"])
+    return course_title, None, None
+
+
+def _span_texts(card: Tag, selector: str) -> list[str]:
+    texts = (clean_text(span.get_text(" ", strip=True)) for span in card.select(selector))
+    return [text for text in texts if text]
+
+
+def _announcement_author(card: Tag) -> str | None:
+    """The last text of the card's footer, or the one before it when the last is the date."""
+    trailing_spans = _span_texts(card, "div.tarih span.tarih")
+    if not trailing_spans:
+        return None
+    if _looks_like_date(trailing_spans[-1]) and len(trailing_spans) > 1:
+        return trailing_spans[-2]
+    return trailing_spans[-1]
+
+
+def _announcement_item(card: Tag, title_anchor: Tag, page_url: str) -> dict[str, Any]:
+    content = card.select_one("div.icerik")
+    content_text = clean_text(content.get_text(" ", strip=True) if content else "")
+    course_title, class_name, class_url = _announcement_class(content, page_url)
+    published_at = next((item for item in _span_texts(card, "span.tarih") if _looks_like_date(item)), None)
+
+    summary = content_text
+    summary = _remove_once(summary, course_title)
+    summary = _remove_once(summary, class_name)
+    summary = _remove_once(summary, published_at)
+    summary = clean_text(summary.strip("/ "))
+
+    return {
+        "title": clean_text(title_anchor.get_text(" ", strip=True)),
+        "url": urljoin(page_url, title_anchor["href"]),
+        "course_title": course_title,
+        "class_name": class_name,
+        "class_url": class_url,
+        "published_at": published_at,
+        "author": _announcement_author(card),
+        "summary": summary,
+    }
+
+
 def extract_announcements_list(html: str, page_url: str, base_url: str) -> list[dict[str, Any]]:
     soup = make_soup(html)
     items: list[dict[str, Any]] = []
-    cards = soup.select("div.duyuruGoruntule")
-    if not cards:
-        # Fallback: any block that looks like an announcement card with h2>a to Duyuru.
-        cards = [
-            anchor.find_parent("div")
-            for anchor in soup.select("h2 a[href*='Duyuru'], h2 a[href*='duyuru']")
-            if anchor.find_parent("div") is not None
-        ]
-    for card in cards:
+    for card in _announcement_cards(soup):
         if card is None:
             continue
         title_anchor = card.select_one("h2 a[href]")
         if not title_anchor:
             continue
-        title = clean_text(title_anchor.get_text(" ", strip=True))
-        url = urljoin(page_url, title_anchor["href"])
-
-        content = card.select_one("div.icerik")
-        content_text = clean_text(content.get_text(" ", strip=True) if content else "")
-        course_title = None
-        class_name = None
-        class_url = None
-        if content:
-            strong = content.find("strong")
-            if strong:
-                course_title = clean_text(strong.get_text(" ", strip=True))
-            class_anchor = content.find("a", href=True)
-            if class_anchor and "/Sinif/" in class_anchor["href"] and "/Duyuru/" not in class_anchor["href"]:
-                class_name = clean_text(class_anchor.get_text(" ", strip=True))
-                class_url = urljoin(page_url, class_anchor["href"])
-
-        date_candidates = [
-            clean_text(span.get_text(" ", strip=True))
-            for span in card.select("span.tarih")
-            if clean_text(span.get_text(" ", strip=True))
-        ]
-        published_at = next((item for item in date_candidates if _looks_like_date(item)), None)
-        author = None
-        trailing_spans = [
-            clean_text(span.get_text(" ", strip=True))
-            for span in card.select("div.tarih span.tarih")
-            if clean_text(span.get_text(" ", strip=True))
-        ]
-        if trailing_spans:
-            author = trailing_spans[-1]
-            if _looks_like_date(author) and len(trailing_spans) > 1:
-                author = trailing_spans[-2]
-
-        summary = content_text
-        summary = _remove_once(summary, course_title)
-        summary = _remove_once(summary, class_name)
-        summary = _remove_once(summary, published_at)
-        summary = clean_text(summary.strip("/ "))
-
-        items.append(
-            {
-                "title": title,
-                "url": url,
-                "course_title": course_title,
-                "class_name": class_name,
-                "class_url": class_url,
-                "published_at": published_at,
-                "author": author,
-                "summary": summary,
-            }
-        )
+        items.append(_announcement_item(card, title_anchor, page_url))
     return items
 
 
