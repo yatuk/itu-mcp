@@ -353,14 +353,16 @@ class ObsClient:
             raise ObsError("No OBS semesters found.")
         if semester is None:
             return items[-1]
-        target_raw = str(semester).strip()
+        target_raw = _semester_lookup_text(semester)
         target = normalize_lookup_text(target_raw)
         target_compact = "".join(ch for ch in target if ch.isalnum())
+        # An exact id or term code wins over any name fragment of another term.
         for item in items:
             if str(item.get("akademikDonemId")) == target_raw:
                 return item
             if str(item.get("donemKodu")) == target_raw:
                 return item
+        for item in items:
             name = normalize_lookup_text(item.get("akademikDonemAdi"))
             name_en = normalize_lookup_text(item.get("akademikDonemAdiEN"))
             name_compact = "".join(ch for ch in name if ch.isalnum())
@@ -379,6 +381,23 @@ class ObsClient:
             f"{i.get('akademikDonemId')}:{i.get('akademikDonemAdi')}" for i in items[-8:]
         )
         raise ObsError(f"Semester not found: {semester}. Examples: {options}")
+
+
+def _semester_lookup_text(semester: Any) -> str:
+    """Text form of a semester argument: a term code, an internal id or a name.
+
+    Clients send a term code as a JSON number, as a float, or as a string that
+    still carries quotes. All of them mean the same code.
+    """
+    if isinstance(semester, bool):
+        raise ObsError("Semester must be a term code, a term id or a term name.")
+    if isinstance(semester, float) and semester.is_integer():
+        semester = int(semester)
+    text = str(semester).strip().strip("\"'`\u2018\u2019\u201c\u201d").strip()
+    whole, dot, fraction = text.partition(".")
+    if dot and whole.isdigit() and fraction and not fraction.strip("0"):
+        text = whole
+    return text
 
 
 class ObsPublicClient:
