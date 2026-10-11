@@ -105,8 +105,11 @@ class GradeSemanticsTests(unittest.TestCase):
         app.prereq_crosscheck.get_course_prerequisite_tree.return_value = None
         app.archive.get_course_history.return_value = {}
         result = NinovaMcpApp.explain_course_eligibility(app, "BLG201E", use_obs_history=True)
-        assert result["completed_grades"] == expected
+        assert result["prerequisite_grades"] == expected
+        assert "completed_grades" not in result
         assert result["eligible"] is True
+        full = NinovaMcpApp.explain_course_eligibility(app, "BLG201E", use_obs_history=True, include_raw=True)
+        assert full["completed_grades"] == expected
 
 
     @cases("grade", ["BL", "BZ", "T", "E", "M"])

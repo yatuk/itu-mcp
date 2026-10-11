@@ -79,7 +79,8 @@ class GpaFallbackTests(unittest.TestCase):
             result = self.app.obs_calculate_gpa()
 
         self.assertEqual(result["gpa"], 1.50)  # DC
-        self.assertEqual(result["grade_fallback_courses"], ["FIZ 101E"])
+        self.assertEqual(result["grade_source"], "degree_plan")
+        self.assertNotIn("grade_source", result["courses"][0])
 
     def test_retake_uses_the_grade_for_the_requested_term_not_another_attempt(self) -> None:
         """CEN 101E has two grades in the graduation payload (FF then BA+).
@@ -154,7 +155,7 @@ class GpaFallbackTests(unittest.TestCase):
             result = self.app.obs_calculate_gpa()
 
         self.assertEqual(result["courses"][0]["grade"], "CC")
-        self.assertNotIn("grade_fallback_courses", result)
+        self.assertEqual(result["grade_source"], "registration")
         # Falling back is still attempted (cheap, cached) even when unused —
         # but the point of this test is the *value* wasn't overridden.
         self.assertTrue(get_grad.called or True)
@@ -179,7 +180,7 @@ class GpaFallbackTests(unittest.TestCase):
             result = self.app.obs_calculate_gpa()
 
         self.assertIsNone(result["gpa"])
-        self.assertNotIn("grade_fallback_courses", result)
+        self.assertEqual(result["grade_source"], "registration")
 
 
 if __name__ == "__main__":

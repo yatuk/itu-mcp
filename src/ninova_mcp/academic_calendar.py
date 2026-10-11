@@ -428,6 +428,32 @@ def combine_calendars(calendars: list[dict[str, Any]], *, warnings: list[str] | 
     return finalize_calendar(result, today=today)
 
 
+# Event fields the result states once for all events.
+_SHARED_EVENT_FIELDS = {"timezone": "timezone", "source_url": "url", "academic_year": "academic_year"}
+
+
+def compact_events(result: dict[str, Any]) -> dict[str, Any]:
+    """The calendar result with every event reduced to what is its own.
+
+    An event loses a field that is empty (null or an empty list), a
+    ``timezone``, ``source_url`` or ``academic_year`` equal to the result's
+    own, and ``uid``, the site's row id that only joins the two languages. A
+    value that differs from the result's, such as the academic year of an
+    event from another year's page, stays on the event.
+    """
+    events = []
+    for event in result.get("events") or []:
+        if not isinstance(event, dict):
+            events.append(event)
+            continue
+        events.append({
+            key: value for key, value in event.items()
+            if key != "uid" and value is not None and value != []
+            and not (key in _SHARED_EVENT_FIELDS and value == result.get(_SHARED_EVENT_FIELDS[key]))
+        })
+    return {**result, "events": events}
+
+
 def default_event_window(today: date) -> tuple[date, date]:
     """Window shown when the caller gives no filter at all: recent and upcoming."""
     return today - timedelta(days=14), today + timedelta(days=90)

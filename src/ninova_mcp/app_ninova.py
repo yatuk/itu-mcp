@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from .client import NinovaAuthError, NinovaClient, NinovaError
 from .local_files import LocalFileError, resolve_upload_file
+from .tool_params import publish_include_raw
 from .parsing import (
     extension_allowed,
     extract_announcement_detail,
@@ -65,14 +66,23 @@ class NinovaCourseToolsMixin:
 
     client: NinovaClient
 
-    def get_dashboard(self, compact: bool = False) -> dict[str, Any]:
-        dashboard = self._read_dashboard()
-        # Internal enrollment reads always use the full payload, even when
-        # NINOVA_COMPACT_DEFAULT truncates lists in a public tool response.
-        if "links" in dashboard and compact is not False:
-            dashboard = {**dashboard, "link_count": len(dashboard.get("links") or [])}
-            if compact:
-                dashboard.pop("links", None)
+    def get_dashboard(self, compact: bool = False, include_raw: bool = False) -> dict[str, Any]:
+        from .output_shape import RAW_AVAILABLE_KEY, raw_hint
+
+        # Internal enrollment reads use _read_dashboard, so they always see
+        # the full payload whatever this tool leaves out or shortens.
+        dashboard = dict(self._read_dashboard())
+        if "links" in dashboard:
+            dashboard["link_count"] = len(dashboard.get("links") or [])
+        if not include_raw:
+            # The link list is mostly site navigation and the headings only
+            # repeat the section names; the courses carry their own URLs.
+            dashboard.pop("links", None)
+            page = dashboard.get("page")
+            if isinstance(page, dict):
+                dashboard["page"] = {key: value for key, value in page.items() if key != "headings"}
+            dashboard[RAW_AVAILABLE_KEY] = raw_hint("links", "page.headings")
+        # include_raw decides what the result holds; compact then shortens it.
         return self._out(dashboard, compact=compact)
 
     def _read_dashboard(self) -> dict[str, Any]:
@@ -893,3 +903,6 @@ class NinovaCourseToolsMixin:
         parsed = urlparse(url)
         suffix = f"?{parsed.query}" if parsed.query else ""
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{suffix}"
+
+
+publish_include_raw(NinovaCourseToolsMixin, "get_dashboard")

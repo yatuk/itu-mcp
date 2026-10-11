@@ -13,6 +13,7 @@ from pydantic import Field, StrictBool
 
 from .client import NinovaError
 from .obs_client import ObsClient, ObsError, ObsPublicClient
+from .tool_params import publish_include_raw
 
 RegistrationDraftCrns = Annotated[
     list[Annotated[str, Field(strict=True, pattern=r"^[0-9]{4,5}$")]],
@@ -41,9 +42,10 @@ class RegistrationToolsMixin:
     obs: ObsClient
     obs_public: ObsPublicClient
 
-    def obs_get_registration_status(self) -> dict[str, Any]:
+    def obs_get_registration_status(self, include_raw: bool = False) -> dict[str, Any]:
         from requests import RequestException
-        from .registration_status import summarize_registration_status
+        from .output_shape import RAW_AVAILABLE_KEY, raw_hint
+        from .registration_status import compact_registration_summary, summarize_registration_status
 
         registration = self.obs.get_registration_status()
         lesson_registration = self.obs.get_lesson_registration_status()
@@ -53,10 +55,18 @@ class RegistrationToolsMixin:
             calendar = self.obs_public.get_academic_calendar()
         except (NinovaError, RequestException, ValueError):
             calendar_error = "The public academic calendar is unavailable. Official OBS status is retained."
+        summary = summarize_registration_status(
+            registration, lesson_registration, calendar, calendar_error=calendar_error,
+        )
+        if include_raw:
+            return {
+                "kayit_durumu": registration,
+                "ders_kayit_durumu": lesson_registration,
+                "summary": summary,
+            }
         return {
-            "kayit_durumu": registration,
-            "ders_kayit_durumu": lesson_registration,
-            "summary": summarize_registration_status(registration, lesson_registration, calendar, calendar_error=calendar_error),
+            "summary": compact_registration_summary(summary, registration),
+            RAW_AVAILABLE_KEY: raw_hint("kayit_durumu", "ders_kayit_durumu", "the unreduced summary"),
         }
 
     def obs_get_registration_draft(self) -> dict[str, Any]:
@@ -91,3 +101,6 @@ class RegistrationToolsMixin:
     def obs_validate_registration_plan(self, crns: list[str]) -> dict[str, Any]:
         from .registration_tools import validate_plan
         return validate_plan(self, crns)
+
+
+publish_include_raw(RegistrationToolsMixin, "obs_get_registration_status")

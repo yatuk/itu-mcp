@@ -10,6 +10,7 @@ from typing import Any
 from .archive_client import ItuArchiveClient
 from .obs_client import ObsError, ObsPublicClient
 from .public_client import ItuPublicClient
+from .tool_params import publish_include_raw
 
 # Link columns of the OBS course information table. Their cell text is only
 # "... İçin Tıklayınız"; the link is the value.
@@ -326,12 +327,14 @@ class PublicCatalogToolsMixin:
         date_to: str | None = None,
         category: str | None = None,
         query: str | None = None,
+        include_raw: bool = False,
     ) -> dict[str, Any]:
         """Read the İTÜ academic calendar (public, no login needed)."""
         from datetime import date, datetime
         from zoneinfo import ZoneInfo
 
-        from .academic_calendar import TIMEZONE, default_event_window
+        from .academic_calendar import TIMEZONE, compact_events, default_event_window
+        from .output_shape import RAW_AVAILABLE_KEY
         from .planning import filter_academic_calendar
 
         for value in (date_from, date_to):
@@ -362,6 +365,10 @@ class PublicCatalogToolsMixin:
                 "end_date": end.isoformat(),
                 "note": "No filter was given, so only events in this window are listed. Pass date_from/date_to, category or query to search the whole academic year.",
             }
+        if include_raw:
+            return result
+        result = compact_events(result)
+        result[RAW_AVAILABLE_KEY] = "include_raw=true returns every event with all its fields"
         return result
 
     def get_public_course_schedule(
@@ -489,3 +496,6 @@ class PublicCatalogToolsMixin:
             time=str(time),
             building=building,
         )
+
+
+publish_include_raw(PublicCatalogToolsMixin, "get_academic_calendar")

@@ -221,6 +221,84 @@ def calculate_gpa(
     })
 
 
+# --- The result obs_calculate_gpa returns -----------------------------------
+
+# Removed from the returned result because they never vary; the tool
+# description states them instead.
+_STATIC_RESULT_FIELDS = ("average_scope", "comment", "scale", "note")
+# The same number as another field of the result.
+_DUPLICATE_RESULT_FIELDS = ("calculated_term_gpa", "covered_course_count")
+_PROJECTION_FIELDS = ("unused_projected_courses", "projection_complete", "applied_projection_count")
+_REFERENCE_DUPLICATES = ("gpa", "credits", "term_code")
+
+
+def _common_source(rows: list[dict[str, Any]], field: str) -> str | None:
+    """The source most rows share; a tie goes to the registration record."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = row.get(field)
+        if isinstance(value, str):
+            counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda value: (counts[value], value == "registration"))
+
+
+def _course_row(row: dict[str, Any], credit_source: str | None, grade_source: str | None) -> dict[str, Any]:
+    """One course as the result lists it: no static note, no field that repeats another."""
+    kept: dict[str, Any] = {}
+    for key, value in row.items():
+        if key in ("note", "recorded_credit"):
+            continue
+        if key == "projected" and not value:
+            continue
+        if key == "credit_source" and value == credit_source:
+            continue
+        if key == "grade_source" and value == grade_source:
+            continue
+        # The plan values are evidence only where they differ from the credit used.
+        if key in ("plan_credit", "counted_credit") and (value is None or value == row.get("credit")):
+            continue
+        kept[key] = value
+    return kept
+
+
+def compact_term_result(result: dict[str, Any], *, projection_requested: bool) -> dict[str, Any]:
+    """The result of ``obs_calculate_gpa`` with every value stated once.
+
+    A source shared by the courses is reported once as ``credit_source`` and
+    ``grade_source``; a course carries its own only when it differs. Courses
+    in ``ff_risk`` are named by code, since ``courses`` already holds them.
+    The official record is the top-level ``official_term_*`` fields;
+    ``official_reference`` keeps only what they do not say.
+    """
+    listed = [row for key in ("courses", "ungraded") for row in result.get(key) or [] if isinstance(row, dict)]
+    credit_source = _common_source(listed, "credit_source")
+    grade_source = _common_source(listed, "grade_source")
+    compact: dict[str, Any] = {}
+    for key, value in result.items():
+        if key in _STATIC_RESULT_FIELDS or key in _DUPLICATE_RESULT_FIELDS:
+            continue
+        if key in _PROJECTION_FIELDS and not projection_requested:
+            continue
+        # Equal to ``gpa`` whenever the calculation is complete.
+        if key == "known_courses_gpa" and value == result.get("gpa"):
+            continue
+        if key in ("courses", "ungraded"):
+            value = [_course_row(row, credit_source, grade_source) for row in value]
+        elif key == "ff_risk":
+            value = [row.get("code") for row in value]
+        elif key == "official_reference" and isinstance(value, dict):
+            value = {name: item for name, item in value.items() if name not in _REFERENCE_DUPLICATES}
+        compact[key] = value
+        if key == "courses":
+            if credit_source:
+                compact["credit_source"] = credit_source
+            if grade_source:
+                compact["grade_source"] = grade_source
+    return compact
+
+
 # --- Graduation-plan evidence used by obs_calculate_gpa -------------------
 
 PLAN_BUCKETS = ("checkMetMezuniyetList", "unusedSinifOgrenciList")

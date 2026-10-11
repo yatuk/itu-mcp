@@ -74,7 +74,13 @@ class NoAttendanceRecordedTests(unittest.TestCase):
 
     def test_tool_keeps_its_top_level_fields(self) -> None:
         result = obs_app(NO_RECORD).obs_get_attendance(course="ZZT 322E")
-        self.assertEqual(result["attendance"], NO_RECORD)
+        # The stock success envelope is left out; the code that says "nothing recorded" stays.
+        self.assertEqual(
+            result["attendance"], {"sinifOgrenciYoklama": None, "resultCode": "SCCSinifOgrenciYoklamaYok"},
+        )
+        self.assertEqual(
+            obs_app(NO_RECORD).obs_get_attendance(course="ZZT 322E", include_raw=True)["attendance"], NO_RECORD,
+        )
         self.assertIsNone(result["error"])
         self.assertEqual(result["class"]["sinifId"], 900123)
         self.assertEqual(result["class"]["ogretimUyesi"], "Sentetik Kisi")

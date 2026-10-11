@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_profile",
@@ -16,7 +18,8 @@ OBS_TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "default": False,
                     "description": "Include the redacted fields (ID numbers, e-mail, phone, address, birth data). Ignored unless the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
-                }
+                },
+                "include_raw": include_raw_property("obs_get_profile"),
             },
             "additionalProperties": False,
         },
@@ -25,13 +28,21 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "name": "obs_list_programs",
         "title": "OBS Programs",
         "description": "List the student's OBS academic programs (e.g. undergraduate major).",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_raw": include_raw_property("obs_list_programs")},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "obs_list_semesters",
         "title": "OBS Semesters",
         "description": "List academic semesters available in OBS for the student.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_raw": include_raw_property("obs_list_semesters")},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "obs_get_grade_distribution",
@@ -53,13 +64,21 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "name": "obs_get_advisor",
         "title": "OBS Advisor",
         "description": "Read academic advisor information from OBS.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_raw": include_raw_property("obs_get_advisor")},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "obs_get_internships",
         "title": "OBS Internships",
         "description": "Read internship records from OBS.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_raw": include_raw_property("obs_get_internships")},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "obs_get_contacts",
@@ -69,6 +88,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "include_sensitive": {"type": "boolean", "default": False},
+                "include_raw": include_raw_property("obs_get_contacts"),
             },
             "additionalProperties": False,
         },
@@ -76,14 +96,18 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_list_registered_courses",
         "title": "OBS Registered Courses",
-        "description": "List courses registered in OBS for a semester (default: latest).",
+        "description": (
+            "List courses registered in OBS for a semester (default: latest). The term is stated once "
+            "in semester; a row repeats a term field only when it names another term."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "semester": {
                     "type": "string",
                     "description": "Semester id, code (e.g. 202620), or name fragment (e.g. '2025-2026 Bahar').",
-                }
+                },
+                "include_raw": include_raw_property("obs_list_registered_courses"),
             },
             "additionalProperties": False,
         },
@@ -108,6 +132,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
                 },
                 "include_midterms": {"type": "boolean", "default": True},
                 "include_letter": {"type": "boolean", "default": True},
+                "include_raw": include_raw_property("obs_get_course_grades"),
             },
             "additionalProperties": False,
         },
@@ -149,6 +174,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
                     "default": 0.30,
                     "description": "Assumed maximum allowed absence ratio for risk calculation (default 0.30 = 30%).",
                 },
+                "include_raw": include_raw_property("obs_get_attendance"),
             },
             "additionalProperties": False,
         },
@@ -156,11 +182,18 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_schedule",
         "title": "OBS Schedule",
-        "description": "Read weekly class schedule and final exam calendar for a semester.",
+        "description": (
+            "Read the weekly class schedule and the final exam calendar for a semester. "
+            "weekly_schedule has one entry per meeting, sorted by day and start time: day, start and "
+            "end as HH:MM, course_code, title, crn, building, room and campus. final_calendar is the "
+            "OBS final calendar. If OBS sends the schedule in a shape that cannot be read into "
+            "meetings, weekly_schedule_status says so and the source rows are returned in schedule."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."},
+                "include_raw": include_raw_property("obs_get_schedule"),
             },
             "additionalProperties": False,
         },
@@ -172,8 +205,11 @@ OBS_TOOLS: list[dict[str, Any]] = [
             "Read 'mezuniyetime ne kaldı', academic status, and debts for a program. "
             "The 'summary' field maps each filled elective slot to the real course that "
             "satisfies it (e.g. BLG 422E → '7th Sems. Elect. Course I (MT)'), lists open "
-            "slots and remaining required courses, and tallies credits. Read 'summary' "
-            "first; the raw 'graduation' payload is the unreduced source."
+            "slots and remaining required courses, and tallies credits. In the summary, "
+            "credit and slot_credit are the credit of the plan row, counted_credit is what OBS "
+            "counted for the course taken against it, and credit_differs is true when the two "
+            "differ. The raw 'graduation' payload the summary was built from is returned only "
+            "with include_raw=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -181,7 +217,8 @@ OBS_TOOLS: list[dict[str, Any]] = [
                 "program_id": {
                     "type": "integer",
                     "description": "OBS ogrenciProgramId (default: first program).",
-                }
+                },
+                "include_raw": include_raw_property("obs_get_graduation_remaining"),
             },
             "additionalProperties": False,
         },
@@ -202,10 +239,18 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_personal_exam_calendar",
         "title": "Personal Final Exam Calendar",
-        "description": "Read the signed-in student's official OBS final calendar and registered courses.",
+        "description": (
+            "Read the signed-in student's official OBS final calendar. matched_courses names the "
+            "registered courses the calendar was read for (all of them, or the ones matching course) "
+            "by code, CRN and title."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."}, "course": {"type": ["string", "integer"]}},
+            "properties": {
+                "semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."},
+                "course": {"type": ["string", "integer"]},
+                "include_raw": include_raw_property("get_personal_exam_calendar"),
+            },
             "additionalProperties": False,
         },
     },
