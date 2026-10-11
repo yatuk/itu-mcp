@@ -23,6 +23,7 @@ from .app_planning import PlanningToolsMixin
 from .app_portal import PortalToolsMixin
 from .app_public import PublicCatalogToolsMixin
 from .app_registration import RegistrationToolsMixin
+from .app_search import SearchToolsMixin
 from .app_tracking import TrackingToolsMixin
 from .archive_tools import ArchiveDatasetToolsMixin
 from .calendar_export import CalendarExportToolsMixin
@@ -48,6 +49,7 @@ class NinovaMcpApp(
     LibraryToolsMixin,
     ArchiveHistoryToolsMixin,
     GpaSimulationToolsMixin,
+    SearchToolsMixin,
     ArchiveDatasetToolsMixin,
     SeatWatchToolsMixin,
     CalendarExportToolsMixin,

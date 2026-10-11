@@ -34,6 +34,7 @@ from .library import LIBRARY_TOOLS
 from .archive import ARCHIVE_HISTORY_TOOLS
 from .gpa_simulation import GPA_SIMULATION_TOOLS
 from .export import EXPORT_TOOLS
+from .search import SEARCH_TOOLS
 
 TOOL_GROUPS: tuple[list[dict[str, Any]], ...] = (
     CORE_TOOLS,
@@ -51,6 +52,7 @@ TOOL_GROUPS: tuple[list[dict[str, Any]], ...] = (
     ARCHIVE_HISTORY_TOOLS,
     GPA_SIMULATION_TOOLS,
     EXPORT_TOOLS,
+    SEARCH_TOOLS,
 )
 
 PUBLISH_ORDER: tuple[str, ...] = (

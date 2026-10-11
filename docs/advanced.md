@@ -344,8 +344,13 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 - `get_dashboard_announcements` — announcements from `/Kampus?1/Duyurular`.
 - `get_dashboard_assignments` — assignments from `/Kampus?1/Odevler` (`include_details` default true).
 - `sync_all_courses` — snapshot every visible course and detect changes (`include_assignment_details` default false for speed).
-- `get_updates` — recently detected changes from the local tracking state.
+- `get_updates`: recently detected changes from the local tracking state. `summary=true`
+  returns `change_summary` (a headline and short Turkish lines grouped by course) instead of
+  the raw records; `since` takes an ISO date. `sync_all_courses` returns the same summary
+  for the changes it just found.
 - `get_upcoming_deadlines` — upcoming assignment deadlines from the tracking state.
+- `search_content(query, course, kinds, limit, offset)`: search the local index of content
+  that was already fetched (see "Local search index" below). Makes no request.
 - `read_page`: read and structure any Ninova HTML page. Like every tool that takes a URL
   or path, it accepts the Ninova host only.
 - `crawl_course` — inventory internal pages and downloadable resources inside a course.
@@ -383,6 +388,27 @@ A reduced result carries a short `raw_available` field. Passing `include_raw=tru
   assignment's upload page. The preview and the result carry `form_url` and
   `file.sha256`. The file is read once, before the confirmation dialog, and those bytes
   are what is sent.
+
+### Local search index
+
+`search_content` answers "is X mentioned anywhere in this term's material" from a local
+SQLite file, `<NINOVA_STATE_DIR>/search.sqlite3`. It never contacts Ninova and needs no login.
+
+- What fills it: `sync_all_courses` indexes announcements, assignments, message board topics
+  and file names from the snapshots it stores; `read_resource_text` and `download_resource`
+  index the text of the file they handled (one entry per PDF page). A file that was never
+  read or downloaded is found by its name only. No extra request is made for the index.
+- Matching folds Turkish letters and capitals (`sinav` finds `SINAV`, `sınavda`); words of
+  four or more letters match as prefixes. Every word must match; when nothing does, the
+  search is repeated for any word and the result says `matched: "any"`. `engine` is `fts5`,
+  or `scan` on an SQLite build without FTS5.
+- Privacy: the index holds course content (announcement and assignment text, file text) in
+  plain text on this computer, with the same owner-only protection as the rest of the state
+  directory. Nothing in it is sent anywhere. It cannot be read through
+  `read_resource_text(path=...)`. Documents of a course that leaves the course list are
+  removed at the next sync, and the stored text is capped at about 200 MB (oldest first).
+- To clear it, stop the server and delete `search.sqlite3`; the next sync rebuilds it. There
+  is no tool for this (`SearchIndex.clear()` in `search_index.py` does the same from code).
 
 ### Local files and URLs
 

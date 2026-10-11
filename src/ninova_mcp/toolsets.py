@@ -65,6 +65,7 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "sync_all_courses",
             "get_updates",
             "get_upcoming_deadlines",
+            "search_content",
         ),
     ),
     "files": (
