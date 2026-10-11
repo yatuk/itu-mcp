@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bs4 import BeautifulSoup, Tag
+
 from .parsing_common import clean_text, make_soup, normalize_lookup_text
 
 
@@ -113,6 +115,70 @@ def extract_help_tickets(
     return parse_widget(html, page_url)
 
 
+def _is_checked(control: Tag | None) -> bool:
+    """True for ``checked="checked"``. A bare ``checked`` parses to an empty value and is not counted."""
+    return bool(control and "checked" in (control.get("checked") or ""))
+
+
+def _checked_meal_type(soup: BeautifulSoup) -> str | None:
+    if _is_checked(soup.select_one("#radio-ogle")):
+        return "Öğle Yemeği"
+    if _is_checked(soup.select_one("#radio-aksam")):
+        return "Akşam Yemeği"
+    return None
+
+
+def _cafeteria_dish(li: Tag) -> dict[str, Any] | None:
+    """One menu line, or None when the line has no text besides its warning icon."""
+    warning_icon = li.find("i", class_="icon-warning")
+    has_allergen_info = warning_icon is not None
+    food_id = None
+    if warning_icon is not None:
+        food_id = warning_icon.get("data-food-id")
+        warning_icon.decompose()  # Remove icon so get_text gives clean name
+    name = clean_text(li.get_text(" ", strip=True))
+    if not name:
+        return None
+    return {
+        "name": name,
+        "food_id": food_id,
+        "has_allergen_info": has_allergen_info,
+    }
+
+
+def _cafeteria_selectable_group(food_list: Tag) -> dict[str, Any] | None:
+    """The "Seçmeli 4. Çeşit" group: a ``<b>`` title followed by a sub-list of options."""
+    header = food_list.find("b")
+    if header is None:
+        return None
+    options_list = header.find_next("ul", class_="secmeli-yemek")
+    if options_list is None:
+        return None
+    options = [
+        name
+        for li in options_list.find_all("li", class_="lunch-menu__list-item")
+        if (name := clean_text(li.get_text(" ", strip=True)))
+    ]
+    if not options:
+        return None
+    return {
+        "name": clean_text(header.get_text(" ", strip=True)),
+        "options": options,
+        "is_selectable_group": True,
+    }
+
+
+def _cafeteria_items(food_list: Tag) -> list[dict[str, Any]]:
+    # The options of the selectable group are list items too, so they are
+    # listed once as dishes and once more inside the group.
+    dishes = [_cafeteria_dish(li) for li in food_list.find_all("li", class_="lunch-menu__list-item", recursive=True)]
+    items = [dish for dish in dishes if dish is not None]
+    group = _cafeteria_selectable_group(food_list)
+    if group is not None:
+        items.append(group)
+    return items
+
+
 def extract_cafeteria_menu(
     html: str,
     page_url: str,
@@ -129,81 +195,27 @@ def extract_cafeteria_menu(
     """
     soup = make_soup(html)
 
-    # Meal type (öğle/akşam)
-    meal_type: str | None = None
-    oglen_radio = soup.select_one("#radio-ogle")
-    aksam_radio = soup.select_one("#radio-aksam")
-    if oglen_radio and "checked" in (oglen_radio.get("checked") or ""):
-        meal_type = "Öğle Yemeği"
-    elif aksam_radio and "checked" in (aksam_radio.get("checked") or ""):
-        meal_type = "Akşam Yemeği"
-    # Fallback: read the title
-    if not meal_type:
-        title_el = soup.select_one('span[data-placement="food-title"]')
-        if title_el:
-            meal_type = clean_text(title_el.get_text(" ", strip=True))
-
-    # Title
     title_el = soup.select_one('span[data-placement="food-title"]')
     title = clean_text(title_el.get_text(" ", strip=True)) if title_el else None
+    # The title wins; the checked radio is the fallback. An empty title with
+    # no checked radio stays an empty string instead of becoming None.
+    meal_type = title or _checked_meal_type(soup) or title
 
-    # Date
-    date: str | None = None
     date_input = soup.select_one("#food-date")
-    if date_input:
-        date = date_input.get("value") or None
+    date = (date_input.get("value") or None) if date_input else None
 
-    # Vegetarian option
     vegan_cb = soup.select_one("#checkbox-vejeteryan-vegan")
-    vegetarian_available = vegan_cb is not None
-    vegetarian_selected = bool(vegan_cb and "checked" in (vegan_cb.get("checked") or ""))
 
-    # Menu items
-    items: list[dict[str, Any]] = []
     food_list = soup.select_one('ul[data-placement="food-list"]')
-    if food_list:
-        for li in food_list.find_all("li", class_="lunch-menu__list-item", recursive=True):
-            # Extract text without the warning icon
-            warning_icon = li.find("i", class_="icon-warning")
-            food_id = None
-            has_allergen_info = False
-            if warning_icon:
-                has_allergen_info = True
-                food_id = warning_icon.get("data-food-id")
-                warning_icon.decompose()  # Remove icon so get_text gives clean name
-            name = clean_text(li.get_text(" ", strip=True))
-            if name:
-                items.append({
-                    "name": name,
-                    "food_id": food_id,
-                    "has_allergen_info": has_allergen_info,
-                })
-
-        # Check for "Seçmeli 4. Çeşit" (optional 4th dish) — a <b> tag with sub-list
-        selectable_header = food_list.find("b")
-        if selectable_header:
-            selectable_name = clean_text(selectable_header.get_text(" ", strip=True))
-            selectable_items: list[str] = []
-            selectable_ul = selectable_header.find_next("ul", class_="secmeli-yemek")
-            if selectable_ul:
-                for sli in selectable_ul.find_all("li", class_="lunch-menu__list-item"):
-                    sname = clean_text(sli.get_text(" ", strip=True))
-                    if sname:
-                        selectable_items.append(sname)
-            if selectable_items:
-                items.append({
-                    "name": selectable_name,
-                    "options": selectable_items,
-                    "is_selectable_group": True,
-                })
+    items = _cafeteria_items(food_list) if food_list else []
 
     return {
         "url": page_url,
         "title": title,
-        "meal_type": title or meal_type,
+        "meal_type": meal_type,
         "date": date,
-        "vegetarian_available": vegetarian_available,
-        "vegetarian_selected": vegetarian_selected,
+        "vegetarian_available": vegan_cb is not None,
+        "vegetarian_selected": _is_checked(vegan_cb),
         "items": items,
         "item_count": len(items),
     }
