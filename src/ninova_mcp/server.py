@@ -22,6 +22,8 @@ from .compact import maybe_compact
 from .env import load_ninova_env
 from .archive_client import ItuArchiveClient, ItuArchiveError
 from .archive_tools import ARCHIVE_DATASET_TOOLS, ArchiveDatasetToolsMixin
+from .calendar_export import CALENDAR_EXPORT_TOOLS, CalendarExportToolsMixin
+from .public_resources import PUBLIC_RESOURCE_URIS, RESOURCE_TEMPLATE_URIS, register_public_resources
 from .community_data import CrossCheckDataClient, CrossCheckDataError
 from .graduation import summarize_graduation_plan
 from .prompts import PROMPT_NAMES, PROMPTS
@@ -142,7 +144,7 @@ SERVER_INSTRUCTIONS = (
 )
 
 
-class NinovaMcpApp(ArchiveDatasetToolsMixin):
+class NinovaMcpApp(ArchiveDatasetToolsMixin, CalendarExportToolsMixin):
     def __init__(self) -> None:
         load_ninova_env()
         self._client: NinovaClient | None = None
@@ -5611,6 +5613,7 @@ TOOLS: list[dict[str, Any]] = [
 
 
 TOOLS.extend(ARCHIVE_DATASET_TOOLS)
+TOOLS.extend(CALENDAR_EXPORT_TOOLS)
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",
@@ -5772,6 +5775,7 @@ def build_stdio_server(app: NinovaMcpApp | None = None) -> Any:
     register_tools(mcp, app, LOCAL_TOOL_NAMES)
     register_prompts(mcp)
     register_resources(mcp)
+    register_public_resources(mcp, app)
     return mcp
 
 
@@ -5830,6 +5834,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.list_resources:
         for uri in RESOURCE_URIS:
+            print(uri)
+        for uri in [*PUBLIC_RESOURCE_URIS, *RESOURCE_TEMPLATE_URIS]:
             print(uri)
         return
 

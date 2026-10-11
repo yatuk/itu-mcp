@@ -1,9 +1,9 @@
 """Static reference tables exposed as MCP resources.
 
 Only genuinely constant lookup data belongs here — no network, no
-credentials, no per-student state. Everything else this server knows is
-either a live query or requires a login, which makes it a tool rather than a
-resource.
+credentials, no per-student state. Public data that has to be fetched (the
+academic calendar, archive and degree-plan resources) lives in
+``public_resources.py``; anything that requires a login stays a tool.
 
 Both tables published here exist to stop callers from guessing: the letter
 grade coefficients so a model does not invent İTÜ's 4.00 scale, and the
