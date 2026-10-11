@@ -85,7 +85,7 @@ export NINOVA_MAIL_HOST="imap.itu.edu.tr"            # the only accepted host
 export NINOVA_MAIL_PORT="993"                        # the only accepted port
 export NINOVA_MAIL_TIMEOUT_SECONDS="15"
 export ITU_ARCHIVE_BASE_URL="https://itu-ders.com/data"  # course archive
-export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates daily
+export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates about daily while its scraper runs
 export PREREQ_CROSSCHECK_BASE_URL="<community pipe-delimited course feed URL>"
 export PREREQ_CROSSCHECK_CACHE_TTL_SECONDS="21600"    # community prerequisite cross-check
 ```
@@ -683,7 +683,7 @@ from 2016-2017 onward. OBS publishes only the active term, so these answer what 
 Every result carries a `coverage` field. An empty result means one of three different things
 — the term was never captured (`term_missing`), the branch is absent from that term's dump
 (`branch_absent_from_term`), or the filters matched nothing (`covered`) — and the tool always
-says which. Quota data refreshes daily and is not live; check OBS before registering.
+says which. Quota data is not live: `archive_fill_rate` reports the age of the last snapshot and whether the archive is scanning (it pauses outside registration and add/drop weeks); check OBS before registering.
 
 The dataset tools above use the same field with their own values, so "the archive never
 recorded this file" stays distinct from "nothing matched": `branch_grades_missing`,

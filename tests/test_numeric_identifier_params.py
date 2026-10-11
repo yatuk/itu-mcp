@@ -26,9 +26,6 @@ from ninova_mcp.tool_registry import TOOLS
 NUMERIC_IDENTIFIER_PARAMS = ("crn", "crns", "ders_no", "semester", "term_code", "year")
 
 KNOWN_OUTSIDE: dict[tuple[str, str], str] = {
-    ("archive_fill_rate", "crn"): "app_archive.py: crn: str | None -> str | int | None",
-    ("watch_course_sections", "crns"): "seat_watch.py: crns: list[str] -> list[str | int]",
-    ("unwatch_course_sections", "crns"): "seat_watch.py: crns: list[str] | None -> list[str | int] | None",
     ("obs_validate_registration_plan", "crns"): "app_registration.py: strict on purpose, validated before any login (see test_registration_tools)",
     ("obs_save_registration_draft", "crns"): "app_registration.py: crns is strict on purpose for the write tool; widen only with the owner",
 }

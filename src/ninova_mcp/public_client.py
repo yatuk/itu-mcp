@@ -162,8 +162,8 @@ class ItuPublicClient:
         code = department_code.strip().upper()
         departments = self._final_departments()
         if code not in departments:
-            examples = ", ".join(sorted(departments)[:20])
-            raise ItuPublicError(f"Geçersiz bölüm kodu: {code}. Örnekler: {examples}")
+            codes = sorted(departments)
+            raise ItuPublicError(f"Geçersiz bölüm kodu: {code}. Geçerli {len(codes)} kod: {', '.join(codes)}")
         cache_key = f"final:{departments[code]}"
         cached = self._cache.get(cache_key)
         if cached is not None:

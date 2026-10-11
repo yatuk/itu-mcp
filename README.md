@@ -457,6 +457,7 @@ NINOVA_EXTRA_READ_DIRS=...          # asistanın okuyabileceği ek klasörler (t
 NINOVA_EXTRA_DOWNLOAD_DIRS=...      # indirmelerin yazılabileceği ek klasörler (tam yol)
 NINOVA_MAX_DOWNLOAD_MB=200          # tek indirme için boyut sınırı
 NINOVA_TOOLSETS=ninova,obs,archive  # yalnızca bu araç gruplarını aç
+NINOVA_TRACKING_MAX_AGE_SECONDS=43200  # teslim kaydı bu süreden eskiyse yeniden oku (varsayılan 12 saat)
 NINOVA_MAIL_USERNAME=...            # mail için ayrı kullanıcı adı
 NINOVA_MAIL_PASSWORD=...            # mail için ayrı şifre
 ```

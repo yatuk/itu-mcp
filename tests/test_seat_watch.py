@@ -167,7 +167,7 @@ class WatchListTests(SeatWatchTestCase):
         self.assertEqual(result["not_found"][0]["reason"], "not_in_schedule")
 
     def test_input_is_validated_before_any_request(self) -> None:
-        for bad in (["abc"], ["123"], ["12469", "12469"], [], [12469]):
+        for bad in (["abc"], ["123"], ["12469", "12469"], [], [True], [12469, 12469]):
             with self.subTest(crns=bad), self.assertRaises(ObsError):
                 self.app.watch_course_sections(bad, department_code="BLG")  # type: ignore[arg-type]
         with self.assertRaises(ObsError):

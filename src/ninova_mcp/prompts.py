@@ -126,8 +126,11 @@ def research_course(course: str) -> str:
         "dökümünde yok), `covered` (veri var, filtreye uyan yok). Yalnızca "
         "sonuncusu 'açılmadı' demeye yaklaşır — ilk ikisi veri eksikliğidir.\n\n"
         "Özetle: bu ders hangi mevsimde açılıyor, kim veriyor, dolar mı? "
-        "Kontenjan verisinin günde bir tazelendiğini ve anlık olmadığını "
-        "hatırlat."
+        "Kontenjan verisinin anlık olmadığını hatırlat: `archive_fill_rate(crn=...)` "
+        "sonucundaki `note`, `last_snapshot_age_days` ve `scan_active` alanlarını aktar. "
+        "Arşiv kayıt ve ekle-bırak haftaları dışında taramayı durdurur; günlük tazelenme "
+        "varsayma. `enrolment_not_captured` işaretli dönemlerde kayıtlı sayısı bilinmiyor "
+        "demektir, sıfır değil."
     )
 
 
@@ -287,7 +290,7 @@ def registration_week(candidates: str) -> str:
         "veri bulunmayan dersler.\n"
     )
     lines.append(
-        "Kontenjan sayıları anlık değildir (arşiv günde bir tazelenir) ve kayıt saatinde "
+        "Kontenjan sayıları anlık değildir (son görüntünün yaşı `archive_fill_rate` sonucundaki `last_snapshot_age_days` alanında; arşiv kayıt haftaları dışında taramayı durdurur) ve kayıt saatinde "
         "değişir. Hiçbir şeyin kaydedilmediğini, derse yazılmanın OBS'de elle yapılacağını "
         "ve son kararı OBS ekranının vereceğini hatırlat.\n"
     )

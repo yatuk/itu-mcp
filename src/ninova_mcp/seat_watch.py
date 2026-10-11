@@ -327,6 +327,13 @@ def _observation_note(observation: dict[str, Any], changes: list[str], repeat: b
 # -- tools -------------------------------------------------------------------
 
 
+def _crn_strings(crns: Any) -> Any:
+    """A CRN sent as a JSON number is the same CRN; everything else is validated as given."""
+    if not isinstance(crns, list):
+        return crns
+    return [str(crn) if isinstance(crn, int) and not isinstance(crn, bool) else crn for crn in crns]
+
+
 class SeatWatchToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies the clients and ``state_dir``."""
 
@@ -394,14 +401,14 @@ class SeatWatchToolsMixin:
 
     def watch_course_sections(
         self,
-        crns: list[str],
+        crns: list[str | int],
         department_code: str | None = None,
         program_type: str | None = None,
     ) -> dict[str, Any]:
         """Add sections to the local seat watch list by CRN."""
         from .registration_draft import normalize_crns
 
-        selected = normalize_crns(crns)
+        selected = normalize_crns(_crn_strings(crns))
         level = ObsPublicClient._normalize_program_type(program_type) if program_type else None
         branch = (department_code or "").strip().upper()
         if department_code is not None and not branch:
@@ -535,7 +542,7 @@ class SeatWatchToolsMixin:
 
     def unwatch_course_sections(
         self,
-        crns: list[str] | None = None,
+        crns: list[str | int] | None = None,
         stale_only: bool = False,
         clear_all: bool = False,
     ) -> dict[str, Any]:
@@ -544,7 +551,7 @@ class SeatWatchToolsMixin:
 
         if sum((crns is not None, bool(stale_only), bool(clear_all))) != 1:
             raise ObsError("Tam olarak biri verilmeli: crns, stale_only=true veya clear_all=true.")
-        selected = normalize_crns(crns) if crns is not None else []
+        selected = normalize_crns(_crn_strings(crns)) if crns is not None else []
 
         with _STATE_LOCK:
             state, warning = load_seat_watch_state(self.seat_watch_state_path)
