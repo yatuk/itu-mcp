@@ -28,6 +28,7 @@ from .parsing import (
     make_soup,
     normalize_lookup_text,
 )
+from .private_io import write_private_bytes
 
 DEFAULT_OBS_BASE_URL = "https://obs.itu.edu.tr"
 JWT_PATH = "/ogrenci/auth/jwt"
@@ -323,10 +324,11 @@ class ObsClient:
             raise ObsError("Transcript preview did not include belgeAsByteArray.")
         raw = base64.b64decode(b64)
         target_dir = Path(output_dir).expanduser().resolve()
-        target_dir.mkdir(parents=True, exist_ok=True)
         name = filename or ("transcript-en.pdf" if english else "transcript-tr.pdf")
         path = target_dir / name
-        path.write_bytes(raw)
+        # The transcript is owner-only (0600 on POSIX). The directory is the
+        # caller's choice, so its own permissions are left alone.
+        write_private_bytes(path, raw, private_dir=False)
         return {
             "path": str(path),
             "size_bytes": len(raw),
@@ -606,7 +608,9 @@ class ObsPublicClient:
             if progress is not None:
                 try:
                     progress(position, scan_total, f"Ön şart tablosu taranıyor ({position + 1}/{scan_total}): {branch}")
-                except Exception:
+                except Exception:  # nosec B110
+                    # Progress is advisory. The callback is supplied by the
+                    # caller and must never change the outcome of the scan.
                     pass
             try:
                 data = self.get_branch_prerequisites(branch)
@@ -638,7 +642,8 @@ class ObsPublicClient:
         if progress is not None:
             try:
                 progress(scan_total, scan_total, "Ön şart taraması tamamlandı")
-            except Exception:
+            except Exception:  # nosec B110
+                # Advisory, as above.
                 pass
         complete = bool(branches) and not unknown_branches and len(branches) <= max_scan
         result: dict[str, Any] = {

@@ -124,7 +124,7 @@ def parse_prerequisite_expression(expression: str) -> dict[str, Any]:
         if token == "(":  # nosec B105
             position += 1
             inner = parse_or()
-            if peek() == ")":  # nosec B105
+            if peek() == ")":
                 position += 1
             return inner
         if token == ")":  # nosec B105

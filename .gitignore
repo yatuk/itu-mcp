@@ -20,3 +20,8 @@ tmp_*.json
 *.mcpb
 .claude/worktrees/
 videos/
+
+# MCP registry publisher binaries: fetched by the release workflow, never committed.
+mcp-publisher
+mcp-publisher.exe
+mcp-publisher*.tar.gz

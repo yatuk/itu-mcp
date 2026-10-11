@@ -19,6 +19,7 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import shutil
@@ -45,6 +46,22 @@ RUNTIME_TRIPLES = {
     ("linux", "x86_64"): "x86_64-unknown-linux-gnu",
     ("linux", "aarch64"): "aarch64-unknown-linux-gnu",
 }
+
+# SHA-256 of cpython-<RUNTIME_PYTHON>+<RUNTIME_RELEASE>-<triple>-install_only.tar.gz.
+# These are the digests GitHub reports for the release assets:
+#   gh api repos/astral-sh/python-build-standalone/releases/tags/<RUNTIME_RELEASE>
+#     --paginate --jq '.assets[] | [.name, .digest] | join(" ")'
+# Changing RUNTIME_RELEASE or RUNTIME_PYTHON means replacing every digest here.
+RUNTIME_SHA256 = {
+    "aarch64-apple-darwin": "3724aa4dafb5f7b6c2cf98e89914e4248dc6bd2fe40407df4a2d73de99615f16",
+    "x86_64-apple-darwin": "7c57fdd1fa675190093700eb0d8e7117e1f9eae7c30a46dea5f8d5266bcfc791",
+    "x86_64-pc-windows-msvc": "c6af85bb83d5158c9ff71f50dfad467853d1cd236f932b144e87e26e2ea2a83e",
+    "x86_64-unknown-linux-gnu": "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+    "aarch64-unknown-linux-gnu": "b14d074c43fdf03f01822fd07a15b3039eb0558503d1cb791791602cbe32908b",
+}
+
+# Exact version of the packer run through npx (https://www.npmjs.com/package/@anthropic-ai/mcpb).
+MCPB_CLI_VERSION = "2.1.2"
 
 
 def _read_version() -> str:
@@ -87,6 +104,10 @@ def _download_runtime(server_dir: Path) -> Path:
     if triple is None:
         raise SystemExit(f"No standalone CPython mapping for {system}/{machine}")
 
+    expected = RUNTIME_SHA256.get(triple)
+    if expected is None:
+        raise SystemExit(f"No pinned SHA-256 for the {triple} runtime")
+
     asset = f"cpython-{RUNTIME_PYTHON}+{RUNTIME_RELEASE}-{triple}-install_only.tar.gz"
     url = (
         "https://github.com/astral-sh/python-build-standalone/releases/download/"
@@ -95,11 +116,41 @@ def _download_runtime(server_dir: Path) -> Path:
     print(f"[build] downloading runtime: {asset}")
     tarball = server_dir / "runtime.tar.gz"
     urllib.request.urlretrieve(url, tarball)
-    with tarfile.open(tarball) as tf:
-        tf.extractall(server_dir, filter="fully_trusted")
-    tarball.unlink()
+    try:
+        # Nothing is unpacked, and so nothing from the archive can run,
+        # unless it is byte for byte the pinned release asset.
+        _verify_sha256(tarball, expected)
+        _extract_runtime(tarball, server_dir)
+    finally:
+        tarball.unlink()
     (server_dir / "python").rename(server_dir / "runtime")
     return _runtime_python(server_dir / "runtime")
+
+
+def _verify_sha256(path: Path, expected: str) -> None:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual != expected.lower():
+        raise SystemExit(
+            f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}. "
+            "Refusing to unpack it."
+        )
+
+
+def _extract_runtime(tarball: Path, dest: Path) -> None:
+    """Unpack with the ``data`` filter, the strictest one tarfile offers.
+
+    It rejects absolute paths, members and links that point outside ``dest``
+    and device files, and it drops setuid bits and foreign ownership. The
+    executable bit and links inside the tree, which the runtime needs, are
+    kept. The archive is checksum-verified first; the filter is a second
+    line of defence, not the only one.
+    """
+    with tarfile.open(tarball) as tf:
+        tf.extractall(dest, filter="data")
 
 
 def _runtime_python(runtime_dir: Path) -> Path:
@@ -146,7 +197,8 @@ def _pack(build_dir: Path, output: Path) -> None:
     if mcpb:
         cmd = [mcpb, "pack", str(build_dir), str(output)]
     elif npx:
-        cmd = [npx, "--yes", "@anthropic-ai/mcpb", "pack", str(build_dir), str(output)]
+        package = f"@anthropic-ai/mcpb@{MCPB_CLI_VERSION}"
+        cmd = [npx, "--yes", package, "pack", str(build_dir), str(output)]
 
     if cmd:
         print(f"[build] packing with: {' '.join(cmd)}")

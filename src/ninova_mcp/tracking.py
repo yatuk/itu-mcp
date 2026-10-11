@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .private_io import write_private_text
+
 
 TRACKING_STATE_VERSION = 2
 MAX_UPDATE_HISTORY = 2000
@@ -62,14 +64,9 @@ def load_tracking_state(path: Path) -> dict[str, Any]:
 def save_tracking_state(path: Path, state: dict[str, Any]) -> None:
     # Write-then-rename so a crash mid-write leaves the old file intact
     # instead of a truncated one load_tracking_state would otherwise choke
-    # on — same pattern as session_store.save_session.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    # on. The file names courses, grades and deadlines, so it is written
+    # owner-only as well (private_io).
+    write_private_text(path, json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def _stable_json(value: Any) -> str:
