@@ -105,6 +105,13 @@ class ObsSessionCore:
         self.ninova.ensure_logged_in()
         self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
         response = self._safe_request("GET", self.base_url + JWT_PATH, timeout=30)
+        token = self._jwt_from_response(response)
+        self._jwt = token
+        self._jwt_obtained_at = now
+        return token
+
+    def _jwt_from_response(self, response: requests.Response) -> str:
+        """The token in the JWT endpoint's answer, or an auth error when it holds none."""
         if response.status_code != 200 or not response.text.strip():
             raise NinovaAuthError(
                 "Could not obtain OBS JWT. Log in via Ninova credentials and open "
@@ -120,8 +127,6 @@ class ObsSessionCore:
                 "OBS returned a login page instead of a JWT. The İTÜ SSO session is "
                 "stale; call refresh_session and try again."
             )
-        self._jwt = token
-        self._jwt_obtained_at = now
         return token
 
     def _headers(self) -> dict[str, str]:
@@ -146,41 +151,52 @@ class ObsSessionCore:
         if not path.startswith("/"):
             path = "/" + path
         url = self.base_url + path
+        response = self._send_authorised(method, url, request_options)
+        if response.status_code in {401, 403} or self._looks_like_obs_login_page(response):
+            response = self._resend_after_session_refresh(method, url, path, request_options)
+        if response.status_code >= 400:
+            # Some OBS endpoints return 500 when data is not yet published.
+            raise ObsError(f"OBS API {path} failed with HTTP {response.status_code}")
+        return _decoded_body(response)
+
+    def _send_authorised(
+        self, method: str, url: str, request_options: dict[str, Any],
+    ) -> requests.Response:
+        """Throttle, then send one request carrying the current JWT."""
         self.ninova._throttle()
-        response = self._safe_request(
+        return self._safe_request(
             method,
             url,
             headers=self._headers(),
             **request_options,
             timeout=45,
         )
-        if response.status_code in {401, 403} or self._looks_like_obs_login_page(response):
-            # A stale JWT alone doesn't explain a login-page body; the
-            # underlying Ninova/SSO session itself is usually what died, so
-            # this re-verifies that too rather than just re-minting a token
-            # against cookies that are already dead.
-            self.ninova.ensure_logged_in(verify=True)
-            self._get_jwt(force=True)
-            self.ninova._throttle()
-            response = self._safe_request(
-                method,
-                url,
-                headers=self._headers(),
-                **request_options,
-                timeout=45,
+
+    def _resend_after_session_refresh(
+        self, method: str, url: str, path: str, request_options: dict[str, Any],
+    ) -> requests.Response:
+        """Re-verify the SSO session, mint a new JWT and send the request once more."""
+        # A stale JWT alone doesn't explain a login-page body; the
+        # underlying Ninova/SSO session itself is usually what died, so
+        # this re-verifies that too rather than just re-minting a token
+        # against cookies that are already dead.
+        self.ninova.ensure_logged_in(verify=True)
+        self._get_jwt(force=True)
+        response = self._send_authorised(method, url, request_options)
+        if self._looks_like_obs_login_page(response):
+            raise ObsError(
+                f"OBS API {path} kept returning a login page after refreshing the "
+                "session. Call refresh_session, or check access manually at "
+                "https://obs.itu.edu.tr/ogrenci/."
             )
-            if self._looks_like_obs_login_page(response):
-                raise ObsError(
-                    f"OBS API {path} kept returning a login page after refreshing the "
-                    "session. Call refresh_session, or check access manually at "
-                    "https://obs.itu.edu.tr/ogrenci/."
-                )
-        if response.status_code >= 400:
-            # Some OBS endpoints return 500 when data is not yet published.
-            raise ObsError(f"OBS API {path} failed with HTTP {response.status_code}")
-        if not response.content:
-            return None
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        if "json" in content_type or response.text[:1] in {"{", "["}:
-            return response.json()
-        return response.text
+        return response
+
+
+def _decoded_body(response: requests.Response) -> Any:
+    """JSON when the answer says or looks like JSON, text otherwise, ``None`` when empty."""
+    if not response.content:
+        return None
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    if "json" in content_type or response.text[:1] in {"{", "["}:
+        return response.json()
+    return response.text
