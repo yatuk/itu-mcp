@@ -8,12 +8,28 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # Ubuntu keeps its old check names; the Windows rows add a suffix.
+    name: Test (Python ${{ matrix.python-version }}${{ matrix.suffix }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          # The project ships a Windows bundle, and some failures (a missing
+          # tzdata package, path and encoding differences) only show there.
+          # Oldest and newest supported Python keep the run time reasonable.
+          - os: windows-latest
+            python-version: "3.11"
+            suffix: ", Windows"
+          - os: windows-latest
+            python-version: "3.14"
+            suffix: ", Windows"
+    defaults:
+      run:
+        # Same shell on both systems, so one command line works everywhere.
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
@@ -29,6 +45,22 @@ jobs:
           NINOVA_USERNAME: dummy
           NINOVA_PASSWORD: dummy
         run: python -m unittest discover -s tests -v
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: python -m pip install "ruff>=0.15,<0.16"
+
+      - name: Check source and tests
+        run: python -m ruff check src/ tests/
 
   security:
     name: Dependency and static security audit
