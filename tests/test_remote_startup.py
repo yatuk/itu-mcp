@@ -499,3 +499,18 @@ class DockerfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IgnoredEnvFileSettingsTests(unittest.TestCase):
+    def test_ignored_remote_setting_refuses_to_start(self) -> None:
+        with patch.object(
+            remote, "ignored_env_keys", return_value=("NINOVA_ALLOWED_HOSTS", "NINOVA_BASE_URL")
+        ):
+            with self.assertRaises(RemoteConfigError) as caught:
+                remote._refuse_ignored_remote_settings()
+        self.assertIn("NINOVA_ALLOWED_HOSTS", str(caught.exception))
+        self.assertNotIn("NINOVA_BASE_URL", str(caught.exception))
+
+    def test_unrelated_ignored_keys_do_not_block_startup(self) -> None:
+        with patch.object(remote, "ignored_env_keys", return_value=("NINOVA_BASE_URL",)):
+            remote._refuse_ignored_remote_settings()

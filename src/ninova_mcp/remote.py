@@ -19,7 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from .env import load_ninova_env
+from .env import ignored_env_keys, load_ninova_env
 from .public_resources import register_public_resources
 from .remote_security import (
     RateLimiter,
@@ -402,8 +402,30 @@ class _McpPathWithoutRedirect:
         await self.app(scope, receive, send)
 
 
+_REMOTE_ENV_KEY_STEMS = ("REMOTE_", "ALLOWED_", "HEALTHZ_")
+_REMOTE_ENV_KEYS = frozenset(
+    {"NINOVA_PUBLIC_BASE_URL", "NINOVA_DISABLE_DNS_REBINDING_PROTECTION"}
+)
+
+
+def _refuse_ignored_remote_settings() -> None:
+    """A remote setting skipped in an auto-discovered .env must not pass silently."""
+    skipped = [
+        key
+        for key in ignored_env_keys()
+        if key in _REMOTE_ENV_KEYS or key.removeprefix("NINOVA_").startswith(_REMOTE_ENV_KEY_STEMS)
+    ]
+    if skipped:
+        raise RemoteConfigError(
+            "These remote settings were found in the .env of the working directory "
+            f"and ignored: {', '.join(skipped)}. Set them in the process environment, "
+            "or point NINOVA_ENV_FILE at the file."
+        )
+
+
 def build_app(app_logic: NinovaMcpApp | None = None) -> Starlette:
     load_ninova_env()
+    _refuse_ignored_remote_settings()
     config = resolve_startup_config()
     rate_limiter = build_rate_limiter_from_env()
     trusted_hops = trusted_proxy_hops_from_env()
