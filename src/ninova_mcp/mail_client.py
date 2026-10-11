@@ -17,6 +17,8 @@ from typing import Any, Callable, Iterator
 
 DEFAULT_IMAP_HOST = "imap.itu.edu.tr"
 DEFAULT_IMAP_PORT = 993
+# Exact names only. Add a host here, in code review, if İTÜ ever moves mail.
+ALLOWED_IMAP_HOSTS = frozenset({DEFAULT_IMAP_HOST})
 DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_LIST_LIMIT = 50
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -55,6 +57,36 @@ class ItuMailError(RuntimeError):
 
 class ItuMailAuthError(ItuMailError):
     """Raised when the IMAP server rejects the configured credentials."""
+
+
+def _allowed_imap_host(value: str) -> str:
+    """Return the normalised host, or refuse it before any connection.
+
+    The mail login sends the İTÜ password, and by default the same password
+    as Ninova and OBS. A verified TLS certificate proves only that the server
+    owns its name, so the name itself has to be one of the known İTÜ hosts.
+    The match is exact: a ``*.itu.edu.tr`` suffix rule would also trust every
+    departmental and student-run host under the university domain.
+    """
+    host = str(value).strip().rstrip(".").lower()
+    if host not in ALLOWED_IMAP_HOSTS:
+        raise ItuMailError(
+            "NINOVA_MAIL_HOST is not an allowed İTÜ Mail host; refusing to connect. "
+            f"Allowed: {', '.join(sorted(ALLOWED_IMAP_HOSTS))}."
+        )
+    return host
+
+
+def _allowed_imap_port(value: int | str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        port = -1
+    if port != DEFAULT_IMAP_PORT:
+        raise ItuMailError(
+            f"NINOVA_MAIL_PORT must be {DEFAULT_IMAP_PORT} (IMAP over TLS); refusing to connect."
+        )
+    return port
 
 
 class _TextOnlyHtmlParser(HTMLParser):
@@ -373,8 +405,12 @@ class ItuMailClient:
         timeout: float | None = None,
         imap_factory: Callable[..., Any] = imaplib.IMAP4_SSL,
     ) -> None:
-        self.host = (host or os.getenv("NINOVA_MAIL_HOST") or DEFAULT_IMAP_HOST).strip()
-        self.port = port or int(os.getenv("NINOVA_MAIL_PORT") or DEFAULT_IMAP_PORT)
+        # Checked before anything else: the İTÜ password is sent to this host,
+        # so nothing outside the allowlist may ever be connected to.
+        self.host = _allowed_imap_host(host or os.getenv("NINOVA_MAIL_HOST") or DEFAULT_IMAP_HOST)
+        self.port = _allowed_imap_port(
+            port or os.getenv("NINOVA_MAIL_PORT") or DEFAULT_IMAP_PORT
+        )
         self.username = (
             username
             or os.getenv("NINOVA_MAIL_USERNAME")
@@ -392,10 +428,6 @@ class ItuMailClient:
         )
         self._imap_factory = imap_factory
 
-        if not re.fullmatch(r"[A-Za-z0-9.-]+", self.host):
-            raise ItuMailError("NINOVA_MAIL_HOST must be a DNS hostname.")
-        if not 1 <= self.port <= 65_535:
-            raise ItuMailError("NINOVA_MAIL_PORT must be between 1 and 65535.")
         if not 1 <= self.timeout <= 120:
             raise ItuMailError("NINOVA_MAIL_TIMEOUT_SECONDS must be between 1 and 120.")
 

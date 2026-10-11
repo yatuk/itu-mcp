@@ -226,6 +226,73 @@ class ItuMailClientTests(unittest.TestCase):
                 client.status()
         self.assertEqual(factory.calls, [])
 
+    def test_only_the_itu_imap_host_is_accepted(self) -> None:
+        for host in (
+            "imap.attacker.example",
+            "imap.itu.edu.tr.attacker.example",
+            "evil.itu.edu.tr",
+            "attacker.example/imap.itu.edu.tr",
+            "imap.itu.edu.tr@attacker.example",
+            "127.0.0.1",
+        ):
+            with self.subTest(host=host):
+                factory = FakeFactory(FakeImap())
+                with self.assertRaises(ItuMailError) as caught:
+                    ItuMailClient(
+                        host=host,
+                        username="student@itu.edu.tr",
+                        password="not-a-real-secret",
+                        imap_factory=factory,
+                    ).status()
+                self.assertEqual(factory.calls, [])
+                self.assertIn("imap.itu.edu.tr", str(caught.exception))
+                self.assertNotIn("not-a-real-secret", str(caught.exception))
+
+    def test_mail_host_environment_override_is_refused_before_login(self) -> None:
+        fake = FakeImap()
+        factory = FakeFactory(fake)
+        env = {
+            "NINOVA_MAIL_HOST": "imap.attacker.example",
+            "NINOVA_USERNAME": "student@itu.edu.tr",
+            "NINOVA_PASSWORD": "not-a-real-secret",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ItuMailError):
+                ItuMailClient(imap_factory=factory).status()
+        self.assertEqual(factory.calls, [])
+        self.assertIsNone(getattr(fake, "login_args", None))
+
+    def test_allowed_host_is_normalised(self) -> None:
+        for host in ("IMAP.ITU.EDU.TR", " imap.itu.edu.tr ", "imap.itu.edu.tr."):
+            with self.subTest(host=host):
+                client = ItuMailClient(
+                    host=host,
+                    username="student@itu.edu.tr",
+                    password="not-a-real-secret",
+                    imap_factory=FakeFactory(FakeImap()),
+                )
+                self.assertEqual(client.host, "imap.itu.edu.tr")
+
+    def test_only_port_993_is_accepted(self) -> None:
+        for port in ("143", "1993", "0", "abc"):
+            with self.subTest(port=port):
+                factory = FakeFactory(FakeImap())
+                with patch.dict(os.environ, {"NINOVA_MAIL_PORT": port}, clear=True):
+                    with self.assertRaises(ItuMailError):
+                        ItuMailClient(
+                            username="student@itu.edu.tr",
+                            password="not-a-real-secret",
+                            imap_factory=factory,
+                        ).status()
+                self.assertEqual(factory.calls, [])
+        with self.assertRaises(ItuMailError):
+            ItuMailClient(
+                port=143,
+                username="student@itu.edu.tr",
+                password="not-a-real-secret",
+                imap_factory=FakeFactory(FakeImap()),
+            )
+
     def test_auth_error_does_not_echo_credentials(self) -> None:
         fake = FakeImap(reject_login=True)
         client, _, _ = self.make_client(fake)
