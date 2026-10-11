@@ -1209,6 +1209,81 @@ def _parse_utc_timestamp(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# A scan newer than this is read as "the scraper is running". The archive
+# scans at least daily while it scans at all, so two days leaves room for one
+# missed run without calling a paused scraper active.
+SCAN_ACTIVE_WINDOW_HOURS = 48
+
+
+def _age_text(hours: float) -> str:
+    if hours < SCAN_ACTIVE_WINDOW_HOURS:
+        return f"yaklaşık {max(0, round(hours))} saat"
+    return f"yaklaşık {round(hours / 24)} gün"
+
+
+def snapshot_freshness(
+    last_snapshot: Any,
+    *,
+    scraped_at: Any = None,
+    is_current_term: bool = True,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """How old a quota series is and whether the archive is still scanning.
+
+    Nothing here assumes a refresh cadence. ``last_snapshot`` is the last
+    entry of the term's quota series and ``scraped_at`` the archive's own last
+    scrape time (``index.json``); the newer of the two decides ``scan_active``,
+    which is ``None`` when neither is known. The archive pauses outside
+    registration and add/drop weeks, so an old snapshot is expected, and the
+    note says how old it is instead of promising a daily refresh.
+    """
+    moment = now or _utc_now()
+    last = _parse_utc_timestamp(last_snapshot)
+    scraped = _parse_utc_timestamp(scraped_at)
+    known = [stamp for stamp in (last, scraped) if stamp is not None]
+
+    def hours_since(stamp: datetime) -> float:
+        return (moment - stamp).total_seconds() / 3600
+
+    age_hours = hours_since(last) if last is not None else None
+    newest_hours = hours_since(max(known)) if known else None
+    scan_active: bool | None
+    if not is_current_term:
+        scan_active = False
+    elif newest_hours is None:
+        scan_active = None
+    else:
+        scan_active = newest_hours <= SCAN_ACTIVE_WINDOW_HOURS
+
+    if age_hours is None:
+        parts = ["Son kontenjan görüntüsünün zamanı kayıtlı değil."]
+    else:
+        parts = [f"Son kontenjan görüntüsü {_age_text(age_hours)} önce alındı ({last_snapshot})."]
+    if not is_current_term:
+        parts.append("Bu dönem arşivin şu an taradığı dönem değil; seri bu noktada bitiyor.")
+    elif scan_active is None:
+        parts.append("Taramanın şu an etkin olup olmadığı bilinmiyor.")
+    elif scan_active:
+        parts.append(
+            f"Arşivin son taraması {SCAN_ACTIVE_WINDOW_HOURS} saatten yeni; tarama etkin görünüyor."
+        )
+    else:
+        parts.append(
+            f"Arşivin bilinen son taraması {_age_text(newest_hours or 0.0)} önce; tarama şu an etkin "
+            "görünmüyor (arşiv kayıt ve ekle-bırak haftaları dışında taramayı durdurur)."
+        )
+    parts.append("Sayılar o görüntüdeki durumdur, anlık değildir; güncel kontenjan için OBS'ye bakın.")
+    return {
+        "last_snapshot_age_days": round(age_hours / 24, 1) if age_hours is not None else None,
+        "scan_active": scan_active,
+        "note": " ".join(parts),
+    }
+
+
 def status_summary(status: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     """Shape ``status.json``. Purely descriptive: an old date is not a fault.
 

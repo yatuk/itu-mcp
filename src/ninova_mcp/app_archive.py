@@ -393,16 +393,18 @@ class ArchiveHistoryToolsMixin:
         which is the practical way to judge whether a course fills up; a term
         given next to a course code narrows the answer to that term.
         """
-        from .archive import course_history, fill_summary
+        from .archive import course_history, fill_summary, snapshot_freshness
         from .archive_tools import known_archive_term, term_given
 
         term_slug = known_archive_term(self.archive, term)[0] if term_given(term) else None
         crn = str(crn).strip() if crn is not None and not isinstance(crn, bool) else ""
 
         if crn:
+            # Already read (and cached) to resolve the term: no extra request.
+            index = self.archive.get_index()
+            current = index.get("currentSlug")
             resolved_term = term_slug
             if resolved_term is None:
-                current = self.archive.get_index().get("currentSlug")
                 if not current:
                     raise ItuArchiveError("term çözümlenemedi; term parametresi verin.")
                 resolved_term = known_archive_term(self.archive, current)[0]
@@ -413,14 +415,22 @@ class ArchiveHistoryToolsMixin:
                     f"CRN {crn} {resolved_term} kontenjan kaydında yok. Kontenjan serisi "
                     "yalnızca arşivin canlı izlediği dönemler için var."
                 )
+            freshness = snapshot_freshness(
+                quota.get("last"),
+                scraped_at=index.get("scrapedAt"),
+                is_current_term=resolved_term == str(current or ""),
+            )
             return {
                 "crn": str(crn),
                 "term": resolved_term,
                 "snapshots": quota.get("snapshots"),
                 "first_snapshot": quota.get("first"),
                 "last_snapshot": quota.get("last"),
+                "last_snapshot_age_days": freshness["last_snapshot_age_days"],
+                "archive_scraped_at": index.get("scrapedAt"),
+                "scan_active": freshness["scan_active"],
                 "quota": entry,
-                "note": "Kontenjan günde bir kez tazeleniyor; anlık değil.",
+                "note": freshness["note"],
                 "untrusted_external_content": True,
             }
 
