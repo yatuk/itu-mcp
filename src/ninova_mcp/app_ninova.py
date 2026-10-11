@@ -6,19 +6,30 @@ course reference, walking a file directory and the course URL helpers.
 
 from __future__ import annotations
 
-import hashlib
-import mimetypes
-import os
 import re
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from .assignment_upload import (
+    DRY_RUN_MESSAGE,
+    LocalUpload,
+    UploadPage,
+    choose_upload_slot,
+    find_assignment,
+    multipart_fields,
+    read_upload_once,
+    slot_after_upload,
+    text_reports_success,
+    upload_link_of,
+    upload_preview,
+    upload_result,
+    uploads_disabled,
+)
 from .client import NinovaAuthError, NinovaClient, NinovaError
 from .local_files import LocalFileError, resolve_upload_file
 from .tool_params import publish_include_raw
 from .parsing import (
-    extension_allowed,
     extract_announcement_detail,
     extract_announcements_list,
     extract_attendance,
@@ -59,6 +70,52 @@ def match_upload_slot(*args: Any, **kwargs: Any) -> Any:
     patch effective without changing the body of ``submit_assignment``.
     """
     return server_namespace().match_upload_slot(*args, **kwargs)
+
+
+def _names_a_course_url(reference: str) -> bool:
+    return (
+        "/Sinif/" in reference
+        or reference.startswith("/")
+        or urlparse(reference).scheme.lower() in {"http", "https"}
+    )
+
+
+def _crn_of_course(item: dict[str, Any]) -> str | None:
+    if item.get("crn"):
+        return str(item["crn"])
+    # Course lists cached or stored before the crn field existed.
+    match = re.search(r"\bCRN\s*:?\s*(\d{3,6})\b", str(item.get("context") or ""), re.I)
+    return match.group(1) if match else None
+
+
+def _describe_course(item: dict[str, Any]) -> str:
+    """One candidate of an ambiguous reference, with what tells it apart from the others."""
+    details = [str(item.get("title") or "?")]
+    section = item.get("section")
+    crn = _crn_of_course(item)
+    if section and not (crn and crn in str(section)):
+        details.append(f"section {section}")
+    if crn:
+        details.append(f"CRN {crn}")
+    details.append(item["url"])
+    return f"{item.get('code') or '?'} ({'; '.join(details)})"
+
+
+def _course_label(item: dict[str, Any]) -> str:
+    if item.get("code") and item.get("title"):
+        return f"{item.get('code')} ({item['title']})"
+    return str(item.get("code") or item.get("title") or item["url"])
+
+
+def _available_courses_hint(courses: list[dict[str, Any]]) -> str:
+    available = ", ".join(_course_label(item) for item in courses[:12])
+    return f" Available courses: {available}." if available else " Course list is empty."
+
+
+def _file_inventory_status(errors: list[dict[str, str]], pages: list[dict[str, Any]]) -> str:
+    if not errors:
+        return "complete"
+    return "partial" if pages else "failed"
 
 
 class NinovaCourseToolsMixin:
@@ -383,45 +440,75 @@ class NinovaCourseToolsMixin:
 
         Safety: requires confirm=true. Without it, returns a dry-run preview only.
         Optional NINOVA_ALLOW_UPLOADS=0 disables uploads entirely.
+
+        The steps run in this order and none is skipped: switch, local file,
+        upload page, slot, preview, confirmation, POST. Nothing is requested
+        before the local file is accepted and read, and nothing is posted
+        before the user's answer.
         """
-        if os.getenv("NINOVA_ALLOW_UPLOADS", "1").strip().lower() in {"0", "false", "no", "off"}:
+        if uploads_disabled():
             raise NinovaError(
                 "Assignment uploads are disabled (NINOVA_ALLOW_UPLOADS=0)."
             )
-
-        try:
-            path = resolve_upload_file(file_path, state_dir=self.state_dir)
-        except LocalFileError as exc:
-            raise NinovaError(str(exc)) from exc
-        if not path.is_file():
-            raise NinovaError(f"File not found: {path}")
-        size = path.stat().st_size
-        if size <= 0:
-            raise NinovaError(f"File is empty: {path}")
-        if size > MAX_UPLOAD_BYTES:
-            raise NinovaError(
-                f"File too large ({size} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
-            )
-        # Read once, here. The size and hash shown to the user and the bytes
-        # that are sent all come from this one read, so a file that changes on
-        # disk after the user approved cannot change what is uploaded.
-        with path.open("rb") as handle:
-            file_bytes = handle.read(MAX_UPLOAD_BYTES + 1)
-        size = len(file_bytes)
-        if size <= 0:
-            raise NinovaError(f"File is empty: {path}")
-        if size > MAX_UPLOAD_BYTES:
-            raise NinovaError(
-                f"File too large (more than {MAX_UPLOAD_BYTES} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
-            )
-        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        upload = self._read_local_upload(file_path)
 
         resolved_upload = self._resolve_assignment_upload_url(
             course=course,
             assignment=assignment,
             upload_url=upload_url,
         )
-        html, response = self.client.get_html(resolved_upload["upload_url"])
+        page = self._open_upload_page(resolved_upload["upload_url"])
+        slot = choose_upload_slot(
+            page.form,
+            upload.path.name,
+            slot_index=slot_index,
+            slot_description=slot_description,
+            allow_replace=allow_replace,
+            match_slot=match_upload_slot,
+        )
+
+        preview = upload_preview(resolved_upload, page, slot, upload, dry_run=not confirm)
+        if not confirm:
+            preview["message"] = DRY_RUN_MESSAGE
+            return preview
+
+        # Last gate before the upload: the user answers in the client itself.
+        # confirm=true from the model does not skip this.
+        from .interaction import confirm_write, public_confirmation, upload_confirmation_message
+
+        confirmation = confirm_write(upload_confirmation_message(
+            resolved_upload.get("course"), resolved_upload.get("assignment"), page.url,
+            slot, upload.path.name, str(upload.path), upload.size,
+            post_url=page.post_url, sha256_hex=upload.sha256,
+        ))
+        if confirmation is not None and confirmation["proceed"] is not True:
+            return {
+                **preview,
+                "dry_run": False,
+                "ok": False,
+                "uploaded": False,
+                "status": confirmation["status"],
+                "message": confirmation["note"],
+                "confirmation": public_confirmation(confirmation),
+            }
+
+        post_response, result_html = self._post_upload(page, slot, upload)
+        return {
+            **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
+            **self._read_upload_outcome(post_response, result_html, slot, preview),
+        }
+
+    def _read_local_upload(self, file_path: str) -> LocalUpload:
+        """Accept the local path, then read the file once. No request is made here."""
+        try:
+            path = resolve_upload_file(file_path, state_dir=self.state_dir)
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
+        return read_upload_once(path, MAX_UPLOAD_BYTES)
+
+    def _open_upload_page(self, upload_url: str) -> UploadPage:
+        """Read the upload page and pin it and its form's target to the same assignment."""
+        html, response = self.client.get_html(upload_url)
         page_ids = self._require_upload_page_url(response.url, "The upload page")
         form = extract_assignment_upload_form(html, response.url, base_url=self.client.base_url)
         if not form.get("ok"):
@@ -436,146 +523,38 @@ class NinovaCourseToolsMixin:
                 "The upload form's target belongs to a different assignment than the upload page. "
                 "Nothing was sent."
             )
+        return UploadPage(response.url, form, post_url)
 
-        try:
-            slot = match_upload_slot(
-                form.get("slots") or [],
-                slot_index=slot_index,
-                slot_description=slot_description,
-            )
-        except ValueError as exc:
-            raise NinovaError(str(exc)) from exc
-
-        if not slot.get("field_name"):
-            raise NinovaError(
-                f"Slot {slot.get('index')} has no file input field "
-                f"({slot.get('description')})."
-            )
-
-        if slot.get("uploaded") and not allow_replace:
-            raise NinovaError(
-                f"Slot {slot.get('index')} ({slot.get('description')}) already has an "
-                "uploaded file. Pass allow_replace=true to overwrite, or pick another slot."
-            )
-
-        if not extension_allowed(path.name, slot.get("allowed_extensions") or []):
-            raise NinovaError(
-                f"File extension of {path.name!r} is not allowed for this slot. "
-                f"Allowed: {slot.get('extensions') or 'any'}"
-            )
-
-        preview = {
-            "dry_run": not confirm,
-            "course": resolved_upload.get("course"),
-            "assignment": resolved_upload.get("assignment"),
-            "upload_url": response.url,
-            "form_url": post_url,
-            "submit_label": form.get("submit_label"),
-            "slot": {
-                "index": slot.get("index"),
-                "description": slot.get("description"),
-                "extensions": slot.get("extensions"),
-                "field_name": slot.get("field_name"),
-                "already_uploaded": slot.get("uploaded"),
-            },
-            "file": {
-                "path": str(path),
-                "name": path.name,
-                "size_bytes": size,
-                "sha256": file_sha256,
-            },
-        }
-
-        if not confirm:
-            preview["message"] = (
-                "Dry run only. Re-call submit_assignment with the same arguments "
-                "and confirm=true to actually upload this file to Ninova."
-            )
-            return preview
-
-        # Last gate before the upload: the user answers in the client itself.
-        # confirm=true from the model does not skip this.
-        from .interaction import confirm_write, public_confirmation, upload_confirmation_message
-
-        confirmation = confirm_write(upload_confirmation_message(
-            resolved_upload.get("course"), resolved_upload.get("assignment"), response.url,
-            slot, path.name, str(path), size,
-            post_url=post_url, sha256_hex=file_sha256,
-        ))
-        if confirmation is not None and confirmation["proceed"] is not True:
-            return {
-                **preview,
-                "dry_run": False,
-                "ok": False,
-                "uploaded": False,
-                "status": confirmation["status"],
-                "message": confirmation["note"],
-                "confirmation": public_confirmation(confirmation),
-            }
-
-        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        data = dict(form.get("hidden_fields") or {})
-        data["__EVENTTARGET"] = form["submit_event_target"]
-        data["__EVENTARGUMENT"] = data.get("__EVENTARGUMENT", "")
-        files = [
-            (
-                slot["field_name"],
-                (path.name, file_bytes, content_type),
-            )
-        ]
-
+    def _post_upload(self, page: UploadPage, slot: dict[str, Any], upload: LocalUpload) -> tuple[Any, str]:
+        """Post the bytes that were read to the checked form target; return the response and its HTML."""
+        data, files = multipart_fields(page.form, slot, upload)
         post_response = self.client.post_multipart(
-            post_url,
+            page.post_url,
             data=data,
             files=files,
-            referer=response.url,
+            referer=page.url,
         )
         result_html = self.client._decode_response(post_response)
         if self.client._looks_like_login_page(post_response, html=result_html):
             raise NinovaAuthError("Session expired during assignment upload.")
+        return post_response, result_html
 
+    def _read_upload_outcome(
+        self, post_response: Any, result_html: str, slot: dict[str, Any], preview: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report what the page answering the POST shows for the chosen slot."""
         after = extract_assignment_upload_form(
             result_html,
             post_response.url,
             base_url=self.client.base_url,
         )
-        after_slots = after.get("slots") or []
-        after_slot = next(
-            (item for item in after_slots if item.get("index") == slot.get("index")),
-            None,
-        )
+        after_slot = slot_after_upload(after, slot)
         success = bool(after_slot and after_slot.get("uploaded"))
         if not success:
             # Fallback: compare status text / page markers.
-            body = normalize_lookup_text(parse_html_page(post_response.url, result_html, self.client.base_url).get("text_excerpt") or "")
-            if any(token in body for token in ("yuklediniz", "gonderdiniz", "basari", "success")):
-                success = True
-
-        return {
-            **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
-            "dry_run": False,
-            "ok": success,
-            "message": (
-                "Upload appears successful."
-                if success
-                else "Upload POST completed but the slot still looks empty; check Ninova in a browser."
-            ),
-            "course": resolved_upload.get("course"),
-            "assignment": resolved_upload.get("assignment"),
-            "upload_url": response.url,
-            "response_url": post_response.url,
-            "slot_before": preview["slot"],
-            "slot_after": {
-                "index": after_slot.get("index") if after_slot else slot.get("index"),
-                "description": (after_slot or slot).get("description"),
-                "uploaded": after_slot.get("uploaded") if after_slot else None,
-                "file_name": after_slot.get("file_name") if after_slot else None,
-                "status_text": after_slot.get("status_text") if after_slot else None,
-            },
-            "file": preview["file"],
-            "requested_file_count": after.get("requested_file_count"),
-            "uploaded_file_count": after.get("uploaded_file_count"),
-        }
+            page = parse_html_page(post_response.url, result_html, self.client.base_url)
+            success = text_reports_success(page.get("text_excerpt"))
+        return upload_result(preview, slot, after, after_slot, success=success, response_url=post_response.url)
 
     def _resolve_assignment_upload_url(
         self,
@@ -585,16 +564,7 @@ class NinovaCourseToolsMixin:
         upload_url: str | None,
     ) -> dict[str, Any]:
         if upload_url:
-            normalized = self.client.ninova_url(upload_url)
-            if ASSIGNMENT_DETAIL_PATH_RE.match(urlparse(normalized).path):
-                # Detail URL like .../Odev/123 -> .../Odev/123/OdevGonder is common.
-                normalized = normalized.split("?", 1)[0].split("#", 1)[0].rstrip("/") + "/OdevGonder"
-            self._require_upload_page_url(normalized, "upload_url")
-            return {
-                "upload_url": normalized,
-                "course": None,
-                "assignment": {"url": normalized, "title": None},
-            }
+            return self._upload_target_at_url(upload_url)
 
         if not course or not assignment:
             raise NinovaError(
@@ -610,44 +580,27 @@ class NinovaCourseToolsMixin:
             limit=200,
             include_details=True,
         )
-        items = payload.get("assignments") or []
-        target = normalize_lookup_text(assignment)
-        matches: list[dict[str, Any]] = []
-        for item in items:
-            candidates = {
-                normalize_lookup_text(item.get("title")),
-                normalize_lookup_text(item.get("url")),
-            }
-            if target in candidates or any(target and target in value for value in candidates if value):
-                matches.append(item)
-
-        if not matches:
-            titles = ", ".join(item.get("title") or "?" for item in items[:12])
-            raise NinovaError(f"Assignment not found: {assignment}. Available: {titles}")
-        if len(matches) > 1:
-            # Prefer exact title match.
-            exact = [item for item in matches if normalize_lookup_text(item.get("title")) == target]
-            if len(exact) == 1:
-                matches = exact
-            else:
-                options = ", ".join(item.get("title") or item.get("url") or "?" for item in matches[:8])
-                raise NinovaError(f"Ambiguous assignment {assignment!r}. Matches: {options}")
-
-        chosen = matches[0]
-        resolved_upload = chosen.get("upload_url")
-        if not resolved_upload and chosen.get("url"):
-            resolved_upload = chosen["url"].rstrip("/") + "/OdevGonder"
-        if not resolved_upload:
-            raise NinovaError(
-                f"Assignment {chosen.get('title')!r} has no upload URL "
-                "(deadline may be closed or upload not enabled)."
-            )
+        chosen = find_assignment(payload.get("assignments") or [], assignment)
+        resolved_upload = upload_link_of(chosen)
         # This link was read from a Ninova page, so it is checked like any other.
         self._require_upload_page_url(resolved_upload, "The assignment's upload link")
         return {
             "upload_url": resolved_upload,
             "course": resolved_course,
             "assignment": chosen,
+        }
+
+    def _upload_target_at_url(self, upload_url: str) -> dict[str, Any]:
+        """The upload target a caller named by URL; an assignment's own URL stands for its upload page."""
+        normalized = self.client.ninova_url(upload_url)
+        if ASSIGNMENT_DETAIL_PATH_RE.match(urlparse(normalized).path):
+            # Detail URL like .../Odev/123 -> .../Odev/123/OdevGonder is common.
+            normalized = normalized.split("?", 1)[0].split("#", 1)[0].rstrip("/") + "/OdevGonder"
+        self._require_upload_page_url(normalized, "upload_url")
+        return {
+            "upload_url": normalized,
+            "course": None,
+            "assignment": {"url": normalized, "title": None},
         }
 
     def _require_upload_page_url(self, url: str, what: str) -> tuple[str, str]:
@@ -683,54 +636,23 @@ class NinovaCourseToolsMixin:
             raise NinovaError("course must be a non-empty string.")
 
         courses = self.list_courses()["courses"]
-
-        if "/Sinif/" in course or course.startswith("/") or urlparse(course).scheme.lower() in {"http", "https"}:
-            normalized = normalize_url(course, self.client.base_url)
-            root_path = self._extract_course_root_path(normalized)
-            root_url = f"{self.client.base_url}{root_path}"
-            for item in courses:
-                if item["url"] == root_url:
-                    return item
-            return {"code": None, "title": None, "url": root_url, "context": course}
+        if _names_a_course_url(course):
+            return self._course_at_url(course, courses)
 
         from .course_matching import EXACT_TIERS, match_courses
-
-        def crn_of_course(item: dict[str, Any]) -> str | None:
-            if item.get("crn"):
-                return str(item["crn"])
-            # Course lists cached or stored before the crn field existed.
-            match = re.search(r"\bCRN\s*:?\s*(\d{3,6})\b", str(item.get("context") or ""), re.I)
-            return match.group(1) if match else None
-
-        def describe(item: dict[str, Any]) -> str:
-            details = [str(item.get("title") or "?")]
-            section = item.get("section")
-            crn = crn_of_course(item)
-            if section and not (crn and crn in str(section)):
-                details.append(f"section {section}")
-            if crn:
-                details.append(f"CRN {crn}")
-            details.append(item["url"])
-            return f"{item.get('code') or '?'} ({'; '.join(details)})"
 
         tier, found = match_courses(
             course,
             courses,
             codes=lambda item: (item.get("code"), item.get("title")),
             names=lambda item: (item.get("title"),),
-            crn=crn_of_course,
+            crn=_crn_of_course,
             partial_text=lambda item: (item.get("code"), item.get("title"), item.get("context"), item.get("section")),
         )
         if not found:
-            available = ", ".join(
-                f"{item.get('code')} ({item['title']})" if item.get("code") and item.get("title")
-                else str(item.get("code") or item.get("title") or item["url"])
-                for item in courses[:12]
-            )
-            hint = f" Available courses: {available}." if available else " Course list is empty."
-            raise NinovaError(f"Course not found: {course}.{hint}")
+            raise NinovaError(f"Course not found: {course}.{_available_courses_hint(courses)}")
         if len(found) > 1:
-            options = "; ".join(describe(item) for item in found[:8])
+            options = "; ".join(_describe_course(item) for item in found[:8])
             raise NinovaError(
                 f"Ambiguous course reference: {course}. Matches: {options}. "
                 "Pass the URL of the one you mean."
@@ -739,6 +661,16 @@ class NinovaCourseToolsMixin:
             return found[0]
         # A tolerant match is never silent: the caller sees what was matched and how.
         return {**found[0], "matched_by": tier, "requested": course}
+
+    def _course_at_url(self, course_url: str, courses: list[dict[str, Any]]) -> dict[str, Any]:
+        """The listed course at a course URL, or a bare record for a course that is not listed."""
+        normalized = normalize_url(course_url, self.client.base_url)
+        root_path = self._extract_course_root_path(normalized)
+        root_url = f"{self.client.base_url}{root_path}"
+        for item in courses:
+            if item["url"] == root_url:
+                return item
+        return {"code": None, "title": None, "url": root_url, "context": course_url}
 
     def _empty_list_warning(self, html: str, page_url: str, *, scope: str) -> str | None:
         """Return a diagnostic when a list page parsed to zero items but holds items.
@@ -846,11 +778,7 @@ class NinovaCourseToolsMixin:
             visited.add(normalized)
 
             try:
-                html, response = self.client.get_html(current_url)
-                listing = extract_file_directory(
-                    html, response.url, base_url=self.client.base_url, current_path=current_path,
-                )
-                observation = scope_coverage(html, response.url, current_url, "class_files", listing)
+                response_url, listing, observation = self._read_directory_page(current_url, current_path)
             except Exception as exc:
                 errors.append({"path": current_url, "error": str(exc)})
                 continue
@@ -858,24 +786,26 @@ class NinovaCourseToolsMixin:
                 errors.append({"path": current_url, "error": observation.get("reason") or observation["status"]})
             pages.append(
                 {
-                    "url": response.url,
+                    "url": response_url,
                     "current_path": current_path,
                     "entry_count": len(listing["entries"]),
                     "coverage": observation,
                 }
             )
 
-            for entry in listing["entries"]:
-                entries.append(entry)
-                if recursive and entry["entry_type"] == "folder" and depth < max_depth:
-                    queue.append((entry["url"], depth + 1, entry["path"]))
-                elif entry["entry_type"] == "folder" and self._strip_fragment(entry["url"]) not in visited:
-                    unvisited_folders.append(entry["url"])
+            entries.extend(listing["entries"])
+            folders = [entry for entry in listing["entries"] if entry["entry_type"] == "folder"]
+            if recursive and depth < max_depth:
+                queue.extend((folder["url"], depth + 1, folder["path"]) for folder in folders)
+            else:
+                unvisited_folders.extend(
+                    folder["url"] for folder in folders if self._strip_fragment(folder["url"]) not in visited
+                )
 
         if unvisited_folders:
             errors.append({"path": start_url, "error": "file_depth_or_recursion_limit"})
         observation = coverage(
-            "partial" if errors and pages else "failed" if errors else "complete",
+            _file_inventory_status(errors, pages),
             "incomplete_file_inventory" if errors else None,
             max_depth=max_depth, recursive=recursive, unvisited_folder_count=len(unvisited_folders),
         )
@@ -891,6 +821,15 @@ class NinovaCourseToolsMixin:
             "coverage": observation,
             "errors": errors,
         }
+
+    def _read_directory_page(self, url: str, current_path: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Read one directory page: where it ended up, its listing and how completely it was read."""
+        html, response = self.client.get_html(url)
+        listing = extract_file_directory(
+            html, response.url, base_url=self.client.base_url, current_path=current_path,
+        )
+        observation = scope_coverage(html, response.url, url, "class_files", listing)
+        return response.url, listing, observation
 
     def _extract_course_root_path(self, url: str) -> str:
         parsed = urlparse(url)
