@@ -20,6 +20,7 @@ from .remote_security import (
     build_rate_limiter_from_env,
     configured_api_key,
 )
+from .toolsets import filter_tool_names
 from .server import (
     MAIL_TOOL_NAMES,
     OBS_REGISTRATION_WRITE_TOOL_NAMES,
@@ -60,6 +61,9 @@ def _selected_remote_tool_names() -> list[str]:
             or name not in OBS_REGISTRATION_WRITE_TOOL_NAMES
         )
     ]
+    # Toolset selection only narrows the list; with both variables unset it
+    # returns the list unchanged. The rules above and below still apply.
+    available = filter_tool_names(available)
     configured = _split_csv_env("NINOVA_REMOTE_ALLOWED_TOOLS")
     if not configured:
         return available

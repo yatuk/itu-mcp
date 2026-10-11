@@ -20,6 +20,7 @@ from .cache import TtlCache, parse_ttl_seconds
 from .client import NinovaAuthError, NinovaClient, NinovaError
 from .compact import maybe_compact
 from .env import load_ninova_env
+from . import toolsets as _toolsets
 from .archive_client import ItuArchiveClient, ItuArchiveError
 from .archive_tools import ARCHIVE_DATASET_TOOLS, ArchiveDatasetToolsMixin
 from .community_data import CrossCheckDataClient, CrossCheckDataError
@@ -5769,7 +5770,7 @@ def build_stdio_server(app: NinovaMcpApp | None = None) -> Any:
     app = app or NinovaMcpApp()
     mcp = FastMCP(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     apply_server_version(mcp)
-    register_tools(mcp, app, LOCAL_TOOL_NAMES)
+    register_tools(mcp, app, _toolsets.local_tool_names(LOCAL_TOOL_NAMES))
     register_prompts(mcp)
     register_resources(mcp)
     return mcp
@@ -5801,6 +5802,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Print registered local tool names and exit.",
     )
     parser.add_argument(
+        "--list-toolsets",
+        action="store_true",
+        help="Print tool groups with tool counts and on/off state, and exit.",
+    )
+    parser.add_argument(
         "--list-prompts",
         action="store_true",
         help="Print registered prompt names and exit.",
@@ -5818,8 +5824,16 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    if args.list_tools:
-        for name in LOCAL_TOOL_NAMES:
+    if args.list_tools or args.list_toolsets:
+        try:
+            lines = (
+                _toolsets.describe_toolsets(LOCAL_TOOL_NAMES)
+                if args.list_toolsets
+                else _toolsets.local_tool_names(LOCAL_TOOL_NAMES)
+            )
+        except _toolsets.ToolsetError as exc:
+            parser.exit(2, f"error: {exc}\n")
+        for name in lines:
             print(name)
         return
 
@@ -5838,7 +5852,11 @@ def main(argv: list[str] | None = None) -> None:
         print(pretty_json(status))
         raise SystemExit(0 if status.get("authenticated") else 1)
 
-    build_stdio_server().run()
+    try:
+        server = build_stdio_server()
+    except _toolsets.ToolsetError as exc:
+        parser.exit(2, f"error: {exc}\n")
+    server.run()
 
 
 if __name__ == "__main__":
