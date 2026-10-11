@@ -202,10 +202,23 @@ class CreditDecision:
     ``several_reproduce``. ``decided`` has one entry per row, in order: the
     position of the credit the official average fixes among the row's
     candidates, or ``None`` where it fixes none.
+
+    ``surviving`` holds the combinations the official average leaves possible,
+    each one a candidate position per row, in order: the combinations that
+    reproduce it. It is ``None`` when the average rules nothing out (there is
+    none, the term cannot be compared, or no combination reproduces it), so
+    every combination remains; ``combinations`` spells that case out.
     """
 
     reason: str
     decided: tuple[int | None, ...]
+    surviving: tuple[tuple[int, ...], ...] | None = None
+
+    def combinations(self, open_rows: list[tuple[tuple[float, ...], float]]) -> tuple[tuple[int, ...], ...]:
+        """The combinations that remain possible for ``open_rows``, as candidate positions."""
+        if self.surviving is not None:
+            return self.surviving
+        return tuple(itertools.product(*(range(len(candidates)) for candidates, _ in open_rows)))
 
 
 def decide_credits(
@@ -251,7 +264,8 @@ def decide_credits(
     if not reproducing:
         return CreditDecision("none_reproduces", undecided)
     decided = tuple(picks[0] if len(set(picks)) == 1 else None for picks in zip(*reproducing, strict=True))
-    return CreditDecision("one_reproduces" if len(reproducing) == 1 else "several_reproduce", decided)
+    return CreditDecision(
+        "one_reproduces" if len(reproducing) == 1 else "several_reproduce", decided, tuple(reproducing))
 
 
 # --- What-if keys -------------------------------------------------------------

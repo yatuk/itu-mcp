@@ -643,8 +643,11 @@ class ProgramTypeAndDepartmentTests(unittest.TestCase):
     def test_unknown_program_type(self) -> None:
         with self.assertRaises(ObsError) as caught:
             ObsPublicClient._normalize_program_type("Doktora")
-        self.assertEqual(str(caught.exception), "Geçersiz program tipi: 'Doktora'. Geçerli değerler: LS, LU, LUİ, ÖL "
-                                                "(veya 'Lisans', 'Lisansüstü', 'Önlisans').")
+        self.assertEqual(str(caught.exception), (
+            "Geçersiz program tipi: 'Doktora'. Kabul edilen değerler: LS (ls, lisans); "
+            "LU (lu, lisansüstü, lisansustu, yüksek lisans, yuksek lisans); ÖL (öl, önlisans, onlisans); "
+            "LUİ (lui, luİ, lisansüstü 2, lisansustu 2, lisansüstü 2.öğretim). "
+            "Büyük/küçük harf ve Türkçe karakter farkı önemsizdir."))
 
     def test_department_list_is_mapped_and_cached_per_program_type(self) -> None:
         client, _ = public()
