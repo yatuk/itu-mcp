@@ -1,16 +1,33 @@
-"""API key auth and simple rate limiting for the remote HTTP transport."""
+"""API key auth, rate limiting and path rules for the remote HTTP transport.
+
+The middleware is default deny: the two status endpoints are the only public
+routes, matched exactly on method and path. Every other request, whatever its
+path, is rate limited and must carry the API key when one is configured.
+"""
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import secrets
 import time
 from collections import defaultdict, deque
-from typing import Callable
+from typing import Any, Iterable
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
+from starlette.websockets import WebSocketClose
+
+# The only routes served without the API key, and only for these methods.
+PUBLIC_STATUS_PATHS = frozenset({"/", "/healthz"})
+PUBLIC_STATUS_METHODS = frozenset({"GET", "HEAD"})
+
+_MOUNT_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
+
+
+class RemoteConfigError(RuntimeError):
+    """The remote server's configuration is unsafe or invalid; do not start."""
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -25,31 +42,58 @@ def configured_api_key() -> str | None:
     return key or None
 
 
-def api_key_required() -> bool:
-    """If a key is configured, MCP endpoints require it.
+def validate_mcp_mount_path(value: str | None, default: str = "/mcp") -> str:
+    """Return the path the MCP app is mounted at, or refuse an unsafe one.
 
-    Set NINOVA_REMOTE_REQUIRE_API_KEY=1 to refuse starting without a key
-    (enforced by remote.main / build_app callers if desired).
+    ``None`` (variable unset) means the default. A value that is set but
+    empty, the root path, a path that collides with a status route, or a path
+    that the router and the security check could read differently is refused:
+    the MCP app must never share a path with a public route.
     """
-    return configured_api_key() is not None
+    if value is None:
+        return default
+    path = value.strip()
+    if not path or not path.strip("/"):
+        raise RemoteConfigError(
+            "NINOVA_REMOTE_MCP_PATH must not be empty or '/': the MCP endpoint "
+            "would share the path of the public status route. Unset it to use "
+            f"{default}, or set it to a path such as /mcp-<long-random-text>."
+        )
+    if not path.startswith("/"):
+        path = "/" + path
+    path = path.rstrip("/")
+    segments = path[1:].split("/")
+    if any(
+        not _MOUNT_SEGMENT.fullmatch(segment) or set(segment) == {"."}
+        for segment in segments
+    ):
+        raise RemoteConfigError(
+            "NINOVA_REMOTE_MCP_PATH may only contain letters, digits and . _ ~ - "
+            "in segments separated by single slashes (no '//', '..', '%', spaces "
+            f"or braces). Got: {value!r}"
+        )
+    first = "/" + segments[0].casefold()
+    if first in PUBLIC_STATUS_PATHS:
+        raise RemoteConfigError(
+            f"NINOVA_REMOTE_MCP_PATH must not be {first} or a path under it: "
+            "that is a public status route. Set it to a path such as "
+            "/mcp-<long-random-text>."
+        )
+    return path
 
 
 def extract_api_key(request: Request) -> str | None:
-    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    auth = request.headers.get("authorization")
     if auth:
         parts = auth.split(None, 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
-            return parts[1].strip()
+            return parts[1].strip() or None
         # Some clients send raw token.
         if len(parts) == 1:
-            return parts[0].strip()
-    header_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+            return parts[0].strip() or None
+    header_key = request.headers.get("x-api-key")
     if header_key:
-        return header_key.strip()
-    # Bearer token (Authorization header)
-    auth = request.headers.get("Authorization") or ""
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() or None
+        return header_key.strip() or None
     return None
 
 
@@ -58,14 +102,14 @@ def api_key_matches(provided: str | None, expected: str | None) -> bool:
         return True
     if not provided:
         return False
-    return secrets.compare_digest(provided, expected)
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 class RateLimiter:
     """In-memory sliding-window rate limiter (single process)."""
 
     # A key just touched by allow() always ends up with a fresh, non-empty
-    # bucket, so per-key self-cleanup can't catch keys that go quiet — only a
+    # bucket, so per-key self-cleanup cannot catch keys that go quiet. Only a
     # periodic sweep across all keys can. Amortized by running it every N
     # calls rather than on every one.
     _PRUNE_EVERY = 128
@@ -100,11 +144,9 @@ class RateLimiter:
     def prune_empty(self) -> None:
         """Drop dict entries for clients whose bucket has fully expired.
 
-        Every distinct client key (IP, or a forwarded-for value) that ever
-        calls ``allow`` creates a dict entry that would otherwise never be
-        removed, even long after that client stops connecting — trivially
-        amplified by an unvalidated spoofed forwarded-for header (see
-        ``_client_key``).
+        Every distinct client key that ever calls ``allow`` creates a dict
+        entry that would otherwise never be removed, even long after that
+        client stops connecting.
         """
         now = time.monotonic()
         window_start = now - self.window_seconds
@@ -120,83 +162,138 @@ class RateLimiter:
 def build_rate_limiter_from_env() -> RateLimiter | None:
     if _env_flag("NINOVA_REMOTE_DISABLE_RATE_LIMIT", default=False):
         return None
-    max_requests = int(os.getenv("NINOVA_REMOTE_RATE_LIMIT", "60"))
-    window = float(os.getenv("NINOVA_REMOTE_RATE_WINDOW_SECONDS", "60"))
+    try:
+        max_requests = int(os.getenv("NINOVA_REMOTE_RATE_LIMIT", "60"))
+        window = float(os.getenv("NINOVA_REMOTE_RATE_WINDOW_SECONDS", "60"))
+    except ValueError as exc:
+        raise RemoteConfigError(
+            "NINOVA_REMOTE_RATE_LIMIT and NINOVA_REMOTE_RATE_WINDOW_SECONDS "
+            "must be numbers."
+        ) from exc
     if max_requests <= 0:
         return None
     return RateLimiter(max_requests=max_requests, window_seconds=window)
 
 
-class RemoteSecurityMiddleware(BaseHTTPMiddleware):
-    """Protect MCP mount path with optional API key + rate limit.
+def trusted_proxy_hops_from_env() -> int:
+    """How many trusted proxies sit in front of the server.
 
-    Public by default:
-    - GET /
-    - GET /healthz
+    0 when proxy headers are not trusted. Otherwise
+    NINOVA_REMOTE_TRUSTED_PROXY_HOPS, default 1.
+    """
+    if not _env_flag("NINOVA_REMOTE_TRUST_PROXY_HEADERS", default=False):
+        return 0
+    raw = (os.getenv("NINOVA_REMOTE_TRUSTED_PROXY_HOPS") or "1").strip()
+    try:
+        hops = int(raw)
+    except ValueError:
+        hops = 0
+    if hops < 1:
+        raise RemoteConfigError(
+            "NINOVA_REMOTE_TRUSTED_PROXY_HOPS must be a whole number of 1 or "
+            f"more (the number of trusted proxies in front of the server). Got: {raw!r}"
+        )
+    return hops
 
-    Everything else under the MCP path (and optionally all non-public routes)
-    requires the API key when NINOVA_REMOTE_API_KEY is set.
+
+def _parse_ip(value: str) -> str | None:
+    text = value.strip()
+    if text.startswith("["):  # [v6] or [v6]:port
+        text = text[1:].split("]", 1)[0]
+    elif text.count(":") == 1:  # v4:port
+        text = text.split(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return None
+
+
+def client_address(
+    peer: str | None,
+    forwarded_for: Iterable[str],
+    *,
+    trusted_hops: int,
+) -> str:
+    """The address rate limiting is keyed on.
+
+    Each proxy appends the address it received the request from to
+    ``X-Forwarded-For``, so only the rightmost ``trusted_hops`` entries were
+    written by proxies the operator trusts; everything further left is
+    whatever the client chose to send. With one trusted proxy the client is
+    the last entry, with two it is the second from last. If the header is
+    missing, too short or the entry is not an IP address, the socket peer is
+    used instead.
+    """
+    fallback = peer or "unknown"
+    if trusted_hops < 1:
+        return fallback
+    entries = [part for value in forwarded_for for part in value.split(",")]
+    if len(entries) < trusted_hops:
+        return fallback
+    return _parse_ip(entries[-trusted_hops]) or fallback
+
+
+class RemoteSecurityMiddleware:
+    """Default-deny gate in front of the whole remote app.
+
+    Public: ``GET``/``HEAD`` on exactly ``/`` and ``/healthz``. They need no
+    key and use their own rate-limit bucket, so status probes and MCP traffic
+    do not eat each other's budget.
+
+    Everything else is rate limited and needs the API key when one is
+    configured. The decision is made on ``scope["path"]``, the same decoded
+    string the router matches on, and it is compared exactly: no variant of a
+    path (other case, doubled or trailing slash, percent-encoding) is ever
+    normalised into a public route, so no variant can be public here and
+    still be routed to the MCP app.
     """
 
     def __init__(
         self,
-        app,
+        app: Any,
         *,
-        mcp_mount_path: str,
         api_key: str | None,
         rate_limiter: RateLimiter | None,
-        protect_all: bool = False,
+        status_rate_limiter: RateLimiter | None = None,
+        trusted_proxy_hops: int = 0,
     ) -> None:
-        super().__init__(app)
-        self.mcp_mount_path = mcp_mount_path.rstrip("/") or "/mcp"
+        self.app = app
         self.api_key = api_key
         self.rate_limiter = rate_limiter
-        self.protect_all = protect_all
-        self.public_paths = {"/", "/healthz"}
+        self.status_rate_limiter = status_rate_limiter
+        self.trusted_proxy_hops = trusted_proxy_hops
+
+    @staticmethod
+    def is_public(method: str, path: str) -> bool:
+        return method in PUBLIC_STATUS_METHODS and path in PUBLIC_STATUS_PATHS
 
     def _client_key(self, request: Request) -> str:
-        # X-Forwarded-For is caller-supplied and unverifiable unless the
-        # server actually sits behind a proxy that sets it — trusting it by
-        # default lets a client rotate the header to bypass rate limiting
-        # entirely, and inflates the limiter's key space without bound.
-        if _env_flag("NINOVA_REMOTE_TRUST_PROXY_HEADERS", default=False):
-            forwarded = request.headers.get("x-forwarded-for")
-            if forwarded:
-                return forwarded.split(",", 1)[0].strip()
-        if request.client:
-            return request.client.host or "unknown"
-        return "unknown"
+        peer = request.client.host if request.client else None
+        # X-Forwarded-For is caller-supplied unless a proxy we trust wrote
+        # it, so with no trusted hops it is not read at all.
+        return client_address(
+            peer,
+            request.headers.getlist("x-forwarded-for"),
+            trusted_hops=self.trusted_proxy_hops,
+        )
 
-    def _is_mcp_path(self, path: str) -> bool:
-        base = self.mcp_mount_path
-        return path == base or path.startswith(base + "/")
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # No WebSocket route exists; refuse instead of passing it on.
+            await WebSocketClose(code=1008)(scope, receive, send)
+            return
 
-    def _needs_api_key(self, path: str) -> bool:
-        if not self.api_key:
-            return False
-        if path in self.public_paths:
-            return False
-        if self.protect_all:
-            return True
-        return self._is_mcp_path(path)
+        request = Request(scope)
+        public = self.is_public(scope.get("method", ""), scope.get("path", ""))
+        limiter = self.status_rate_limiter if public else self.rate_limiter
 
-    def _needs_rate_limit(self, path: str) -> bool:
-        if self.rate_limiter is None:
-            return False
-        if path in self.public_paths:
-            return False
-        return self._is_mcp_path(path) or self.protect_all
-
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        path = request.url.path
-
-        if self._needs_rate_limit(path):
-            limiter = self.rate_limiter
-            if limiter is None:  # defensive: settings may change between checks
-                return await call_next(request)
+        if limiter is not None:
             allowed, retry_after = limiter.allow(self._client_key(request))
             if not allowed:
-                return JSONResponse(
+                response = JSONResponse(
                     {
                         "error": "rate_limit_exceeded",
                         "message": "Too many requests. Slow down and retry.",
@@ -205,11 +302,12 @@ class RemoteSecurityMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                     headers={"Retry-After": str(retry_after)},
                 )
+                await response(scope, receive, send)
+                return
 
-        if self._needs_api_key(path):
-            provided = extract_api_key(request)
-            if not api_key_matches(provided, self.api_key):
-                return JSONResponse(
+        if not public and self.api_key:
+            if not api_key_matches(extract_api_key(request), self.api_key):
+                response = JSONResponse(
                     {
                         "error": "unauthorized",
                         "message": (
@@ -221,5 +319,7 @@ class RemoteSecurityMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+                await response(scope, receive, send)
+                return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)

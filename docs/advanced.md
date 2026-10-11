@@ -137,64 +137,153 @@ PYTHONPATH=src python3 -m ninova_mcp
 ## Remote HTTP server (ChatGPT / Claude.ai custom connectors)
 
 ChatGPT (Developer Mode) and Claude.ai custom connectors cannot use a local stdio
-server — they need a publicly reachable **Streamable HTTP** endpoint. Run it only on
-infrastructure you control:
+server. They need a publicly reachable **Streamable HTTP** endpoint. Whoever can call
+that endpoint can read the student's grades, schedule, profile and tickets, so run it
+only on infrastructure you control:
 
 ```bash
 export NINOVA_USERNAME="your_username"
 export NINOVA_PASSWORD="your_password"
-export NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-secret"
-export NINOVA_REMOTE_HOST="127.0.0.1"                # default; expose only behind a trusted proxy
-export NINOVA_REMOTE_API_KEY="$(openssl rand -hex 32)"   # recommended
-export NINOVA_REMOTE_REQUIRE_API_KEY="1"                 # refuse start without key
-export NINOVA_REMOTE_RATE_LIMIT="60"                     # max MCP requests / window
-export NINOVA_REMOTE_RATE_WINDOW_SECONDS="60"
-export NINOVA_REMOTE_ENABLE_MAIL="0"                   # explicit opt-in for mail tools
-export NINOVA_REMOTE_ALLOWED_TOOLS=""                  # optional comma-separated allowlist
-export NINOVA_REMOTE_TRUST_PROXY_HEADERS="1"             # only if genuinely behind a proxy
+export NINOVA_REMOTE_API_KEY="$(openssl rand -hex 32)"   # required unless the bind is loopback
 export NINOVA_PUBLIC_BASE_URL="https://itu-mcp.example.com"
-export NINOVA_ALLOWED_HOSTS="itu-mcp.example.com"
+export NINOVA_ALLOWED_HOSTS="itu-mcp.example.com"        # expected Host header values
 export NINOVA_ALLOWED_ORIGINS="https://claude.ai,https://claude.com"
+export NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-text"   # optional, default /mcp
+export NINOVA_REMOTE_HOST="127.0.0.1"                # default; a TLS reverse proxy forwards to it
+export NINOVA_REMOTE_RATE_LIMIT="60"                 # max requests per window and client
+export NINOVA_REMOTE_RATE_WINDOW_SECONDS="60"
+export NINOVA_REMOTE_ENABLE_MAIL="0"                 # explicit opt-in for mail tools
+export NINOVA_REMOTE_ALLOWED_TOOLS=""                # optional comma-separated allowlist
+export NINOVA_REMOTE_TRUST_PROXY_HEADERS="1"         # only if genuinely behind a proxy
+export NINOVA_REMOTE_TRUSTED_PROXY_HOPS="1"          # number of trusted proxies in front
 itu-mcp-remote
 ```
 
-Your connector URL is then `https://itu-mcp.example.com/mcp-choose-a-long-random-secret`.
+Your connector URL is then `https://itu-mcp.example.com/mcp-choose-a-long-random-text`.
+MCP requests must send `Authorization: Bearer <key>` or `X-API-Key: <key>`. OAuth is not
+implemented: the API key is the secret. A hard-to-guess path is only an extra, it does
+not replace the key.
 
-Endpoints: `GET /healthz` (liveness; no Ninova login by default), `GET /` (status), and
-`POST/GET <NINOVA_REMOTE_MCP_PATH>` (MCP). When `NINOVA_REMOTE_API_KEY` is set, MCP
-requests must send `Authorization: Bearer <key>` or `X-API-Key: <key>`. OAuth is still
-not implemented — treat API key + secret path as the shared secret.
+### What the server refuses to start with
 
-Rate limiting (default 60 req / 60s per client IP) applies to the MCP path. Disable with
-`NINOVA_REMOTE_DISABLE_RATE_LIMIT=1` if needed. The connecting socket's IP is used unless
-`NINOVA_REMOTE_TRUST_PROXY_HEADERS=1` is set — only turn that on if a real reverse proxy sits
-in front of the server, since `X-Forwarded-For` is otherwise a client-supplied header anyone
-can rotate to dodge the limit.
+The server fails closed. It prints `error: ...` naming the variable to set and exits
+with status 2 in these cases:
+
+| Bind host (`NINOVA_REMOTE_HOST`) | `NINOVA_REMOTE_API_KEY` | `NINOVA_ALLOWED_HOSTS` or `NINOVA_PUBLIC_BASE_URL` | Result |
+|---|---|---|---|
+| loopback (default `127.0.0.1`, `localhost`, `::1`) | set | either | starts; key required; Host/Origin checked |
+| loopback | unset | either | starts with a random one-time key printed to stderr; Host/Origin checked |
+| not loopback (`0.0.0.0`, a LAN address, Docker) | set | set | starts; key required; Host/Origin checked |
+| not loopback | unset | either | **refuses**: set `NINOVA_REMOTE_API_KEY` |
+| not loopback | set | unset | **refuses**: set `NINOVA_ALLOWED_HOSTS` or `NINOVA_PUBLIC_BASE_URL` |
+
+- **Loopback without a key.** Any other process or user on the same machine could
+  otherwise call the endpoint. The server therefore generates a random key on each
+  start and prints it once to stderr. Copy it into your client for a local test, or set
+  `NINOVA_REMOTE_API_KEY` to keep one stable key. The generated key is not stored and
+  changes on every start.
+- **`NINOVA_REMOTE_REQUIRE_API_KEY=1`** refuses to start without a configured key on
+  any bind, loopback included (no key is generated). `NINOVA_REMOTE_REQUIRE_API_KEY=0`
+  is the default and is not an opt-out.
+- **Host and Origin validation** (DNS-rebinding protection) is always on for the MCP
+  path. On a loopback bind with nothing configured, the accepted Host values are
+  `127.0.0.1`, `localhost` and `[::1]` with any port. If you set `NINOVA_ALLOWED_HOSTS`
+  or `NINOVA_PUBLIC_BASE_URL`, only those values are accepted. A value must match the
+  `Host` header exactly, including the port when the client sends one
+  (`itu-mcp.example.com:8443`, or `itu-mcp.example.com:*` for any port). A request with
+  another Host gets `421`, one with an unlisted `Origin` gets `403`.
+- **`NINOVA_REMOTE_MCP_PATH`** must not be empty, `/`, `/healthz` or a path under
+  `/healthz`, and may only contain letters, digits and `. _ ~ -` in segments separated
+  by single slashes. Anything else is a startup error.
+
+Two opt-outs exist. Each one prints a loud warning on every start. Do not use them on
+a server that is reachable from the internet:
+
+| Variable | Effect |
+|---|---|
+| `NINOVA_REMOTE_ALLOW_UNAUTHENTICATED=1` | Start without any API key (no key is generated). Anyone who can reach the port can read the student's data. Ignored when `NINOVA_REMOTE_REQUIRE_API_KEY=1`. |
+| `NINOVA_DISABLE_DNS_REBINDING_PROTECTION=1` | Do not check the `Host` and `Origin` headers. Also lifts the allowed-hosts requirement for a non-loopback bind. |
+
+### Endpoints
+
+- `POST/GET/DELETE <NINOVA_REMOTE_MCP_PATH>`: MCP. Needs the key.
+- `GET /`: returns `{"name": "itu-mcp", "status": "ok"}`.
+- `GET /healthz`: liveness, returns `{"ok": true}` without contacting any university
+  system.
+
+`GET` and `HEAD` on exactly `/` and `/healthz` are the only requests served without the
+key. Every other path and method, including unknown paths, needs the key and is rate
+limited. The two status routes do not reveal the MCP path, the version, the state
+directory or any setting. Those are printed to stderr at startup instead.
+
+`NINOVA_HEALTHZ_CHECK_AUTH=1` makes `/healthz` also report whether the stored
+credentials can log in (`{"ok": ..., "authenticated": ...}`, status `503` when they
+cannot). Because the route is public, the result is cached for
+`NINOVA_HEALTHZ_AUTH_CACHE_SECONDS` (default 60, minimum 5), failures included, so
+probes cannot trigger more than one login check per interval. The check runs in a worker
+thread and never at the same time as a tool call.
+
+### Rate limiting
+
+Default 60 requests per 60 seconds per client address, for everything behind the key.
+The two status routes have a separate bucket with the same limits, so health probes and
+MCP traffic do not use up each other's budget. Requests with a wrong or missing key
+count too. Disable with `NINOVA_REMOTE_DISABLE_RATE_LIMIT=1` if needed. The limiter is
+in memory and per process: run a single worker.
+
+The client address is the connecting socket's IP unless
+`NINOVA_REMOTE_TRUST_PROXY_HEADERS=1` is set. Turn that on only if a real reverse proxy
+sits in front of the server and the server cannot be reached around it. The address is
+then taken from `X-Forwarded-For` counting from the right: each proxy appends the address
+it received the request from, so the entries on the left are whatever the client sent.
+`NINOVA_REMOTE_TRUSTED_PROXY_HOPS` (default `1`) is the number of trusted proxies in
+front of the server. With `1` the last entry is used, with `2` the second from last (for
+example a CDN in front of your own proxy). If the header is missing, has fewer entries
+than that, or the entry is not an IP address, the socket IP is used. Without the
+setting, every client behind the same proxy shares one bucket.
+
+`itu-mcp-remote` starts uvicorn with its own proxy-header handling switched off, so
+`X-Forwarded-For` is read only by the rule above. If you start the app yourself with
+`uvicorn ninova_mcp.remote:app`, pass `--no-proxy-headers` as well.
+
+### Tool selection
 
 The toolset variables above (`NINOVA_TOOLSETS`, `NINOVA_DISABLED_TOOLSETS`) also apply to
 the remote server, and they can only narrow its tool list. Tools that are never served
 remotely stay excluded, mail tools still need `NINOVA_REMOTE_ENABLE_MAIL=1`, and
 `NINOVA_REMOTE_ALLOWED_TOOLS` is applied last: naming a tool from a switched-off toolset
 there is a startup error, and if you set it, list `auth_status` yourself to keep it.
+`submit_assignment` and `obs_save_registration_draft` are never served over HTTP. No
+variable changes that, `NINOVA_OBS_REGISTRATION_WRITES=1` included.
 
 > **Privacy warning:** a hosted remote server means whoever uses it sends their İTÜ
 > credentials to *your* server. Prefer the local stdio setup for anyone but yourself.
 
 ## Docker
 
+The image listens on `0.0.0.0` inside the container, so the rules for a non-loopback
+bind apply: without `NINOVA_REMOTE_API_KEY` and without `NINOVA_ALLOWED_HOSTS` or
+`NINOVA_PUBLIC_BASE_URL` the container prints the missing variable and exits with
+status 2. It runs as the unprivileged user `itumcp` (uid 10001) and keeps its state
+(session cookies, snapshots, tracking state) in the volume `/data`.
+
 ```bash
 docker build -t itu-mcp .
-docker run --rm -p 8000:8000 \
-  -e NINOVA_REMOTE_HOST="0.0.0.0" \
+docker run --rm -p 127.0.0.1:8000:8000 \
+  -v itu-mcp-state:/data \
   -e NINOVA_USERNAME="your_username" \
   -e NINOVA_PASSWORD="your_password" \
-  -e NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-secret" \
   -e NINOVA_REMOTE_API_KEY="replace-with-long-random-secret" \
-  -e NINOVA_REMOTE_REQUIRE_API_KEY="1" \
   -e NINOVA_PUBLIC_BASE_URL="https://your-public-domain.example.com" \
   -e NINOVA_ALLOWED_HOSTS="your-public-domain.example.com" \
+  -e NINOVA_REMOTE_MCP_PATH="/mcp-choose-a-long-random-text" \
   itu-mcp
 ```
+
+`-p 127.0.0.1:8000:8000` publishes the port on the host's loopback only, for a TLS
+reverse proxy on the same host. If you mount a host directory instead of a named
+volume, make it writable for uid 10001. To test the container directly with
+`http://localhost:8000`, add `localhost:8000` to `NINOVA_ALLOWED_HOSTS`.
 
 ## Request model
 

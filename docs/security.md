@@ -7,11 +7,13 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
 - Use only your own İTÜ account.
 - Keep `.env` private.
 - Prefer local stdio MCP for Claude Desktop, Claude Code, Cursor, Codex, and OpenClaw.
-- If you expose the remote HTTP transport, use HTTPS, a long random MCP path,
-  `NINOVA_REMOTE_API_KEY`, and `NINOVA_REMOTE_REQUIRE_API_KEY=1`.
+- If you expose the remote HTTP transport, use HTTPS and a long random
+  `NINOVA_REMOTE_API_KEY`, and set `NINOVA_ALLOWED_HOSTS` or `NINOVA_PUBLIC_BASE_URL`.
+  A long random MCP path is a useful extra, not a replacement for the key.
 - The remote transport binds to `127.0.0.1` by default. Set
   `NINOVA_REMOTE_HOST=0.0.0.0` only in an isolated container or behind a trusted
-  HTTPS reverse proxy/firewall.
+  HTTPS reverse proxy/firewall. On such a bind the server refuses to start without a
+  key and without the expected Host values.
 - Rotate your Ninova password if you accidentally commit or share credentials.
 - Rotate the remote API key if it leaks.
 - Keep library account values in the separate `NINOVA_LIBRARY_NAME`,
@@ -22,7 +24,8 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
 ## Do not
 
 - Commit `.env`, cookies, downloaded course files, submissions, screenshots, or state folders.
-- Deploy a public remote server with a predictable MCP path and no API key.
+- Set `NINOVA_REMOTE_ALLOW_UNAUTHENTICATED=1` or
+  `NINOVA_DISABLE_DNS_REBINDING_PROTECTION=1` on a server that others can reach.
 - Share your remote MCP URL or API key publicly.
 - Use this to access accounts, courses, or files you are not authorized to access.
 - Disable TLS verification to work around an expired library certificate.
@@ -48,6 +51,38 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
   allowlisted page cannot bounce the client to localhost or an unrelated host.
 - User input is sent as query/form values, never concatenated into an arbitrary host,
   command, or filesystem path by these public tools.
+
+## Remote HTTP transport
+
+Whoever can call the remote endpoint acts as the student whose credentials the server
+holds. The transport is therefore closed by default
+([startup table and variables](advanced.md#remote-http-server-chatgpt--claudeai-custom-connectors)):
+
+- A non-loopback bind does not start without `NINOVA_REMOTE_API_KEY` and without
+  `NINOVA_ALLOWED_HOSTS` or `NINOVA_PUBLIC_BASE_URL`. The Docker image binds `0.0.0.0`,
+  so the same holds for it. On loopback with no key, a random one-time key is generated
+  and printed once to stderr.
+- The two opt-outs, `NINOVA_REMOTE_ALLOW_UNAUTHENTICATED=1` and
+  `NINOVA_DISABLE_DNS_REBINDING_PROTECTION=1`, must be set explicitly and print a
+  warning on every start.
+- Host and Origin validation is always on for the MCP path, on every bind.
+- The middleware is default deny. Only `GET`/`HEAD` on exactly `/` and `/healthz` are
+  served without the key. Every other path, known or not, needs the key and is rate
+  limited. The MCP path cannot be `/`, empty or a status route.
+- Without the key a caller can learn only this: that an `itu-mcp` server is running
+  (`GET /`), that it is alive (`GET /healthz`), with `NINOVA_HEALTHZ_CHECK_AUTH=1`
+  whether its stored login currently works (cached, at most one check per interval),
+  and from `401`, `421` and `429` answers that a key, a Host check and a rate limit
+  exist. The MCP path, version, state directory and settings are not returned.
+- The key is compared in constant time. Failed attempts count against the rate limit.
+  There is no lockout and no per-user identity: everyone with the key is the same
+  caller. Use HTTPS in front, since the key travels in a header.
+- `X-Forwarded-For` is ignored unless `NINOVA_REMOTE_TRUST_PROXY_HEADERS=1`, and is then
+  read from the right, skipping `NINOVA_REMOTE_TRUSTED_PROXY_HOPS` trusted proxies.
+- `submit_assignment` and `obs_save_registration_draft` are checked three times before
+  the server starts (excluded set, selection filter, final assertion) and are never
+  registered on this transport, whatever the environment says.
+- The Docker image runs as a non-root user and keeps state in the `/data` volume.
 
 ## Actions that change state
 
@@ -110,7 +145,9 @@ client shows it, and the model cannot answer it.
 İTÜ pages can contain text written by instructors, students or external editors.
 HTML sanitization cannot reliably distinguish a legitimate sentence from a malicious
 instruction aimed at an LLM. Every MCP dictionary result is therefore marked with
-`untrusted_external_content` and a `content_notice`; the server instructions tell the
+`untrusted_external_content` and a `content_notice`. The marker is assigned by the
+server after the tool returns, so a payload that carries its own value for that key
+cannot switch it off. The server instructions tell the
 client to treat embedded instructions as data. This provenance marker is preserved on
 raw Ninova/OBS content as well as public announcements and library records.
 Mail bodies and attachment content cross the same untrusted-content boundary.

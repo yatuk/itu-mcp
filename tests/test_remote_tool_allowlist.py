@@ -81,7 +81,9 @@ class RemoteToolAllowlistTests(unittest.TestCase):
         with patch.object(remote, "REMOTE_TOOL_NAMES", leaked), patch.dict(os.environ, {}, clear=False):
             for key in ("NINOVA_REMOTE_ALLOWED_TOOLS", "NINOVA_TOOLSETS", "NINOVA_DISABLED_TOOLSETS"):
                 os.environ.pop(key, None)
-            for value in (None, "", "0", "false"):
+            # Including the opt-in flag set: it enables the tool locally and
+            # must not open the remote transport.
+            for value in (None, "", "0", "false", "1", "true"):
                 with self.subTest(value=value):
                     if value is None:
                         os.environ.pop("NINOVA_OBS_REGISTRATION_WRITES", None)
@@ -92,6 +94,58 @@ class RemoteToolAllowlistTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "remote-excluded"):
                         _selected_remote_tool_names()
                     os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS")
+
+    def test_submit_assignment_stays_out_if_it_leaves_the_excluded_set(self) -> None:
+        from ninova_mcp import remote
+        from ninova_mcp.server import LOCAL_TOOL_NAMES, REMOTE_EXCLUDED_TOOLS
+
+        leaked = [name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS - {"submit_assignment"}]
+        self.assertIn("submit_assignment", leaked)
+        with patch.object(remote, "REMOTE_TOOL_NAMES", leaked), patch.dict(os.environ, {}, clear=False):
+            for key in ("NINOVA_REMOTE_ALLOWED_TOOLS", "NINOVA_TOOLSETS", "NINOVA_DISABLED_TOOLSETS"):
+                os.environ.pop(key, None)
+            for value in (None, "0", "1"):
+                with self.subTest(value=value):
+                    if value is None:
+                        os.environ.pop("NINOVA_ALLOW_UPLOADS", None)
+                    else:
+                        os.environ["NINOVA_ALLOW_UPLOADS"] = value
+                    self.assertNotIn("submit_assignment", _selected_remote_tool_names())
+                    os.environ["NINOVA_REMOTE_ALLOWED_TOOLS"] = "submit_assignment"
+                    with self.assertRaisesRegex(RuntimeError, "remote-excluded"):
+                        _selected_remote_tool_names()
+                    os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS")
+
+    def test_server_build_refuses_a_write_tool_that_passed_selection(self) -> None:
+        from ninova_mcp import remote
+
+        self.assertEqual(
+            remote.NEVER_REMOTE_TOOL_NAMES,
+            {"submit_assignment", "obs_save_registration_draft"},
+        )
+        for name in sorted(remote.NEVER_REMOTE_TOOL_NAMES):
+            with self.subTest(name=name):
+                with patch.object(remote, "_selected_remote_tool_names", return_value=["auth_status", name]):
+                    with self.assertRaisesRegex(RuntimeError, "never be served remotely"):
+                        remote._build_fastmcp(object(), mount_path="/mcp")  # type: ignore[arg-type]
+
+    def test_tool_results_cannot_carry_their_own_trust_marker(self) -> None:
+        import asyncio
+
+        from mcp.server.fastmcp import FastMCP
+
+        from ninova_mcp.server_build import register_tools
+
+        class _App:
+            def auth_status(self) -> dict[str, object]:
+                # As if passed through from remote JSON.
+                return {"untrusted_external_content": False, "x": 1}
+
+        mcp = FastMCP("t")
+        register_tools(mcp, _App(), ["auth_status"])  # type: ignore[arg-type]
+        _, structured = asyncio.run(mcp.call_tool("auth_status", {}))
+        self.assertIs(structured["untrusted_external_content"], True)
+        self.assertEqual(structured["x"], 1)
 
 
 if __name__ == "__main__":
