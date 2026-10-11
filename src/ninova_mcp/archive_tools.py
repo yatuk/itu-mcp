@@ -323,10 +323,6 @@ class ArchiveDatasetToolsMixin:
                 f"{slug} dizini var ({found['term_section_count']} şube) ama filtreye uyan "
                 "şube yok."
             )
-        if found["enrolment_not_captured"]:
-            from .archive import ENROLMENT_NOT_CAPTURED_NOTE
-
-            result["enrolment_note"] = ENROLMENT_NOT_CAPTURED_NOTE
         return result
 
     def archive_exam_schedule(
@@ -488,7 +484,13 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
             "Matching is case-insensitive and Turkish-aware ('sahin' finds 'Şahin'). "
             "Defaults to the archive's current term. Use this when the branch is unknown "
             "or the question spans branches; archive_term_sections reads a single branch "
-            "in more detail. Returns 'match_count' and 'truncated' alongside 'coverage'."
+            "in more detail. Returns 'match_count' and 'truncated' alongside 'coverage'. "
+            "'enrolment_not_captured' means no section of the whole term has an enrolled "
+            "student in the dump (taken before registration opened): 'enrolled' and "
+            "'fill_ratio' are then null, unknown and not zero. 'capacity_not_captured' means "
+            "no section of the term has a capacity either: 'capacity' is null too. "
+            "'data_quality' names what is missing in one line. A single 0 in a term that was "
+            "captured is a real 0."
         ),
         "inputSchema": {
             "type": "object",
