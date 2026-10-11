@@ -361,6 +361,18 @@ class TrackingToolsMixin:
                 state = self._load_tracking_state_document()
                 freshness = snapshot_freshness(state, max_age_seconds=max_age)
                 course_set = self._tracked_course_set_check(state)
+                if refresh_info.get("ok") and course_set.get("checked"):
+                    # A course the fresh, complete course list no longer has (a past
+                    # term) stays in the state until a second complete sync confirms
+                    # it is gone. It was not read just now, but that does not make
+                    # the snapshot of the current courses stale.
+                    retained = {course.get("url") for course in course_set["not_in_course_list"]}
+                    freshness["stale_courses"] = [
+                        course for course in freshness["stale_courses"] if course.get("url") not in retained
+                    ]
+                    freshness["stale"] = freshness["snapshot_stale"] or bool(freshness["stale_courses"])
+                    freshness["status"] = "stale_snapshot" if freshness["stale"] else "ok"
+                    course_set["differs"] = bool(course_set["missing_from_snapshot"])
 
         deadline_items: list[dict[str, Any]] = []
         incomplete_courses: list[dict[str, Any]] = []
