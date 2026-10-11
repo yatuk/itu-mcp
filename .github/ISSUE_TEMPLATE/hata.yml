@@ -1,0 +1,99 @@
+name: Hata bildir
+description: Bir araç yanlış sonuç veriyor, hata atıyor ya da hiç çalışmıyor.
+title: "[Hata] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Şifreni, öğrenci numaranı, TC kimlik numaranı ve oturum çerezlerini buraya yazma.
+        Hata çıktısı yapıştırıyorsan önce içinde kişisel bilgi kalmadığına bak.
+  - type: dropdown
+    id: alan
+    attributes:
+      label: Hangi bölüm?
+      options:
+        - Ninova (dersler, ödevler, dosyalar, duyurular)
+        - OBS (notlar, program, kayıt, transkript)
+        - Portal (yemekhane, kampüs kartı, yardım talepleri)
+        - Ders programı ve boş sınıf araçları
+        - Ders arşivi
+        - Kütüphane
+        - İTÜ Mail
+        - Giriş ve oturum
+        - Kurulum
+        - Uzak sunucu ya da Docker
+        - Diğer
+    validations:
+      required: true
+  - type: input
+    id: arac
+    attributes:
+      label: Araç adı
+      description: Biliyorsan yaz.
+      placeholder: get_course_assignments
+  - type: textarea
+    id: ne-oldu
+    attributes:
+      label: Ne oldu?
+      description: Asistana ne sordun, ne cevap geldi? Hata mesajı varsa aynen yapıştır.
+    validations:
+      required: true
+  - type: textarea
+    id: beklenen
+    attributes:
+      label: Ne olmasını bekliyordun?
+    validations:
+      required: true
+  - type: textarea
+    id: adimlar
+    attributes:
+      label: Nasıl tekrar edilir?
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: surum
+    attributes:
+      label: İTÜ MCP sürümü
+      description: "`itu-mcp --version` çıktısı."
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: istemci
+    attributes:
+      label: Hangi asistanla kullanıyorsun?
+      options:
+        - Claude Desktop
+        - Claude Code
+        - ChatGPT
+        - Cursor
+        - VS Code
+        - Diğer
+    validations:
+      required: true
+  - type: dropdown
+    id: isletim-sistemi
+    attributes:
+      label: İşletim sistemi
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python sürümü
+      placeholder: "3.12"
+  - type: checkboxes
+    id: kontrol
+    attributes:
+      label: Göndermeden önce
+      options:
+        - label: Benzer bir issue var mı diye baktım.
+          required: true
+        - label: Yazdıklarımda şifre, öğrenci numarası ya da başka kişisel bilgi yok.
+          required: true

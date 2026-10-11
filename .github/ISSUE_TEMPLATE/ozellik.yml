@@ -1,0 +1,46 @@
+name: Özellik iste
+description: Yeni bir araç ya da var olan bir aracın daha iyi çalışması için öneri.
+title: "[Öneri] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Henüz netleşmemiş bir fikirse önce [Discussions'taki Fikirler bölümünde](https://github.com/yatuk/itu-mcp/discussions/categories/ideas) konuşmak daha kolay olabilir.
+  - type: textarea
+    id: ihtiyac
+    attributes:
+      label: Neye ihtiyacın var?
+      description: Asistana ne sormak istiyorsun ve şu an neden olmuyor?
+    validations:
+      required: true
+  - type: textarea
+    id: oneri
+    attributes:
+      label: Nasıl çalışmasını isterdin?
+      description: Örnek bir soru ve beklediğin cevap yazarsan çok yardımcı olur.
+    validations:
+      required: true
+  - type: input
+    id: kaynak
+    attributes:
+      label: Veri nereden gelecek?
+      description: Biliyorsan sayfanın adresini yaz. Giriş gerektiriyor mu?
+      placeholder: https://obs.itu.edu.tr/public/DersProgram
+  - type: dropdown
+    id: yazma
+    attributes:
+      label: Bu özellik hesabında bir şey değiştiriyor mu?
+      description: Dosya yükleme, kayıt, form gönderme gibi işlemler ek onay adımı gerektirir.
+      options:
+        - Hayır, yalnızca okuyor
+        - Evet, bir şey gönderiyor ya da değiştiriyor
+        - Emin değilim
+    validations:
+      required: true
+  - type: checkboxes
+    id: katki
+    attributes:
+      label: Katkı
+      options:
+        - label: Bunun için PR açabilirim.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Soru sor ya da kurulumda yardım iste
+    url: https://github.com/yatuk/itu-mcp/discussions/categories/q-a
+    about: "Kurulum, ayar ve kullanım soruları için Discussions'taki Soru-Cevap bölümünü kullan."
+  - name: Güvenlik açığı bildir
+    url: https://github.com/yatuk/itu-mcp/security/advisories/new
+    about: Güvenlik açıklarını herkese açık issue olarak yazma. Buradan özel olarak bildir.

@@ -1,0 +1,19 @@
+title: "[Fikir] "
+body:
+  - type: textarea
+    id: fikir
+    attributes:
+      label: Fikrin ne?
+      description: Asistana ne sorabilmek isterdin?
+    validations:
+      required: true
+  - type: textarea
+    id: neden
+    attributes:
+      label: Kimin işine yarar?
+      description: Hangi durumda, ne sıklıkla lazım oluyor?
+  - type: input
+    id: kaynak
+    attributes:
+      label: Veri nereden gelecek?
+      description: Biliyorsan sayfanın adresini yaz.

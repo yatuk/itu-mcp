@@ -1,0 +1,42 @@
+title: "[Soru] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Şifreni, öğrenci numaranı ve oturum çerezlerini buraya yazma.
+  - type: textarea
+    id: soru
+    attributes:
+      label: Sorun ne?
+      description: Ne yapmaya çalışıyorsun, nerede takıldın?
+    validations:
+      required: true
+  - type: textarea
+    id: denenen
+    attributes:
+      label: Ne denedin?
+      description: Çalıştırdığın komutlar ve aldığın hata mesajı.
+  - type: input
+    id: surum
+    attributes:
+      label: İTÜ MCP sürümü
+      description: "`itu-mcp --version` çıktısı."
+  - type: dropdown
+    id: istemci
+    attributes:
+      label: Hangi asistanla kullanıyorsun?
+      options:
+        - Claude Desktop
+        - Claude Code
+        - ChatGPT
+        - Cursor
+        - VS Code
+        - Diğer
+  - type: dropdown
+    id: isletim-sistemi
+    attributes:
+      label: İşletim sistemi
+      options:
+        - Windows
+        - macOS
+        - Linux

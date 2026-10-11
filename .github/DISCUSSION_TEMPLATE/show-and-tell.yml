@@ -1,0 +1,14 @@
+title: "[Paylaşım] "
+body:
+  - type: textarea
+    id: ne-yaptin
+    attributes:
+      label: Ne yaptın?
+      description: İTÜ MCP ile kurduğun bir akış, işine yarayan bir soru kalıbı ya da üzerine yazdığın bir araç.
+    validations:
+      required: true
+  - type: textarea
+    id: nasil
+    attributes:
+      label: Nasıl kurdun?
+      description: Başkası da deneyebilsin diye adımlar, ayarlar ya da örnek sorular. Ekran görüntüsü eklerken kişisel bilgileri kapat.
