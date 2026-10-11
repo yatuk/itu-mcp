@@ -16,10 +16,12 @@ from .assignment_upload import (
     LocalUpload,
     UploadPage,
     choose_upload_slot,
+    find_assignment,
     multipart_fields,
     read_upload_once,
     slot_after_upload,
     text_reports_success,
+    upload_link_of,
     upload_preview,
     upload_result,
     uploads_disabled,
@@ -516,16 +518,7 @@ class NinovaCourseToolsMixin:
         upload_url: str | None,
     ) -> dict[str, Any]:
         if upload_url:
-            normalized = self.client.ninova_url(upload_url)
-            if ASSIGNMENT_DETAIL_PATH_RE.match(urlparse(normalized).path):
-                # Detail URL like .../Odev/123 -> .../Odev/123/OdevGonder is common.
-                normalized = normalized.split("?", 1)[0].split("#", 1)[0].rstrip("/") + "/OdevGonder"
-            self._require_upload_page_url(normalized, "upload_url")
-            return {
-                "upload_url": normalized,
-                "course": None,
-                "assignment": {"url": normalized, "title": None},
-            }
+            return self._upload_target_at_url(upload_url)
 
         if not course or not assignment:
             raise NinovaError(
@@ -541,44 +534,27 @@ class NinovaCourseToolsMixin:
             limit=200,
             include_details=True,
         )
-        items = payload.get("assignments") or []
-        target = normalize_lookup_text(assignment)
-        matches: list[dict[str, Any]] = []
-        for item in items:
-            candidates = {
-                normalize_lookup_text(item.get("title")),
-                normalize_lookup_text(item.get("url")),
-            }
-            if target in candidates or any(target and target in value for value in candidates if value):
-                matches.append(item)
-
-        if not matches:
-            titles = ", ".join(item.get("title") or "?" for item in items[:12])
-            raise NinovaError(f"Assignment not found: {assignment}. Available: {titles}")
-        if len(matches) > 1:
-            # Prefer exact title match.
-            exact = [item for item in matches if normalize_lookup_text(item.get("title")) == target]
-            if len(exact) == 1:
-                matches = exact
-            else:
-                options = ", ".join(item.get("title") or item.get("url") or "?" for item in matches[:8])
-                raise NinovaError(f"Ambiguous assignment {assignment!r}. Matches: {options}")
-
-        chosen = matches[0]
-        resolved_upload = chosen.get("upload_url")
-        if not resolved_upload and chosen.get("url"):
-            resolved_upload = chosen["url"].rstrip("/") + "/OdevGonder"
-        if not resolved_upload:
-            raise NinovaError(
-                f"Assignment {chosen.get('title')!r} has no upload URL "
-                "(deadline may be closed or upload not enabled)."
-            )
+        chosen = find_assignment(payload.get("assignments") or [], assignment)
+        resolved_upload = upload_link_of(chosen)
         # This link was read from a Ninova page, so it is checked like any other.
         self._require_upload_page_url(resolved_upload, "The assignment's upload link")
         return {
             "upload_url": resolved_upload,
             "course": resolved_course,
             "assignment": chosen,
+        }
+
+    def _upload_target_at_url(self, upload_url: str) -> dict[str, Any]:
+        """The upload target a caller named by URL; an assignment's own URL stands for its upload page."""
+        normalized = self.client.ninova_url(upload_url)
+        if ASSIGNMENT_DETAIL_PATH_RE.match(urlparse(normalized).path):
+            # Detail URL like .../Odev/123 -> .../Odev/123/OdevGonder is common.
+            normalized = normalized.split("?", 1)[0].split("#", 1)[0].rstrip("/") + "/OdevGonder"
+        self._require_upload_page_url(normalized, "upload_url")
+        return {
+            "upload_url": normalized,
+            "course": None,
+            "assignment": {"url": normalized, "title": None},
         }
 
     def _require_upload_page_url(self, url: str, what: str) -> tuple[str, str]:
