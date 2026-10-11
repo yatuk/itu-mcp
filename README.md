@@ -8,48 +8,331 @@
 
   <h1>İTÜ MCP</h1>
 
-  <p><em>İTÜ Ninova, OBS, Portal, kampüs servisleri ve kütüphaneyi Claude, Cursor, Codex ve diğer MCP istemcilerine bağla</em></p>
+  <p><em>Ninova, OBS, Portal, kütüphane ve ders arşivini yapay zeka asistanına bağla. Sonra sadece sor.</em></p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v0.7.2-blue?style=flat-square" alt="Sürüm: v0.7.2" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v1.0.0-blue?style=flat-square" alt="Sürüm: v1.0.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
     <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
     <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-sunucu-black?style=flat-square" alt="MCP Sunucu" /></a>
   </p>
 
+  <p>
+    <a href="#3-adımda-kur"><strong>Kur</strong></a> ·
+    <a href="#neler-sorabilirsin"><strong>Örnekler</strong></a> ·
+    <a href="#sık-sorulanlar"><strong>Sık sorulanlar</strong></a> ·
+    <a href="docs/advanced.md"><strong>Tüm araçlar</strong></a>
+  </p>
+
+  <p>
+    <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/demo.gif" alt="İTÜ MCP tanıtım videosu" width="100%" />
+  </p>
+
+  <sub>Sesli ve tam çözünürlüklü hali: <a href="docs/demo.mp4">docs/demo.mp4</a></sub>
+
 </div>
 
 ---
 
-## İTÜ MCP nedir?
+## Bu ne işe yarıyor?
 
-Ninova'da ödev, OBS'de not, Portal'da yemek listesi diye üç ayrı sekmede gezinmek can sıkıcı. İTÜ MCP bilgisayarında çalışan küçük bir sunucu, bu sekmelerin hepsini tek bir yerden, doğal dilde sorulabilir hale getiriyor.
+Ödev için Ninova'ya, not için OBS'ye, yemek için Portal'a girmek yerine asistanına yazıyorsun, o da gerçek veriyi çekip cevaplıyor.
 
-Kimlik bilgilerinle (genelde `ad@itu.edu.tr`) **Ninova**, **OBS** ve **Portal** verilerini okuyor. Kimlik bilgisi olmadan da ders/final programı, bina kodları, mekik, spor tesisi, duyuru ve kütüphane kataloğu gibi herkese açık kaynaklara erişiyor. Sonuçları [Model Context Protocol](https://modelcontextprotocol.io) üzerinden yapılandırılmış araçlar olarak sunuyor: Claude'a soruyorsun, o da gerçek veriyi çekip cevap veriyor.
+İTÜ MCP bilgisayarında çalışan küçük bir programdır. Claude, Cursor veya Codex gibi bir asistana İTÜ sistemlerini okuma yeteneği kazandırır. Kod yazmayı bilmen gerekmez, kurup soru sorman yeterli.
 
-| İhtiyacın | İTÜ MCP cevabı |
-|:---|---|
-| "Bu hafta hangi ödevlerin teslimi var?" | Ninova ödev ve teslim tarihi araçları |
-| "X dersinin notları / yoklaması?" | OBS ara not, harf notu ve yoklama |
-| "Transkript / danışman / staj?" | OBS profil, danışman, staj, transkript PDF |
-| "Bugün yemekte ne var / kart bakiyem?" | İTÜ Portal menü, kart ve bildirim araçları |
-| "Finalim ne zaman / boş kontenjan var mı?" | Public OBS final ve ders programı araçları |
-| "Mekik ne zaman / havuz kaçta kapanıyor?" | SKS kampüs hizmeti araçları |
-| "Kütüphanede bu kitap var mı?" | Public katalog arama ve kopya durumu |
-| "Son okunmamış mailimi göster" | Salt okunur İTÜ Mail araçları |
-| "PDF özetle" | İndirme ve `read_resource_text` (PDF/DOCX) |
-| "Ödev yükle" | İsteğe bağlı yükleme, `confirm=true` şart |
+| Sen yazarsın | O bakar |
+|:---|:---|
+| "Bu hafta hangi ödevlerim var?" | Ninova |
+| "Vize notlarım açıklandı mı?" | OBS |
+| "Bugün yemekte ne var?" | Portal |
+| "Bu dersi geçen yıl kim verdi, kaç kişi AA aldı?" | Ders arşivi |
+| "Kütüphanede bu kitap var mı?" | Kütüphane kataloğu |
+| "Okunmamış maillerimi özetle" | İTÜ Mail |
 
-> **Önce yerel.** Ninova şifren cihazda kalır, yalnızca İTÜ SSO, Ninova, OBS ve Portal akışlarında kullanılır. Ayrı kütüphane hesabı bilgileri yalnızca resmî kütüphane sunucusuna gönderilir. Üçüncü taraf bir sunucuya kimlik bilgisi depolanmaz.
->
-> **İTÜ ile resmi bağlantısı yoktur.** Yalnızca kendi hesabınla kullan.
-
-Dürüst olmak gerekirse OBS'nin bazı uç noktaları hesaba göre tutarsız davranabiliyor, bir hesapta not alanı boş dönerken başka bir hesapta doluyor gibi. Böyle durumları elimizden geldiğince yakalayıp yedek kaynağa düşüyoruz ve sonucu açıkça işaretliyoruz, ama tam garanti veremeyiz. Şüpheye düştüğünde her zaman OBS'nin kendi sayfasına bak.
+> Şifren bilgisayarından çıkmaz. Program yalnızca İTÜ'nün kendi sunucularıyla konuşur.
+> İstanbul Teknik Üniversitesi ile resmi bir bağlantısı yoktur.
 
 ---
 
-## Nasıl çalışır
+## 3 adımda kur
+
+Python 3.11 veya üstü gerekir. Yüklü değilse [python.org](https://www.python.org/downloads/) adresinden kurabilirsin.
+
+**1. Programı kur**
+
+```bash
+pipx install itu-mcp
+```
+
+`pipx` yoksa `pip install --user itu-mcp` da olur.
+
+**2. Asistanına bağla**
+
+Claude Code kullanıyorsan tek komut yeter. Kendi İTÜ e-postanı ve şifreni yaz:
+
+```bash
+claude mcp add itu itu-mcp -e NINOVA_USERNAME=ad.soyad@itu.edu.tr -e NINOVA_PASSWORD=sifren
+```
+
+<details>
+<summary><strong>Codex, Claude Desktop veya Cursor kullanıyorum</strong></summary>
+
+<br />
+
+**Codex CLI**
+
+```bash
+codex mcp add itu --env NINOVA_USERNAME=ad.soyad@itu.edu.tr --env NINOVA_PASSWORD=sifren -- itu-mcp
+```
+
+**Claude Desktop ve Cursor** için hazır ayar dosyaları `examples/` klasöründe. Adım adım anlatım: [docs/installation.md](docs/installation.md).
+
+</details>
+
+**3. Sor**
+
+Asistanı yeniden başlat ve yaz:
+
+```
+Ninova'daki derslerimi listele
+```
+
+Bir liste geldiyse kurulum tamam.
+
+<details>
+<summary><strong>Çalışmadı, ne yapmalıyım?</strong></summary>
+
+<br />
+
+Önce programın kendisini dene:
+
+```bash
+itu-mcp --version
+itu-mcp --check-auth
+```
+
+- `--check-auth` hata veriyorsa kullanıcı adını tam e-posta olarak yazdığından emin ol (`ad.soyad@itu.edu.tr`, yalnızca `ad.soyad` değil).
+- Komut bulunamıyorsa terminali kapatıp yeniden aç. `pipx` kurulumdan sonra yeni bir terminal ister.
+- Asistan aracı görmüyorsa asistanı tamamen kapatıp açmayı dene.
+- Hâlâ olmuyorsa [bir sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues), ekran çıktısını ekle. Şifreni yazma.
+
+</details>
+
+> **Şifre vermek istemiyor musun?** Ders programı, final tarihleri, not dağılımları, ders arşivi, mekik saatleri ve kütüphane kataloğu gibi herkese açık bilgiler şifresiz de çalışır. İkinci adımdaki `-e` kısımlarını silmen yeterli.
+
+---
+
+## Neler sorabilirsin?
+
+Aşağıdakiler Claude Code'a yazılmış örnek sorular. Sen kendi cümlelerinle sorabilirsin, hangi aracın çağrılacağını asistan seçer. Çıktılar örnektir, sende kendi verin görünür.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Ödev takibi**
+
+```text
+> Bu hafta hangi ödevlerimin teslimi var?
+
+● itu · get_upcoming_deadlines
+
+Bu hafta 2 teslimin var:
+
+  BLG 223E  Ödev 3
+            Perşembe 23:59, 2 gün kaldı
+            Henüz yüklenmemiş
+
+  MAT 210E  Proje raporu
+            Pazar 23:59, 5 gün kaldı
+            Yüklendi
+```
+
+</td>
+<td width="50%" valign="top">
+
+**Dersi kim verdi, nasıl geçti?**
+
+```text
+> BLG 223E geçen güz nasıl geçmiş?
+
+● itu · archive_grade_distribution
+
+2025-2026 Güz, 176 öğrenci:
+
+  AA   9      CC+  19
+  BA+ 12      CC   21
+  BB+ 18      FF   38
+
+En kalabalık not FF (38 kişi).
+AA alan 9 kişi var.
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Kayıt haftası**
+
+```text
+> 12469, 12554 ve 12583 CRN'leri
+  çakışıyor mu?
+
+● itu · check_course_conflicts
+
+1 çakışma buldum:
+
+  Salı 08:30-10:29
+  BLG 223E ile BLG 345E üst üste
+
+12583 (BLG 422E) sorunsuz.
+BLG 345E için başka şube arayayım mı?
+```
+
+</td>
+<td width="50%" valign="top">
+
+**Ön şart kontrolü**
+
+```text
+> BLG 335E'yi bu dönem alabilir miyim?
+
+● itu · explain_course_eligibility
+
+Henüz alamazsın.
+
+  Gereken:  BLG 223E (en az DD)
+  Durumun:  BLG 223E bu dönem kayıtlı,
+            notu açıklanmamış
+
+BLG 223E'yi geçersen gelecek dönem
+açılıyor.
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Günlük işler**
+
+```text
+> Bugün yemekte ne var, mekik kaçta?
+
+● itu · get_cafeteria_menu
+● itu · get_shuttle_schedule
+
+Öğle yemeği:
+  Mercimek çorbası, tavuk sote,
+  pirinç pilavı, sütlaç
+
+Ayazağa'dan sonraki mekik 13:30.
+```
+
+</td>
+<td width="50%" valign="top">
+
+**Not ve ortalama**
+
+```text
+> Bu dönem hepsinden BB alırsam
+  ortalamam kaç olur?
+
+● itu · obs_calculate_gpa
+
+Şu anki GANO:      2.84
+Dönem tahmini:     3.00
+Dönem sonu GANO:   2.89
+
+Bu bir tahmin, resmi ortalama
+OBS'de açıklanır.
+```
+
+</td>
+</tr>
+</table>
+
+Daha fazla fikir:
+
+- "EEF 211E sınıf dosyalarındaki son PDF'i özetle."
+- "Danışmanım kim, staj durumum ne?"
+- "Transkriptimi indir."
+- "BBB binasında şu an boş derslik var mı?"
+- "BLG 223E'yi geçersem hangi dersler açılır?"
+- "Mezuniyetime kaç ders kaldı, gelecek dönem hangilerini almalıyım?"
+- "Kütüphanede Introduction to Algorithms var mı?"
+- "Son okunmamış maillerimi listele, ekindeki PDF'i özetle."
+
+Asistanın `/` menüsünde hazır akışlar da var: `weekly_briefing` (haftalık özet), `plan_next_term` (gelecek dönem planı), `check_course_eligibility`, `research_course` ve `gpa_scenario`.
+
+---
+
+## Sık sorulanlar
+
+<details>
+<summary><strong>Şifrem nereye gidiyor?</strong></summary>
+
+<br />
+
+Hiçbir yere. Program senin bilgisayarında çalışır ve şifreni yalnızca İTÜ'nün kendi giriş sayfasına gönderir, tıpkı tarayıcının yaptığı gibi. Arada bizim ya da başkasının bir sunucusu yoktur. Kod açık, istersen [kendin bakabilirsin](src/ninova_mcp).
+
+</details>
+
+<details>
+<summary><strong>Bu resmi bir İTÜ uygulaması mı?</strong></summary>
+
+<br />
+
+Hayır. Öğrenciler tarafından yazılmış açık kaynak bir projedir, İTÜ ile resmi bağlantısı yoktur. Yalnızca kendi hesabınla kullan.
+
+</details>
+
+<details>
+<summary><strong>Hesabımda bir şeyi değiştirebilir mi?</strong></summary>
+
+<br />
+
+Neredeyse her şey yalnızca okur. İki istisna var ve ikisi de senin açık onayın olmadan çalışmaz:
+
+- **Ödev yükleme.** Önce neyi nereye yükleyeceğini gösterir, sen onaylayınca yükler.
+- **Kayıt taslağı kaydetme.** Varsayılan olarak kapalıdır. Açsan bile taslaktan ders silinecekse durur ve sana sorar.
+
+Ders kaydı yapmaz, ders bırakmaz, mail göndermez.
+
+</details>
+
+<details>
+<summary><strong>Verdiği cevaba güvenebilir miyim?</strong></summary>
+
+<br />
+
+Veriyi doğrudan İTÜ sistemlerinden çeker, uydurmaz. Yine de OBS bazı bilgileri hesaba göre farklı döndürebiliyor. Bir veri eksikse araç bunu açıkça söyler. Kayıt, mezuniyet ve not gibi önemli kararlarda son sözü her zaman OBS'nin kendi sayfası söyler.
+
+</details>
+
+<details>
+<summary><strong>Hangi asistanlarla çalışıyor?</strong></summary>
+
+<br />
+
+MCP destekleyen her istemciyle: Claude Code, Claude Desktop, Cursor, Codex ve benzerleri. ChatGPT ya da Claude.ai gibi web arayüzleri için uzak sunucu kurulumu gerekir, anlatımı [docs/advanced.md](docs/advanced.md) içinde.
+
+</details>
+
+<details>
+<summary><strong>Ücretli mi?</strong></summary>
+
+<br />
+
+Hayır. MIT lisanslı, tamamen ücretsiz. Yalnızca kullandığın asistanın kendi ücreti varsa o geçerlidir.
+
+</details>
+
+---
+
+## Nasıl çalışır?
 
 ```mermaid
 graph LR
@@ -62,132 +345,29 @@ graph LR
     sunucu --> mail["İTÜ Mail"]
 ```
 
-Sunucu her servise ayrı bir istemci sınıfıyla konuşur, kendi oturumunu ve önbelleğini yönetir. Ninova ve OBS aynı İTÜ SSO girişini paylaşır, kütüphane hesabı bilgisi ise tamamen ayrıdır ve Ninova şifresiyle karışmaz. Kimlik gerektirmeyen araçlar (public ders programı, kampüs servisleri, arşiv) hiçbir zaman şifreni kullanmaz.
+Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilgili İTÜ sistemine gider, cevabı düzenli bir biçimde geri verir, asistan da bunu sana anlatır. Ninova ve OBS aynı İTÜ girişini kullanır. Şifre gerektirmeyen araçlar şifreni hiç kullanmaz.
 
-Ayrıntılı iç mimari ve istemci sınıfları için: [docs/advanced.md](docs/advanced.md).
+<details>
+<summary><strong>Tüm araçları göster</strong></summary>
 
----
-
-## Örnekler
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/cli_demo.gif" alt="itu-mcp CLI demo" width="720" />
-  <br />
-  <em>CLI: <code>--version</code>, <code>--list-tools</code>, <code>--list-prompts</code> (gerçek çıktı)</em>
-</p>
-
-Claude Desktop üzerinden doğal dilde soru sorma örnekleri:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/bu_d%C3%B6nem_hangi_dersler.png" alt="Bu dönem hangi dersleri aldım" width="720" />
-  <br />
-  <em>OBS: dönem kayıtlı dersler ve program</em>
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/son_duyurular.png" alt="Son duyurular ve mesajlar" width="720" />
-  <br />
-  <em>Ninova: son duyurular ve mesaj panosu özeti</em>
-</p>
-
----
-
-## Hızlı başlangıç
-
-### 1. Kurulum
-
-```bash
-pipx install itu-mcp
-# veya: pip install --user itu-mcp
-# kaynaktan:
-#   git clone https://github.com/yatuk/itu-mcp.git
-#   cd itu-mcp && pip install -e .
-```
-
-### 2. Kimlik bilgileri
-
-```bash
-cp .env.example .env
-# NINOVA_USERNAME=ad.soyad@itu.edu.tr
-# NINOVA_PASSWORD=********
-```
-
-Kullanıcı adı genelde **İTÜ e-posta** adresidir, yalnızca yerel kısım değil.
-
-### 3. Duman testi
-
-```bash
-itu-mcp --version
-itu-mcp --check-auth
-itu-mcp --list-tools
-itu-mcp --list-prompts
-```
-
-### 4. MCP istemcisini bağla
-
-**Claude Code**
-
-```bash
-claude mcp add itu itu-mcp \
-  -e NINOVA_USERNAME=ad.soyad@itu.edu.tr \
-  -e NINOVA_PASSWORD=sifren
-```
-
-**Codex CLI**
-
-```bash
-codex mcp add itu \
-  --env NINOVA_USERNAME=ad.soyad@itu.edu.tr \
-  --env NINOVA_PASSWORD=sifren \
-  -- itu-mcp
-```
-
-**Claude Desktop / Cursor:** [docs/installation.md](docs/installation.md) ve `examples/` klasörüne bak.
-
-> **Bu kadar.** İstemciyi yeniden başlat ve sor: *"Ninova'daki derslerimi listele"* veya *"OBS'te bu dönem kayıtlı derslerim?"*
-
----
-
-## Ne sorabilirsin?
-
-- *"Bu hafta hangi ödevlerimin teslimi var?"*
-- *"EEF 211E sınıf dosyalarındaki PDF'i oku."*
-- *"OBS'te 2025-2026 Bahar kayıtlı derslerim neler?"*
-- *"CEN 354E ara notlarım?"*
-- *"Danışmanım kim? Staj bilgilerimi göster."*
-- *"Yardım biletimin durumunu ve kurum cevabını göster."*
-- *"Transkript PDF indir."*
-- *"Son okunmamış mesajlarımı listele ve seçtiğim PDF ekini özetle."*
-- *"Gelecek dönem hangi dersleri almalıyım?"*<sup>✨</sup>
-- *"Vizeden 63 aldım, sınıf 30,35,40...90 arası dağılmış, hangi harf notunu alırım?"*<sup>✨</sup>
-- *"BLG bölümünde bu dönem hangi dersler açılmış, kontenjan durumu ne?"*<sup>✨</sup>
-- *"BLG 223E'yi almak için önce hangi dersleri almam lazım?"*<sup>✨</sup>
-- *"BBB binası neresi, bugün 10:00'da hangi derslikler boş görünüyor?"*<sup>✨</sup>
-- *"İTÜ mekik saatleri ve yüzme havuzu çalışma saatleri?"*<sup>✨</sup>
-- *"Kütüphanede Introduction to Algorithms var mı?"*<sup>✨</sup>
-
-<sup>✨</sup> <sub>Kimlik gerektirmez, `.env` olmadan da çalışır.</sub>
-
----
-
-## Araç haritası
+<br />
 
 <table>
   <tr>
-    <td align="center" width="20%"><strong>Ninova</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="20%"><strong>OBS & Portal</strong><br/><sub>oturum gerekir</sub></td>
-    <td align="center" width="20%"><strong>Public İTÜ</strong><br/><sub>kimlik gerekmez ✨</sub></td>
-    <td align="center" width="20%"><strong>Planlama & Kütüphane</strong><br/><sub>karma</sub></td>
-    <td align="center" width="20%"><strong>Arşiv</strong><br/><sub>kimlik gerekmez ✨</sub></td>
+    <td align="center" width="20%"><strong>Ninova</strong><br/><sub>giriş gerekir</sub></td>
+    <td align="center" width="20%"><strong>OBS ve Portal</strong><br/><sub>giriş gerekir</sub></td>
+    <td align="center" width="20%"><strong>Herkese açık</strong><br/><sub>giriş gerekmez</sub></td>
+    <td align="center" width="20%"><strong>Planlama ve kütüphane</strong><br/><sub>karma</sub></td>
+    <td align="center" width="20%"><strong>Arşiv</strong><br/><sub>giriş gerekmez</sub></td>
   </tr>
   <tr>
-    <td>
+    <td valign="top">
       <code>auth_status</code> · <code>list_courses</code><br/>
       <code>get_course_*</code> · <code>sync_all_courses</code><br/>
       <code>get_upcoming_deadlines</code><br/>
       <code>read_resource_text</code> · <code>submit_assignment</code>
     </td>
-    <td>
+    <td valign="top">
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
       <code>obs_list_registered_courses</code><br/>
       <code>obs_get_registration_draft</code> · <code>obs_save_registration_draft</code><br/>
@@ -197,20 +377,20 @@ codex mcp add itu \
       <code>get_cafeteria_menu</code> · <code>obs_get_notifications</code><br/>
       <code>obs_get_help_tickets</code> · <code>get_help_ticket</code>
     </td>
-    <td>
+    <td valign="top">
       <code>get_public_course_schedule</code> · <code>get_public_exam_schedule</code><br/>
       <code>obs_get_grade_distribution</code><br/>
       <code>search_itu_directory</code> · <code>search_campus_locations</code><br/>
       <code>get_shuttle_schedule</code> · <code>get_sports_facility_hours</code><br/>
       <code>get_itu_announcements</code> · <code>get_academic_calendar</code>
     </td>
-    <td>
+    <td valign="top">
       <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>library_*</code>
     </td>
-    <td>
+    <td valign="top">
       <code>archive_who_taught</code> · <code>archive_course_history</code><br/>
       <code>archive_fill_rate</code> · <code>archive_term_sections</code><br/>
       <code>archive_search_courses</code> · <code>plan_remaining_courses</code><br/>
@@ -224,77 +404,47 @@ codex mcp add itu \
   </tr>
 </table>
 
-### Kayıt taslağı ve geçmiş not dağılımları
+Her aracın ne yaptığı, parametreleri ve sınırları: [docs/advanced.md](docs/advanced.md). Kayıt planlama araçları için [docs/registration-planning.md](docs/registration-planning.md), not dağılımları için [docs/grade-distribution.md](docs/grade-distribution.md).
 
-Ders seçimini kayıt öncesinde gözden geçirmek için dört araç:
+</details>
 
-| Araç | Ne işe yarar? |
-|---|---|
-| `obs_get_registration_draft()` | Kayıtlı taslağı CRN’ler, alınabilirlik durumu, hata nedenleri ve varsa taslak takvimiyle okur. |
-| `obs_get_elective_group(group_id)` | Seçmeli grubu doldurabilen dersleri, bu dönem açılan şubeleri, CRN’leri, gün/saat bilgilerini ve alınabilirlik durumunu gösterir. |
-| `obs_validate_registration_plan(crns)` | CRN listesini saat çakışmaları, ön şartlar, seçmeli gereksinimleri, mezuniyet ilerlemesi ve sonraki derslere etkisi açısından kontrol eder. |
-| `obs_get_grade_distribution(course_code, year, term_code)` | Önceki dönemlerde her harf notunu kaç kişinin aldığını ve yüzdelerini, OBS’nin birlikte raporladığı ders kodlarıyla gösterir. |
+<details>
+<summary><strong>Ayarlar (isteğe bağlı)</strong></summary>
 
-Bu araçlar taslağını veya ders kayıtlarını değiştirmez. Kesin bir engel bulunmasa bile eksik bilgiler varsa plan sonucu `incomplete` olur. Sonraki derslere geçiş, ön şart derslerini gereken notlarla tamamlamana bağlıdır. Not dağılımı herkese açıktır. `year`, akademik yılın bittiği yılı belirtir (2026 = 2025-2026). Yıl ve dönem filtresi isteğe bağlıdır. Örnekler ve sınırlar: [Kayıt planlama](docs/registration-planning.md) ve [Not dağılımları](docs/grade-distribution.md).
+<br />
 
-Taslağı kaydetmek için ayrıca `obs_save_registration_draft(crns, confirm=true)` kullanılabilir. Varsayılan olarak kapalıdır, açmak için sunucu ortamında `NINOVA_OBS_REGISTRATION_WRITES=1` ayarlanmalıdır. Yalnızca yerel stdio sunucusunda çalışır, uzak HTTP sunucusunda hiçbir ayarla açılmaz. Kaydetme mevcut taslağın tamamını değiştirir. Taslaktan ders silinecekse araç hiçbir şey göndermez, silinecek CRN'leri listeler ve ancak `allow_replace=true` ile tekrar çağrılırsa kaydeder. Sonuçta önceki taslağın CRN'leri her zaman yer alır. Belirsiz bir sonuçta isteği kendiliğinden tekrarlamaz. Ders kaydı veya ders bırakma işlemi yapmaz. Bu araç gerçek OBS üzerinde henüz başarılı bir kayıtla doğrulanmadı, ilk kullanımda sonucu OBS'nin kendi sayfasından kontrol et.
+Çoğu kişinin hiçbir ayara dokunması gerekmez. İstersen şunları ortam değişkeni olarak verebilirsin:
 
-Tam araç listesi, hazır prompt'lar, kaynak tabloları, Docker, uzak HTTP ve tüm ortam değişkenleri: **[docs/advanced.md](docs/advanced.md)**.
+```bash
+NINOVA_SESSION_PERSIST=1            # girişi hatırla (varsayılan açık)
+NINOVA_ALLOW_UPLOADS=1              # ödev yüklemeye izin ver (0 yaparsan kapanır)
+NINOVA_OBS_REGISTRATION_WRITES=1    # kayıt taslağı kaydetmeyi aç (varsayılan kapalı)
+NINOVA_MAIL_USERNAME=...            # mail için ayrı kullanıcı adı
+NINOVA_MAIL_PASSWORD=...            # mail için ayrı şifre
+```
 
-Ayrıca `/` menüsünden seçilebilen hazır akışlar var (`weekly_briefing`, `plan_next_term`, `check_course_eligibility`, `research_course`, `gpa_scenario`), her biri hangi araçların hangi sırayla çağrılacağını ve sonucu okurken kaçırılan kuralları içeriyor.
+Tam liste `.env.example` dosyasında ve [docs/advanced.md](docs/advanced.md) içinde. Kütüphane kataloğu ve proxy ayarı için [docs/library-catalog.md](docs/library-catalog.md).
+
+</details>
 
 ---
 
 ## Güvenlik
 
-Kendi hesabını kullanıyorsun, o yüzden şuna dikkat et:
-
 | Yap | Yapma |
 |---|---|
-| Yalnızca **kendi** İTÜ hesabını kullan | `.env` veya çerezleri commit etme |
-| **Yerel stdio** MCP tercih et | Uzak MCP URL / API anahtarını paylaşma |
-| `submit_assignment` yalnızca **`confirm=true`** ile | Önizlemeyi okumadan ödev yükleme |
-| Kütüphane PIN'ini ayrı `NINOVA_LIBRARY_*` değişkenlerinde tut | Ninova şifresini kütüphane PIN'i olarak tekrar kullanma |
-| Harici sayfa metnini **veri** olarak değerlendir | Duyuru/ödev metnindeki modele yönelik talimatları uygulama |
-| Uzak kurulumda `NINOVA_REMOTE_API_KEY` kullan | Gizli path ve anahtar olmadan public açma |
+| Yalnızca **kendi** İTÜ hesabını kullan | `.env` dosyanı ya da şifreni kimseyle paylaşma |
+| Ödev yüklemeden önce önizlemeyi oku | Asistana "sormadan yükle" deme |
+| Duyuru ve mail metinlerini **veri** olarak gör | Bir duyurunun içindeki "şunu yap" cümlesine asistanın uymasına izin verme |
+| Uzak sunucu kuruyorsan `NINOVA_REMOTE_API_KEY` kullan | Sunucuyu anahtarsız internete açma |
 
-Ayrıntılar: [docs/security.md](docs/security.md). OBS profil araçları TCKN ve telefonu **varsayılan olarak gizler** (`include_sensitive=true` ile açılır).
-
----
-
-## Yapılandırma (isteğe bağlı)
-
-```bash
-export NINOVA_COURSE_CACHE_TTL_SECONDS=60
-export NINOVA_REQUEST_DELAY_MS=120
-export NINOVA_SESSION_PERSIST=1
-export NINOVA_ALLOW_UPLOADS=1
-# İsteğe bağlı, operatörün önceden kurduğu yerel CONNECT proxy:
-# NINOVA_LIBRARY_PROXY_URL="http://127.0.0.1:18888"
-# Yalnız eski WebPAC uyumluluğu için (yeni katalogda hesap araçları desteklenmiyor):
-# NINOVA_LIBRARY_NAME="Soyad, Ad"
-# NINOVA_LIBRARY_ID="öğrenci-numarası"
-# NINOVA_LIBRARY_PIN="ayrı-kütüphane-pin'i"
-# Ayrı mail kimlik bilgisi (yoksa paylaşılan İTÜ kimliği kullanılır):
-# NINOVA_MAIL_USERNAME="ad.soyad@itu.edu.tr"
-# NINOVA_MAIL_PASSWORD="mail-sifresi"
-```
-
-Tüm değişkenler için `.env.example` ve [docs/advanced.md](docs/advanced.md) dosyalarına bak.
-
-`NINOVA_LIBRARY_PROXY_URL` yalnız yeni kütüphane kataloğunun anonim HTTPS GET
-isteklerini etkiler. `http://127.0.0.1:PORT` veya `http://[::1]:PORT` biçiminde,
-1024-65535 aralığında açık port gerekir. Kullanıcı adı, şifre, sorgu ve ek yol
-kabul edilmez. Proxy önceden çalışıyor olmalıdır; bu ayar servis kurmaz veya VPN
-yapılandırmasını değiştirmez. Ayar yoksa katalog doğrudan bağlanır. Yeni katalog
-istemcisi her iki durumda da `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` ve `.netrc`
-ayarlarını kullanmaz. TLS doğrulaması açıktır; proxy hatasında başka rotaya
-geçilmez. Eski WebPAC hesap araçları ve diğer İTÜ/PaperBridge istemcileri bu
-ayardan etkilenmez. Kapsam ve doğrulama: [docs/library-catalog.md](docs/library-catalog.md).
+OBS profil araçları TCKN ve telefonu, yardım talebi aracı ise kişi adlarını varsayılan olarak gizler. Ayrıntılar: [docs/security.md](docs/security.md).
 
 ---
 
 ## Geliştirme
+
+Katkıya açık. Bir hata bulduysan ya da bir fikrin varsa [sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues).
 
 ```bash
 git clone https://github.com/yatuk/itu-mcp.git
@@ -303,30 +453,23 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 source .venv/bin/activate
 pip install -e ".[playwright]"
-python -m unittest discover -s tests -v
+python -m pytest tests/ -q
 ```
 
----
-
-## Bağlantılar
-
-| Kaynak | URL |
+| Kaynak | Bağlantı |
 |---|---|
-| **Kurulum** | [docs/installation.md](docs/installation.md) |
-| **Gelişmiş / araçlar** | [docs/advanced.md](docs/advanced.md) |
-| **Güvenlik** | [docs/security.md](docs/security.md) |
-| **Değişiklik günlüğü** | [CHANGELOG.md](CHANGELOG.md) |
-| **Sorunlar** | [github.com/yatuk/itu-mcp/issues](https://github.com/yatuk/itu-mcp/issues) |
+| Kurulum | [docs/installation.md](docs/installation.md) |
+| Tüm araçlar ve gelişmiş kullanım | [docs/advanced.md](docs/advanced.md) |
+| Güvenlik | [docs/security.md](docs/security.md) |
+| Değişiklik günlüğü | [CHANGELOG.md](CHANGELOG.md) |
 
 ---
 
 ## Teşekkür
 
-Bu proje, [**Hikmet Gultekin**](https://github.com/hikmedit)'in yazdığı orijinal **[ninova-mcp](https://github.com/hikmedit/ninova-mcp)** üzerine kuruldu. İlk açık kaynak, kimlik bilgisiyle çalışan İTÜ Ninova MCP sunucusudur (LMS giriş, HTML ayrıştırma, izleme, `.mcpb` paketleme).
+Bu proje, [**Hikmet Gultekin**](https://github.com/hikmedit)'in yazdığı orijinal **[ninova-mcp](https://github.com/hikmedit/ninova-mcp)** üzerine kuruldu. İlk açık kaynak, kimlik bilgisiyle çalışan İTÜ Ninova MCP sunucusudur.
 
-İTÜ MCP bunun üzerine OBS öğrenci portalı API'lerini, PDF metin okumayı, güvenli ödev yüklemeyi, oturum kalıcılığını, uzak API anahtarını ve arşiv/prompt/resource desteğini ekliyor.
-
-Salt okunur İTÜ Mail araçlarını (`mail_status`, `mail_list_inbox`, `mail_get_message`, `mail_get_attachment`) [**tzi4**](https://github.com/tzi4) katkı olarak ekledi, teşekkürler.
+[**tzi4**](https://github.com/tzi4) salt okunur İTÜ Mail araçlarını, kayıt planlama ve not dağılımı araçlarını, yardım talebi detaylarını ve OBS tarafındaki pek çok düzeltmeyi katkı olarak ekledi. Teşekkürler.
 
 ---
 

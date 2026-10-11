@@ -1,6 +1,55 @@
 # Changelog
 
-## Yayınlanmamış
+## v1.0.0
+
+İlk kararlı sürüm. 0.7.2'den bu yana araç sayısı iki katına yaklaştı, test sayısı 321'den
+761'e çıktı ve README baştan yazıldı.
+
+### Yeni araçlar
+
+- **İTÜ Mail (salt okunur):** `mail_status`, `mail_list_inbox`, `mail_get_message`,
+  `mail_get_attachment`. Okunmamış durumu değiştirmez, ekleri bellekte inceler
+- **Kayıt planlama:** `obs_get_registration_draft`, `obs_get_elective_group`,
+  `obs_validate_registration_plan`. CRN listesini çakışma, ön şart, kontenjan ve kredi
+  limiti açısından OBS'nin taslak kontrolüyle doğrular
+- **Kayıt taslağı kaydetme:** `obs_save_registration_draft`. Varsayılan olarak kapalı,
+  yalnızca yerel sunucuda, taslaktan ders silinecekse ayrı onay ister. Gerçek OBS üzerinde
+  henüz başarılı bir kayıtla doğrulanmadı
+- **Not dağılımı:** `obs_get_grade_distribution` (canlı OBS) ve `archive_grade_distribution`
+  (arşiv)
+- **Yardım talepleri:** `get_help_ticket` ile talep detayı. Yalnızca kendi taleplerini okur,
+  kişi adlarını varsayılan olarak gizler
+- **Ders programı:** `get_public_course_schedule` artık ada göre filtre ve sayfalama alıyor
+- **Arşiv:** aşağıda anlatılan altı yeni araç
+
+### Düzeltmeler
+
+- OBS ders araması yeniden çalışıyor (eski adres 404 dönüyordu), ön şartlar resmi branş
+  tablosundan okunuyor
+- Harf notları dönem kimliğiyle, kampüs kartı ve kota Portal'ın JSON servislerinden okunuyor
+- Kütüphane varsayılan olarak yeni Sirsi kataloğuna bağlanıyor. Eski hesap araçları yalnızca
+  eski sunucu elle ayarlanırsa çalışır
+- GANO hesabı eksik notlu dönemlerde uydurma bir sayı yerine boş dönüyor, resmi dönem
+  ortalamasıyla karşılaştırma eklendi
+- Akademik takvim ve kayıt durumu yeniden yazıldı
+- Ninova takibinde eksik okunan sayfalar artık yanlış "silindi" bildirimi üretmiyor
+- Windows'ta `tzdata` eksikliği yüzünden çöken takvim, kayıt durumu ve not dağılımı
+  araçları düzeltildi
+- Yoklama aracı verinin Kepler'den mi Ninova'dan mı geldiğini bildiriyor
+- Boş derslik aracı OBS'nin yer tutucu derslik ve bina değerlerini gerçek oda saymıyor
+- Ders arşivi yeni adresinden (`itu-ders.com`) okunuyor
+
+### Yükseltirken bilmen gerekenler
+
+- İlk `sync_all_courses` çağrısı takip durumunu yeni biçime çevirir ve o çağrıda fark
+  üretmez
+- `obs_get_help_tickets` artık varsayılan olarak talep sayfalarını tek tek açmıyor,
+  istersen `include_details=true` ver
+- `obs_validate_registration_plan` ve `obs_get_elective_group` OBS'ye kontrol isteği
+  gönderdiği için istemcilere "salt okunur" olarak bildirilmiyor
+
+Bu sürümdeki araçların ve düzeltmelerin büyük kısmı [tzi4](https://github.com/tzi4)
+tarafından katkı olarak eklendi.
 
 ### Arşiv: altı yeni salt okunur araç
 
