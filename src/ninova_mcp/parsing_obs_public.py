@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+from itertools import zip_longest
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
+
+from bs4 import BeautifulSoup, Tag
 
 from .parsing_common import COURSE_CODE_RE, clean_text, make_soup, normalize_lookup_text
 from .parsing_page import parse_html_page
@@ -221,6 +224,169 @@ def _parse_schedule_reservation(raw: str | None) -> tuple[list[dict[str, Any]], 
     return segments, bool(segments)
 
 
+# Columns of a schedule row. The first ten are always there (shorter rows are
+# skipped); the page has dropped the later ones on some terms.
+_SCHEDULE_ENROLLED, _SCHEDULE_RESERVATION, _SCHEDULE_PROGRAMS = 10, 11, 12
+_SCHEDULE_PREREQUISITES, _SCHEDULE_CREDIT_PREREQUISITE = 13, 14
+_SCHEDULE_FIXED_COLUMNS = 10
+
+
+def _find_schedule_table(soup: BeautifulSoup) -> Tag | None:
+    table = soup.find("table", id="dersProgramContainer")
+    if table is not None:
+        return table
+    # Fallback: look for any table with CRN header
+    for t in soup.find_all("table"):
+        headers = [clean_text(td.get_text(" ", strip=True)) for td in (t.find("thead") or t).find_all("td")]
+        if headers and normalize_lookup_text(headers[0]) == "crn":
+            return t
+    return None
+
+
+def _schedule_table_missing(soup: BeautifulSoup, page_url: str) -> dict[str, Any]:
+    # Check for empty result: the page injected a "no data" message
+    body_text = clean_text(soup.get_text(" ", strip=True))
+    if "bulunamad" in body_text or "kayit" in body_text:
+        return {
+            "url": page_url,
+            "count": 0,
+            "courses": [],
+            "message": "Bu dönem için henüz program açıklanmamış veya bölüm kodu geçersiz.",
+        }
+    return {
+        "url": page_url,
+        "count": 0,
+        "courses": [],
+        "parse_warning": "Ders programı tablosu bulunamadı; OBS sayfa yapısı değişmiş olabilir.",
+    }
+
+
+def _schedule_course_code(cell: Tag, cell_text: str) -> tuple[str, str | None, str | None]:
+    """``(code, bransKodu, dersNo)``; the last two come from the query of the code link."""
+    anchor = cell.find("a", href=True)
+    if not anchor:
+        return cell_text, None, None
+    code = clean_text(anchor.get_text(" ", strip=True))
+    if not anchor["href"]:
+        return code, None, None
+    query = parse_qs(urlparse(anchor["href"]).query)
+    return code, (query.get("bransKodu") or [None])[0], (query.get("dersNo") or [None])[0]
+
+
+def _schedule_cell_lines(cell: Tag) -> list[str | None]:
+    """The ``<br/>``-separated lines of a building, day, time or room cell.
+
+    Empty lines are dropped. Placeholders become None but keep their position
+    so that the columns still line up session by session.
+    """
+    lines: list[str | None] = []
+    for part in re.split(r"<br\s*/?\s*>", cell.decode_contents(), flags=re.IGNORECASE):
+        # Strip any HTML tags (e.g. <a href="...">BBB</a> → BBB)
+        text = clean_text(re.sub(r"<[^>]+>", "", part))
+        if text:
+            lines.append(_schedule_value(text))
+    return lines
+
+
+def _schedule_sessions(cells: list[Tag]) -> list[dict[str, str | None]]:
+    """Meeting slots of a section: line ``n`` of the building, day, time and room cells."""
+    columns = (_schedule_cell_lines(cells[index]) for index in (5, 6, 7, 8))
+    sessions: list[dict[str, str | None]] = []
+    for building, day, time, room in zip_longest(*columns):
+        session = {"building": building, "day": day, "time": time, "room": room}
+        if any(session.values()):
+            sessions.append(session)
+    return sessions
+
+
+def _schedule_count(text: str | None) -> int | None:
+    """A quota or enrolment cell as a number; any other text, ``--5`` included, is None."""
+    if text is None or not text.lstrip("-").isdigit():
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _schedule_eligible_programs(cell: Tag | None, cell_text: str | None) -> list[str]:
+    """Programme codes that may take the section, from the cell's link or its plain text."""
+    if cell is None:
+        return []
+    anchor = cell.find("a", href=True)
+    listed = clean_text(anchor.get_text(" ", strip=True)) if anchor else (cell_text or "")
+    programs = [p.strip() for p in listed.split(",") if p.strip()]
+    # OBS sometimes repeats the same program code in this cell's source text.
+    return list(dict.fromkeys(p for p in programs if _schedule_value(p)))
+
+
+def _schedule_prerequisite(cell: Tag | None, cell_text: str | None) -> tuple[bool, str | None]:
+    """``(has_prerequisites, detail_url)`` from the "Detay" link or the "-" of the cell."""
+    if cell is None:
+        return False, None
+    anchor = cell.find("a", href=True)
+    if anchor:
+        return True, anchor["href"]
+    return bool(cell_text and cell_text not in ("-", "")), None
+
+
+def _schedule_credit_prerequisite(cell: Tag | None, cell_text: str | None) -> tuple[str | None, str | None]:
+    """``(rule, detail_url)`` of the credit/class-standing prerequisite cell.
+
+    The cell holds "-" or a "Detay" link to the course page. The link text is
+    not a rule, so only free text is reported as one.
+    """
+    if cell is None:
+        return None, None
+    anchor = cell.find("a", href=True)
+    if anchor:
+        return None, anchor["href"]
+    return _schedule_value(cell_text), None
+
+
+def _parse_schedule_row(cells: list[Tag]) -> dict[str, Any]:
+    """One section of the schedule table, from a row that has its ten fixed columns."""
+    cell_texts = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+
+    def optional(index: int) -> tuple[Tag | None, str | None]:
+        return (cells[index], cell_texts[index]) if index < len(cells) else (None, None)
+
+    code_text, brans_kodu, ders_no = _schedule_course_code(cells[1], cell_texts[1])
+    method = cell_texts[3]
+    sessions = _schedule_sessions(cells)
+    timed = [s for s in sessions if s["day"] and s["time"]]
+
+    reservation = _schedule_value(optional(_SCHEDULE_RESERVATION)[1])
+    reservations, reservation_parsed = _parse_schedule_reservation(reservation)
+    has_prerequisites, detay_url = _schedule_prerequisite(*optional(_SCHEDULE_PREREQUISITES))
+    credit_prereq, credit_prereq_url = _schedule_credit_prerequisite(*optional(_SCHEDULE_CREDIT_PREREQUISITE))
+
+    return {
+        "crn": cell_texts[0],
+        "code": code_text,
+        "brans_kodu": brans_kodu,
+        "ders_no": ders_no,
+        "name": cell_texts[2],
+        "method": method,
+        "instructor": _schedule_value(cell_texts[4]),
+        "section_kind": "extra_exam" if normalize_lookup_text(method) == "ek sinav" else "regular",
+        "sessions": sessions,
+        "unscheduled": not timed,
+        "location_announced_later": any(not s["building"] or not s["room"] for s in timed),
+        "capacity": _schedule_count(cell_texts[9]),
+        "enrolled": _schedule_count(optional(_SCHEDULE_ENROLLED)[1]),
+        "reservation": reservation,
+        "reservations": reservations,
+        **({"reservation_unparsed": True} if reservation and not reservation_parsed else {}),
+        "eligible_programs": _schedule_eligible_programs(*optional(_SCHEDULE_PROGRAMS)),
+        "has_prerequisites": has_prerequisites,
+        "prerequisite_detail_url": detay_url,
+        "has_credit_prerequisite": bool(credit_prereq or credit_prereq_url),
+        "credit_prerequisite": credit_prereq,
+        "credit_prerequisite_detail_url": credit_prereq_url,
+    }
+
+
 def extract_course_schedule_table(
     html: str,
     page_url: str,
@@ -241,30 +407,9 @@ def extract_course_schedule_table(
     register for.
     """
     soup = make_soup(html)
-    table = soup.find("table", id="dersProgramContainer")
+    table = _find_schedule_table(soup)
     if table is None:
-        # Fallback: look for any table with CRN header
-        for t in soup.find_all("table"):
-            headers = [clean_text(td.get_text(" ", strip=True)) for td in (t.find("thead") or t).find_all("td")]
-            if headers and normalize_lookup_text(headers[0]) == "crn":
-                table = t
-                break
-    if table is None:
-        # Check for empty result: the page injected a "no data" message
-        body_text = clean_text(soup.get_text(" ", strip=True))
-        if "bulunamad" in body_text or "kayit" in body_text:
-            return {
-                "url": page_url,
-                "count": 0,
-                "courses": [],
-                "message": "Bu dönem için henüz program açıklanmamış veya bölüm kodu geçersiz.",
-            }
-        return {
-            "url": page_url,
-            "count": 0,
-            "courses": [],
-            "parse_warning": "Ders programı tablosu bulunamadı; OBS sayfa yapısı değişmiş olabilir.",
-        }
+        return _schedule_table_missing(soup, page_url)
 
     # Headers are in <td> inside <thead>, not <th> (unusual)
     thead = table.find("thead")
@@ -275,149 +420,11 @@ def extract_course_schedule_table(
     if tbody is None:
         return {"url": page_url, "count": 0, "courses": [], "headers": headers}
 
-    courses: list[dict[str, Any]] = []
-    for row in tbody.find_all("tr"):
-        cells = row.find_all("td")
-        if len(cells) < 10:
-            continue
-
-        cell_texts = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
-
-        crn = cell_texts[0] if len(cell_texts) > 0 else None
-
-        # Ders Kodu: extract from link
-        code_anchor = cells[1].find("a", href=True) if len(cells) > 1 else None
-        code_text = clean_text(code_anchor.get_text(" ", strip=True)) if code_anchor else (cell_texts[1] if len(cell_texts) > 1 else None)
-        code_href = code_anchor["href"] if code_anchor else None
-
-        # Parse bransKodu and dersNo from href
-        brans_kodu = None
-        ders_no = None
-        if code_href:
-            from urllib.parse import parse_qs, urlparse as _urlparse
-            qs = parse_qs(_urlparse(code_href).query)
-            brans_kodu = (qs.get("bransKodu") or [None])[0]
-            ders_no = (qs.get("dersNo") or [None])[0]
-
-        name = cell_texts[2] if len(cell_texts) > 2 else None
-        method = cell_texts[3] if len(cell_texts) > 3 else None
-        instructor = _schedule_value(cell_texts[4]) if len(cell_texts) > 4 else None
-
-        # Bina / Gün / Saat / Derslik: split on <br/>
-        def _split_br(cell_idx: int) -> list[str]:
-            if len(cells) <= cell_idx:
-                return []
-            inner = cells[cell_idx].decode_contents() if hasattr(cells[cell_idx], "decode_contents") else str(cells[cell_idx])
-            parts_html = re.split(r"<br\s*/?\s*>", inner, flags=re.IGNORECASE)
-            parts: list[str | None] = []
-            for p in parts_html:
-                # Strip any HTML tags (e.g. <a href="...">BBB</a> → BBB)
-                text = re.sub(r"<[^>]+>", "", p)
-                text = clean_text(text)
-                if text:
-                    # Placeholders keep their position so that the columns
-                    # still line up session by session.
-                    parts.append(_schedule_value(text))
-            return parts
-
-        bldgs = _split_br(5)  # Bina: may contain <a> links
-        days = _split_br(6)   # Gün
-        times = _split_br(7)  # Saat
-        rooms = _split_br(8)  # Derslik
-
-        # Build sessions list
-        max_sessions = max(len(bldgs), len(days), len(times), len(rooms))
-        sessions: list[dict[str, str | None]] = []
-        for i in range(max_sessions):
-            session = {
-                "building": bldgs[i] if i < len(bldgs) else None,
-                "day": days[i] if i < len(days) else None,
-                "time": times[i] if i < len(times) else None,
-                "room": rooms[i] if i < len(rooms) else None,
-            }
-            if any(session.values()):
-                sessions.append(session)
-        timed = [s for s in sessions if s["day"] and s["time"]]
-        unscheduled = not timed
-        location_announced_later = any(not s["building"] or not s["room"] for s in timed)
-
-        capacity = None
-        enrolled = None
-        try:
-            capacity = int(cell_texts[9]) if len(cell_texts) > 9 and cell_texts[9].lstrip("-").isdigit() else None
-        except ValueError:
-            pass
-        try:
-            enrolled = int(cell_texts[10]) if len(cell_texts) > 10 and cell_texts[10].lstrip("-").isdigit() else None
-        except ValueError:
-            pass
-
-        reservation = _schedule_value(cell_texts[11]) if len(cell_texts) > 11 else None
-        reservations, reservation_parsed = _parse_schedule_reservation(reservation)
-
-        # Dersi Alabilen Programlar
-        eligible_programs: list[str] = []
-        eligible_text = cell_texts[12] if len(cell_texts) > 12 else None
-        if len(cells) > 12:
-            eligible_anchor = cells[12].find("a", href=True)
-            if eligible_anchor:
-                eligible_programs = [
-                    p.strip() for p in clean_text(eligible_anchor.get_text(" ", strip=True)).split(",") if p.strip()
-                ]
-            elif eligible_text and eligible_text != "-":
-                eligible_programs = [p.strip() for p in eligible_text.split(",") if p.strip()]
-        # OBS sometimes repeats the same program code in this cell's source text.
-        eligible_programs = list(dict.fromkeys(p for p in eligible_programs if _schedule_value(p)))
-
-        # Ders Önşartları: "Detay" link or "-"
-        detay_url = None
-        has_prerequisites = False
-        if len(cells) > 13:
-            detay_anchor = cells[13].find("a", href=True)
-            if detay_anchor:
-                detay_url = detay_anchor["href"]
-                has_prerequisites = True
-            else:
-                prereq_text = cell_texts[13] if len(cell_texts) > 13 else None
-                has_prerequisites = bool(prereq_text and prereq_text not in ("-", ""))
-
-        # Başarılan Kredi/Sınıf Önşartı: "-" or a "Detay" link to the course page.
-        # The link text is not a rule, so only free text is reported as one.
-        credit_prereq = None
-        credit_prereq_url = None
-        if len(cells) > 14:
-            credit_anchor = cells[14].find("a", href=True)
-            if credit_anchor:
-                credit_prereq_url = credit_anchor["href"]
-            else:
-                credit_prereq = _schedule_value(cell_texts[14])
-
-        section_kind = "extra_exam" if normalize_lookup_text(method) == "ek sinav" else "regular"
-
-        courses.append({
-            "crn": crn,
-            "code": code_text,
-            "brans_kodu": brans_kodu,
-            "ders_no": ders_no,
-            "name": name,
-            "method": method,
-            "instructor": instructor,
-            "section_kind": section_kind,
-            "sessions": sessions,
-            "unscheduled": unscheduled,
-            "location_announced_later": location_announced_later,
-            "capacity": capacity,
-            "enrolled": enrolled,
-            "reservation": reservation,
-            "reservations": reservations,
-            **({"reservation_unparsed": True} if reservation and not reservation_parsed else {}),
-            "eligible_programs": eligible_programs,
-            "has_prerequisites": has_prerequisites,
-            "prerequisite_detail_url": detay_url,
-            "has_credit_prerequisite": bool(credit_prereq or credit_prereq_url),
-            "credit_prerequisite": credit_prereq,
-            "credit_prerequisite_detail_url": credit_prereq_url,
-        })
+    courses = [
+        _parse_schedule_row(cells)
+        for row in tbody.find_all("tr")
+        if len(cells := row.find_all("td")) >= _SCHEDULE_FIXED_COLUMNS
+    ]
 
     return {
         "url": page_url,
