@@ -63,10 +63,7 @@ AUTO_ENV_SAFE_KEYS: frozenset[str] = frozenset(
         "NINOVA_SESSION_MAX_AGE_SECONDS",
         "NINOVA_TOOLSETS",
         "NINOVA_DISABLED_TOOLSETS",
-        # Remote transport settings that can only add a requirement or narrow
-        # the published tools. They stay honoured so that an existing remote
-        # setup does not silently lose its API key after an upgrade.
-        "NINOVA_REMOTE_API_KEY",
+        # Can only narrow the tools the remote transport publishes.
         "NINOVA_REMOTE_ALLOWED_TOOLS",
     }
 )
@@ -101,6 +98,10 @@ AUTO_ENV_BLOCKED_KEYS: frozenset[str] = frozenset(
         # Account writes.
         "NINOVA_OBS_REGISTRATION_WRITES",
         # Remote HTTP transport.
+        # Whoever writes the file would choose the secret. The remote server
+        # refuses to start when this is skipped, so a setup that kept its key
+        # in the working directory fails loudly instead of running open.
+        "NINOVA_REMOTE_API_KEY",
         "NINOVA_REMOTE_HOST",
         "NINOVA_REMOTE_PORT",
         "NINOVA_REMOTE_MCP_PATH",

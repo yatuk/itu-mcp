@@ -532,3 +532,43 @@ class OperatorSettingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UploadSourceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="itu-upload-src-")))
+        self.state = self.root / "state"
+        (self.state / "downloads").mkdir(parents=True)
+        (self.state / "session.json").write_text("{}", encoding="utf-8")
+
+    def resolve(self, raw: str) -> Path:
+        from ninova_mcp.local_files import resolve_upload_file
+
+        return resolve_upload_file(raw, state_dir=self.state)
+
+    def test_network_paths_are_refused_without_touching_them(self) -> None:
+        from ninova_mcp.local_files import LocalFileError
+
+        for raw in ("\\\\attacker-host\\share\\hw.pdf", "//attacker-host/share/hw.pdf", "\\\\?\\C:\\x"):
+            with self.subTest(raw=raw), patch.object(Path, "resolve") as resolve:
+                with self.assertRaises(LocalFileError):
+                    self.resolve(raw)
+                resolve.assert_not_called()
+
+    def test_state_files_are_refused(self) -> None:
+        from ninova_mcp.local_files import LocalFileError
+
+        for raw in (
+            str(self.state / "session.json"),
+            str(self.state / "downloads" / ".." / "session.json"),
+        ):
+            with self.subTest(raw=raw), self.assertRaises(LocalFileError):
+                self.resolve(raw)
+
+    def test_homework_anywhere_else_and_downloads_are_accepted(self) -> None:
+        homework = self.root / "hw.pdf"
+        homework.write_bytes(b"x")
+        downloaded = self.state / "downloads" / "sheet.pdf"
+        downloaded.write_bytes(b"x")
+        self.assertEqual(self.resolve(str(homework)), homework.resolve())
+        self.assertEqual(self.resolve(str(downloaded)), downloaded.resolve())

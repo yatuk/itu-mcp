@@ -314,7 +314,8 @@ class UploadElicitationTests(InteractionTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.html = UPLOAD_FIXTURE.read_text(encoding="utf-8")
-        self.file_path = self.directory / "rapor.pdf"
+        homework = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="itu-homework-")))
+        self.file_path = homework / "rapor.pdf"
         self.file_path.write_bytes(b"%PDF-1.4 " + b"x" * 2039)
         self.app = NinovaMcpApp()
         page = MagicMock()

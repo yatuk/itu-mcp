@@ -45,7 +45,13 @@ DANGEROUS_EXTENSIONS = frozenset({
     ".jar", ".jnlp",
     # macOS and Linux launchers
     ".app", ".command", ".action", ".workflow", ".scpt", ".pkg", ".dmg", ".desktop",
-    ".appimage", ".deb", ".rpm",
+    ".appimage", ".deb", ".rpm", ".terminal", ".inetloc", ".fileloc", ".mobileconfig",
+    # Python launchers that run on a double-click (.py is left alone: it is course material)
+    ".pyw", ".pyz", ".pyzw",
+    # Disk images, which mount on a double-click and hide what is inside
+    ".iso", ".img", ".vhd", ".vhdx",
+    # Other Windows types that start a program or a connection when opened
+    ".diagcab", ".xbap", ".wsb", ".rdp", ".msu", ".vsix", ".theme", ".themepack", ".iqy", ".slk",
 })
 
 _WINDOWS_RESERVED_NAMES = frozenset(
@@ -126,6 +132,33 @@ def _confine(raw: str | os.PathLike[str], *, state_dir: Path, extras: list[Path]
     if not _permitted(resolved, base=base_forms[1], extras=[item[1] for item in extra_forms],
                       state=state_forms[1]):
         raise refusal
+    return resolved
+
+
+def resolve_upload_file(raw: str | os.PathLike[str], *, state_dir: Path) -> Path:
+    """Return the real path of a file that may be uploaded, or raise.
+
+    Homework lives wherever the user keeps it, so there is no directory
+    allowlist here. Two things are refused before the filesystem is touched:
+    network paths, and the state directory's own files (session cookies,
+    tracking state). Downloads stay available.
+    """
+    text = os.fspath(raw)
+    if not text or "\x00" in text:
+        raise LocalFileError("file_path is empty or contains a NUL character.")
+    if text.startswith(("\\\\", "//")):
+        # Merely checking whether such a path exists makes Windows contact the named server.
+        raise LocalFileError("file_path must not be a network (UNC) or device path.")
+    state_forms = _root_forms(Path(state_dir))
+    download_forms = _root_forms(downloads_dir(state_dir))
+    refusal = LocalFileError("file_path is inside the server's state directory, which is never uploaded.")
+
+    lexical = Path(os.path.abspath(Path(text).expanduser()))
+    resolved = lexical.resolve()
+    for path in (lexical, resolved):
+        for form in (0, 1):
+            if _inside(path, state_forms[form]) and not _inside(resolved, download_forms[1]):
+                raise refusal
     return resolved
 
 

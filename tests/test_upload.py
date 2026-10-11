@@ -54,8 +54,9 @@ class SubmitAssignmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.html = FIXTURE.read_text(encoding="utf-8")
         self.temp = tempfile.TemporaryDirectory()
-        self.state_dir = Path(self.temp.name)
-        self.file_path = self.state_dir / "abroad.pdf"
+        self.state_dir = Path(self.temp.name) / "state"
+        self.state_dir.mkdir()
+        self.file_path = Path(self.temp.name) / "abroad.pdf"
         self.file_path.write_bytes(b"%PDF-1.4 test")
 
     def tearDown(self) -> None:

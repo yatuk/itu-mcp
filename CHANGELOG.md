@@ -56,6 +56,9 @@
   sayfadaki form da aynı ödevin yükleme sayfasına gönderim yapmalı. Onay penceresi dosyanın
   gerçekten gönderileceği adresi, boyutunu ve SHA-256 özetinin başını gösteriyor. Dosya onaydan
   önce bir kez okunuyor, diskte sonradan değişse bile onaylanan içerik gönderiliyor
+- `submit_assignment` ağ yolundaki (`\\sunucu\paylasim`) dosyaları ve durum klasörünün kendi
+  dosyalarını (oturum çerezleri gibi) yüklemeyi reddediyor. İndirme klasörü ve bilgisayarındaki
+  diğer dosyalar yüklenebilir
 - `obs_get_profile`, `obs_get_contacts` ve `get_help_ticket` araçlarında `include_sensitive=true`
   artık tek başına yeterli değil. TC kimlik no, telefon, adres ve adlar yalnızca
   `NINOVA_ALLOW_SENSITIVE_OUTPUT=1` ayarlıysa gizlenmeden döner. Varsayılan kapalı
@@ -89,7 +92,8 @@
   `NINOVA_REMOTE_TRUSTED_PROXY_HOPS` (varsayılan 1) güvenilen vekil sayısını belirler
 - `submit_assignment` ve `obs_save_registration_draft` uzak sunucuda hiçbir ayarla açılamaz
 - Çalışma klasöründeki `.env` içinde yok sayılan bir uzak ayar varsa sunucu başlamaz ve
-  anahtarın adını yazar
+  anahtarın adını yazar. `NINOVA_REMOTE_API_KEY` de bunlardan biri: o dosyayı yazabilen biri
+  anahtarı seçebilirdi
 - Docker imajı root olmayan `itumcp` kullanıcısıyla (uid 10001) çalışıyor, durum dosyaları
   `/data` biriminde tutuluyor, taban imaj özet değeriyle sabitlendi
 
@@ -151,6 +155,9 @@
   `NINOVA_EXTRA_READ_DIRS` kullan
 - **Üst klasördeki `.env` okunmaz.** Kimlik bilgilerin oradaysa asistanının `env` bloğuna taşı
   ya da `NINOVA_ENV_FILE` ile dosyayı göster
+- **Uzak sunucu anahtarı çalışma klasöründeki `.env`'den okunmaz.** `NINOVA_REMOTE_API_KEY`
+  değerini ortam değişkeni olarak ya da `NINOVA_ENV_FILE` ile gösterdiğin dosyada ver, yoksa
+  sunucu başlamaz
 - **Uzak sunucu:** `NINOVA_REMOTE_HOST=0.0.0.0` ile anahtarsız ya da `NINOVA_ALLOWED_HOSTS`
   olmadan çalışan kurulumlar (yalnızca `docker run` ile başlatılanlar dahil) bu sürümde
   başlamaz. Docker'da durum klasörü `/root/.ninova_state` yerine `/data` oldu. İki vekil

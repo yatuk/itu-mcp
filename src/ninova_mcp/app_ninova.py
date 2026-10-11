@@ -10,11 +10,11 @@ import hashlib
 import mimetypes
 import os
 import re
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from .client import NinovaAuthError, NinovaClient, NinovaError
+from .local_files import LocalFileError, resolve_upload_file
 from .parsing import (
     extension_allowed,
     extract_announcement_detail,
@@ -351,7 +351,10 @@ class NinovaCourseToolsMixin:
                 "Assignment uploads are disabled (NINOVA_ALLOW_UPLOADS=0)."
             )
 
-        path = Path(file_path).expanduser().resolve()
+        try:
+            path = resolve_upload_file(file_path, state_dir=self.state_dir)
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
         if not path.is_file():
             raise NinovaError(f"File not found: {path}")
         size = path.stat().st_size

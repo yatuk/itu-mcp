@@ -331,3 +331,9 @@ class PlantedEnvMailExfiltrationTests(_EnvCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteKeyTests(unittest.TestCase):
+    def test_a_discovered_file_cannot_choose_the_remote_api_key(self) -> None:
+        self.assertIn("NINOVA_REMOTE_API_KEY", env_module.AUTO_ENV_BLOCKED_KEYS)
+        self.assertNotIn("NINOVA_REMOTE_API_KEY", env_module.AUTO_ENV_SAFE_KEYS)
