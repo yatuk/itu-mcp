@@ -142,8 +142,16 @@ class ArchiveHistoryToolsMixin:
 
     def archive_list_terms(self) -> dict[str, Any]:
         """List every term the archive holds, with coverage and gaps."""
+        from .archive import is_empty_record
+
         index = self.archive.get_index()
-        terms = index.get("terms") or []
+        # Only the live term carries a filled provenance; the older ones hold
+        # an object of empty strings, which says nothing and is dropped.
+        terms = [
+            {key: value for key, value in term.items() if not (key == "provenance" and is_empty_record(value))}
+            if isinstance(term, dict) else term
+            for term in index.get("terms") or []
+        ]
         return {
             "current_term": index.get("currentTerm"),
             "current_slug": index.get("currentSlug"),
@@ -196,14 +204,24 @@ class ArchiveHistoryToolsMixin:
         limit: int = 40,
     ) -> dict[str, Any]:
         """List the courses one instructor has taught across archived terms."""
-        from .archive import instructor_courses
+        from .archive import clean_placeholder, instructor_courses
         from .parsing import normalize_lookup_text as _norm
 
         target = _norm(instructor)
         if not target:
             raise ItuArchiveError("instructor boş olamaz.")
+        if clean_placeholder(str(instructor)) is None:
+            raise ItuArchiveError(
+                f"{instructor!r} bir öğretim üyesi adı değil. Arşiv, öğretim üyesi duyurulmamış "
+                "şubeleri bu işaretle tutuyor; bir kişi olarak listelenmez."
+            )
 
-        names = self.archive.get_instructor_names()
+        # The index also lists the placeholder ("-", "--") the dumps use for
+        # sections with no announced instructor. That is not a person.
+        names = [
+            row for row in self.archive.get_instructor_names()
+            if isinstance(row, list) and row and clean_placeholder(str(row[0])) is not None
+        ]
         # names.json rows are [name, index_letter, term_count, section_count];
         # the letter tells us which shard holds the full history.
         exact = [row for row in names if len(row) >= 2 and _norm(str(row[0])) == target]

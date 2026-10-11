@@ -64,14 +64,68 @@ def _term_sort_key(term_slug: str) -> tuple[int, int]:
     return year, order.get(parts[-1].lower() if parts else "", 9)
 
 
+# -- placeholders -------------------------------------------------------------
+
+# Cells OBS and the older dumps use for "nothing here": dashes in several
+# spellings, the literal "undeclared", and "Detay", which is the text of a
+# link to a detail page and not the detail itself.
+_PLACEHOLDER_WORDS = frozenset({"undeclared", "detay"})
+_PLACEHOLDER_MARKS = re.compile(r"[-‐-―/\s]*")
+
+
+def clean_placeholder(value: Any) -> Any:
+    """Return ``None`` for a placeholder cell, the stripped text otherwise.
+
+    ``""``, ``"-"``, ``"--"``, ``"- -"``, ``"-/-"``, ``"undeclared"`` and
+    ``"Detay"`` (any case, any spacing) are not data. Non-strings pass through.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if _PLACEHOLDER_MARKS.fullmatch(text) or text.casefold() in _PLACEHOLDER_WORDS:
+        return None
+    return text
+
+
+def clean_list(values: Any) -> Any:
+    """Drop placeholder items and repeats from a list, keeping the first order."""
+    if not isinstance(values, list):
+        return clean_placeholder(values)
+    seen: set[str] = set()
+    out: list[Any] = []
+    for item in values:
+        cleaned = clean_placeholder(item)
+        if cleaned is None:
+            continue
+        key = repr(cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    return out
+
+
+def is_empty_record(value: Any) -> bool:
+    """A dict whose every value is a placeholder, like an unfilled provenance."""
+    return isinstance(value, dict) and all(
+        clean_placeholder(item) is None or item == [] or item == {} for item in value.values()
+    )
+
+
 def _rows_as_dicts(rows: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
-    """Zip positional archive rows onto field names, skipping malformed rows."""
+    """Zip positional archive rows onto field names, skipping malformed rows.
+
+    An instructor cell that holds only a placeholder (``-``, ``--``) becomes
+    ``None``: the section had no announced instructor.
+    """
     out: list[dict[str, Any]] = []
     for row in rows or []:
         if not isinstance(row, list) or len(row) < len(fields):
             continue
         entry = dict(zip(fields, row, strict=False))
         entry["season"] = season_of(str(entry.get("term") or ""))
+        if "instructor" in entry:
+            entry["instructor"] = clean_placeholder(entry["instructor"])
         out.append(entry)
     return out
 
@@ -188,7 +242,8 @@ def course_history(
             "term": term,
             "season": season_of(term),
             "section_count": len(sections),
-            "instructors": sorted({str(s.get("instructor") or "").strip() for s in sections} - {"", "--"}),
+            "instructors": sorted({str(s["instructor"]) for s in sections if s.get("instructor")}),
+            "unannounced_section_count": sum(1 for s in sections if not s.get("instructor")),
             "enrolment_not_captured": missing,
             "sections": [
                 {
@@ -320,9 +375,13 @@ def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict
         rows = [r for r in rows if str(r.get("term") or "") in set(keep)]
 
     grouped: dict[str, dict[str, Any]] = {}
+    unannounced = 0
     for row in rows:
+        # A placeholder was already turned into None: nobody was announced
+        # for that section, so it ranks no one.
         name = str(row.get("instructor") or "").strip()
-        if not name or name == "--":
+        if not name:
+            unannounced += 1
             continue
         bucket = grouped.setdefault(name, {"instructor": name, "terms": set(), "sections": 0, "ratios": []})
         bucket["terms"].add(str(row.get("term") or ""))
@@ -356,6 +415,7 @@ def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict
         "enrolment_not_captured_terms": sorted(
             ({str(r.get("term") or "") for r in rows} & uncaptured), key=_term_sort_key, reverse=True
         ),
+        "unannounced_section_count": unannounced,
         "instructors": instructors,
     }
 
@@ -417,26 +477,28 @@ def summarize_section(section: dict[str, Any], *, enrolment_captured: bool = Tru
     sessions = []
     for index in range(max(len(days), len(times))):
         sessions.append({
-            "day": days[index] if index < len(days) else None,
-            "time": times[index] if index < len(times) else None,
-            "building": buildings[index] if index < len(buildings) else None,
-            "room": rooms[index] if index < len(rooms) else None,
+            "day": clean_placeholder(days[index]) if index < len(days) else None,
+            "time": clean_placeholder(times[index]) if index < len(times) else None,
+            "building": clean_placeholder(buildings[index]) if index < len(buildings) else None,
+            "room": clean_placeholder(rooms[index]) if index < len(rooms) else None,
         })
     return {
         "crn": section.get("crn"),
         "course_code": section.get("code"),
         "course_name": section.get("name"),
-        "instructor": section.get("instructor"),
-        "level": section.get("level"),
+        # None: no instructor announced. "-" and "--" are not people.
+        "instructor": clean_placeholder(section.get("instructor")),
+        "level": clean_placeholder(section.get("level")),
         "capacity": section.get("capacity"),
         "enrolled": enrolled,
         "fill_ratio": _fill_ratio(section.get("capacity"), enrolled),
         "sessions": sessions,
-        "programs": section.get("programs"),
-        "prerequisite_note": section.get("prereq") or None,
-        "class_requirement": section.get("classReq") or None,
-        "method": section.get("method") or None,
-        "reserved": section.get("reserved") or None,
+        "programs": clean_list(section.get("programs")),
+        # "Detay" is the text of a link to the rule, not the rule; "-" is none.
+        "prerequisite_note": clean_placeholder(section.get("prereq") or None),
+        "class_requirement": clean_placeholder(section.get("classReq") or None),
+        "method": clean_placeholder(section.get("method") or None),
+        "reserved": clean_placeholder(section.get("reserved") or None),
     }
 
 
@@ -609,16 +671,15 @@ def diff_term_offerings(
     """
 
     def _summarize_side(sections: list[dict[str, Any]], captured: bool) -> dict[str, Any]:
-        instructors = sorted({
-            s.get("instructor") for s in sections
-            if s.get("instructor") and s.get("instructor") != "--"
-        })
+        named = [clean_placeholder(s.get("instructor")) for s in sections]
+        instructors = sorted({str(name) for name in named if name})
         capacities = [s["capacity"] for s in sections if _is_count(s.get("capacity"))]
         enrolled = [s["enrolled"] for s in sections if _is_count(s.get("enrolled"))] if captured else []
         ratios = [s["fill_ratio"] for s in sections if s.get("fill_ratio") is not None] if captured else []
         return {
             "section_count": len(sections),
             "instructors": instructors,
+            "unannounced_section_count": sum(1 for name in named if not name),
             "total_capacity": sum(capacities) if capacities else None,
             "total_enrolled": sum(enrolled) if enrolled else None,
             "average_fill_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
@@ -960,8 +1021,9 @@ def grade_distribution(
 def catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Rename one catalog record's fields; values are passed through untouched.
 
-    Some records have no outcomes or weekly topics at all. Those come back as
-    published (``None`` or absent) and are named in ``missing_fields``.
+    Some records have no outcomes or weekly topics at all, and some hold only
+    a placeholder. Those come back as ``None`` or an empty list and are named
+    in ``missing_fields``.
     """
     fields = {
         "course_name": "name",
@@ -977,7 +1039,9 @@ def catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {"course_code": entry.get("code")}
     missing = []
     for out_key, source_key in fields.items():
-        value = entry.get(source_key)
+        # A placeholder ("- -" as a description, ["-"] as the textbook list)
+        # is a field the catalog does not hold, and is reported as missing.
+        value = clean_list(entry.get(source_key))
         result[out_key] = value
         if value is None or value == "" or value == []:
             missing.append(out_key)
@@ -1010,7 +1074,7 @@ def _split_sessions(when: Any, where: Any) -> list[dict[str, Any]]:
             "time": time_range.strip() or None,
             # Building and room arrive as one string; not split, because the
             # boundary between them is not marked in the data.
-            "location": place or None,
+            "location": clean_placeholder(place),
         })
     return sessions
 
@@ -1025,14 +1089,14 @@ def summarize_search_row(row: list[Any], *, enrolment_captured: bool = True) -> 
         "course_code": cell.get("code"),
         "course_name": cell.get("name"),
         "branch": cell.get("branch"),
-        "instructor": cell.get("instructor"),
-        "level": cell.get("level") or None,
+        "instructor": clean_placeholder(cell.get("instructor")),
+        "level": clean_placeholder(cell.get("level") or None),
         "capacity": cell.get("capacity"),
         "enrolled": cell.get("enrolled"),
         "fill_ratio": _fill_ratio(cell.get("capacity"), cell.get("enrolled")),
         "sessions": _split_sessions(cell.get("when"), cell.get("where")),
-        "programs": cell.get("programs"),
-        "method": cell.get("method") or None,
+        "programs": clean_list(cell.get("programs")),
+        "method": clean_placeholder(cell.get("method") or None),
     }
 
 
@@ -1104,12 +1168,12 @@ def summarize_exam(exam: dict[str, Any]) -> dict[str, Any]:
         "course_code": exam.get("code"),
         "course_name": exam.get("name"),
         "branch": exam.get("branch"),
-        "instructor": exam.get("instructor"),
-        "exam_type": exam.get("type"),
-        "date": exam.get("date"),
-        "day": exam.get("day"),
-        "time": exam.get("time"),
-        "place": exam.get("place"),
+        "instructor": clean_placeholder(exam.get("instructor")),
+        "exam_type": clean_placeholder(exam.get("type")),
+        "date": clean_placeholder(exam.get("date")),
+        "day": clean_placeholder(exam.get("day")),
+        "time": clean_placeholder(exam.get("time")),
+        "place": clean_placeholder(exam.get("place")),
     }
 
 
