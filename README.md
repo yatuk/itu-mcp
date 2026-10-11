@@ -535,7 +535,7 @@ In short (English): the server runs locally, collects nothing, sends your İTÜ 
 
 ## Geliştirme
 
-Katkıya açık. Bir hata bulduysan ya da bir fikrin varsa [sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues).
+Katkıya açık. Bir hata bulduysan ya da bir fikrin varsa [sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues). Kod göndermeden önce [katkı rehberine](CONTRIBUTING.md) göz at.
 
 ```bash
 git clone https://github.com/yatuk/itu-mcp.git
@@ -553,6 +553,7 @@ python -m ruff check src/ tests/
 | Kurulum | [docs/installation.md](docs/installation.md) |
 | Tüm araçlar ve gelişmiş kullanım | [docs/advanced.md](docs/advanced.md) |
 | Güvenlik | [docs/security.md](docs/security.md) |
+| Katkı rehberi | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Değişiklik günlüğü | [CHANGELOG.md](CHANGELOG.md) |
 
 ---

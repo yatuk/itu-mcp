@@ -101,6 +101,11 @@ class ConflictDepartmentsTestCase(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.app = NinovaMcpApp()
+        if not self.credentials:
+            # A developer ``.env`` next to the checkout is loaded on start-up and
+            # would put the credentials back.
+            os.environ.pop("NINOVA_USERNAME", None)
+            os.environ.pop("NINOVA_PASSWORD", None)
         self.schedules = FakeSchedules()
         self.app._obs_public = self.schedules  # type: ignore[assignment]
         self.archive = FakeArchive(ARCHIVE_ROWS)
