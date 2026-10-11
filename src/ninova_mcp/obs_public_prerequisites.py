@@ -9,6 +9,71 @@ from .obs_public_catalog import ObsPublicCatalog
 from .parsing import extract_prerequisite_list, normalize_lookup_text
 
 
+# A cold reverse lookup reads one page per branch; this bounds it.
+_MAX_SCANNED_BRANCHES = 200
+
+
+def _courses_requiring(target_code: str, rules: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row for every course of a branch whose rule names ``target_code`` exactly."""
+    from .prerequisites import flatten_courses
+
+    return [
+        {
+            "code": code,
+            "course_id": code,
+            "name": rule.get("course_name"),
+            "prerequisite_type": "prerequisite_reference",
+            "group": None,
+            "requirement_tree": rule.get("requirement_tree"),
+            "expression": rule.get("expression"),
+            "minimum_grades": rule.get("minimum_grades"),
+            "credit_requirement": rule.get("credit_requirement"),
+            "credit_requirement_text": rule.get("credit_requirement_text"),
+        }
+        for code, rule in rules.items()
+        if any(leaf.get("code") == target_code for leaf in flatten_courses(rule.get("requirement_tree")))
+    ]
+
+
+def _postrequisite_status(postrequisites: list[dict[str, Any]], complete: bool) -> str:
+    if postrequisites:
+        return "has_postrequisites"
+    # Nothing found proves nothing unless every branch was read.
+    return "no_postrequisites" if complete else "unknown"
+
+
+def _postrequisite_result(
+    target_code: str,
+    branches: list[str],
+    postrequisites: list[dict[str, Any]],
+    unknown_branches: list[str],
+    sources: list[str],
+    scanned_courses: int,
+) -> dict[str, Any]:
+    """Assemble the reverse-lookup result and say how complete the scan was."""
+    complete = bool(branches) and not unknown_branches and len(branches) <= _MAX_SCANNED_BRANCHES
+    coverage = (
+        "All listed branches were checked." if complete
+        else "Coverage is incomplete; an empty result does not prove no postrequisites."
+    )
+    return {
+        "course_id": target_code,
+        "course_code": target_code,
+        "available": bool(sources),
+        "complete": complete,
+        "postrequisite_status": _postrequisite_status(postrequisites, complete),
+        "postrequisites": sorted(postrequisites, key=lambda row: row["code"]),
+        "scanned_courses": scanned_courses,
+        "scanned_branches": len(branches[:_MAX_SCANNED_BRANCHES]),
+        "unknown_branches": unknown_branches,
+        "unscanned_branches": branches[_MAX_SCANNED_BRANCHES:],
+        "sources": sources,
+        "note": "These courses reference the selected course in their prerequisite expressions. "
+                "Other alternatives and minimum grades still apply. " + coverage,
+        "untrusted_external_content": True,
+    }
+
+
 class ObsPublicPrerequisites(ObsPublicCatalog):
     """Prerequisites of a course and the courses that require it."""
 
@@ -53,7 +118,6 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
         once per branch of a cold scan. Its failures are ignored.
         """
         from .archive import normalize_course_code
-        from .prerequisites import flatten_courses
 
         try:
             target_code = normalize_course_code(str(course_id))
@@ -65,13 +129,12 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
             return cached  # type: ignore[return-value]
         index = self._build_course_index()
         branches = sorted({key.upper() for key in index if not key.isdigit()})
-        max_scan = 200
         postrequisites: list[dict[str, Any]] = []
         unknown_branches: list[str] = []
         sources: list[str] = []
         scanned_courses = 0
-        scan_total = len(branches[:max_scan])
-        for position, branch in enumerate(branches[:max_scan]):
+        scan_total = len(branches[:_MAX_SCANNED_BRANCHES])
+        for position, branch in enumerate(branches[:_MAX_SCANNED_BRANCHES]):
             if progress is not None:
                 try:
                     progress(position, scan_total, f"Ön şart tablosu taranıyor ({position + 1}/{scan_total}): {branch}")
@@ -79,58 +142,36 @@ class ObsPublicPrerequisites(ObsPublicCatalog):
                     # Progress is advisory. The callback is supplied by the
                     # caller and must never change the outcome of the scan.
                     pass
-            try:
-                data = self.get_branch_prerequisites(branch)
-            except ObsError:
-                unknown_branches.append(branch)
-                continue
-            if not data.get("table_parsed"):
+            data = self._parsed_branch_table(branch)
+            if data is None:
                 unknown_branches.append(branch)
                 continue
             if data.get("url"):
                 sources.append(data["url"])
-            for code, rule in (data.get("rules") or {}).items():
-                scanned_courses += 1
-                matches = [leaf for leaf in flatten_courses(rule.get("requirement_tree"))
-                           if leaf.get("code") == target_code]
-                if matches:
-                    postrequisites.append({
-                        "code": code,
-                        "course_id": code,
-                        "name": rule.get("course_name"),
-                        "prerequisite_type": "prerequisite_reference",
-                        "group": None,
-                        "requirement_tree": rule.get("requirement_tree"),
-                        "expression": rule.get("expression"),
-                        "minimum_grades": rule.get("minimum_grades"),
-                        "credit_requirement": rule.get("credit_requirement"),
-                        "credit_requirement_text": rule.get("credit_requirement_text"),
-                    })
+            rules = data.get("rules") or {}
+            scanned_courses += len(rules)
+            postrequisites.extend(_courses_requiring(target_code, rules))
         if progress is not None:
             try:
                 progress(scan_total, scan_total, "Ön şart taraması tamamlandı")
             except Exception:  # nosec B110
                 # Advisory, as above.
                 pass
-        complete = bool(branches) and not unknown_branches and len(branches) <= max_scan
-        result: dict[str, Any] = {
-            "course_id": target_code,
-            "course_code": target_code,
-            "available": bool(sources),
-            "complete": complete,
-            "postrequisite_status": "has_postrequisites" if postrequisites else "no_postrequisites" if complete else "unknown",
-            "postrequisites": sorted(postrequisites, key=lambda row: row["code"]),
-            "scanned_courses": scanned_courses,
-            "scanned_branches": len(branches[:max_scan]),
-            "unknown_branches": unknown_branches,
-            "unscanned_branches": branches[max_scan:],
-            "sources": sources,
-            "note": "These courses reference the selected course in their prerequisite expressions. Other alternatives and minimum grades still apply. "
-                    + ("All listed branches were checked." if complete else "Coverage is incomplete; an empty result does not prove no postrequisites."),
-            "untrusted_external_content": True,
-        }
+        result = _postrequisite_result(
+            target_code, branches, postrequisites, unknown_branches, sources, scanned_courses,
+        )
         self._cache.set(cache_key, result)
         return result
+
+    def _parsed_branch_table(self, branch: str) -> dict[str, Any] | None:
+        """The branch's prerequisite table, or ``None`` when it cannot be read or parsed."""
+        try:
+            data = self.get_branch_prerequisites(branch)
+        except ObsError:
+            return None
+        if not data.get("table_parsed"):
+            return None
+        return data
 
     def get_prerequisite_detail(
         self,
