@@ -140,7 +140,7 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
         lines.append(
             f"2. Ardından `obs_calculate_gpa(projected_grades=…)` ile şu "
             f"varsayımı dene: {projected.strip()}. Beklenen notları "
-            '`{"BLG 223E": "AA"}` biçiminde ver.'
+            '`{"BLG 223E": "AA"}` biçiminde ver; anahtar ders kodu ya da CRN olabilir.'
         )
     else:
         lines.append(
@@ -163,7 +163,12 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
         "`credits_unresolved` (kredisi hiçbir kaynakta bulunamayan, ortalamaya "
         "0 kredi ile giren dersler) — ikincisi varsa hesap eksiktir.\n"
         "`ff_risk` listesindeki FF/VF dersleri tekrar alınması gerekenlerdir, "
-        "ayrıca belirt.\n\n"
+        "ayrıca belirt.\n"
+        "`unmatched_projected_keys` doluysa senaryo eksik uygulanmıştır: "
+        "`valid_projected_keys` içinden doğru anahtarla yeniden dene. "
+        "`credit_ambiguity` varsa kredisi iki değerli dersleri adıyla söyle. "
+        "Derslerdeki `attempts` alanı aynı dersin başka dönemlerini verir; "
+        "`likely_equivalent` kesin bilgi değil, olasılıktır.\n\n"
         "Bu hesabın bilgi amaçlı olduğunu, resmî GANO için OBS transkriptine "
         "bakılması gerektiğini söyle."
     )

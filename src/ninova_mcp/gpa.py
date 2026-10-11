@@ -6,11 +6,13 @@ ortalama hesaplama.
 
 from __future__ import annotations
 
+import itertools
 import math
 from typing import Any
 
 from .archive import normalize_course_code
-from .grading import LETTER_TO_GRADE, normalize_grade
+from .grading import FAILING_GRADES, LETTER_TO_GRADE, normalize_grade
+from .parsing import normalize_lookup_text
 
 # Kredi genelde OBS'te "kredi" alanındadır; AKTS değil.
 # Kayıtlı ders listesinde `kredi` genelde string gelir.
@@ -144,7 +146,8 @@ def calculate_gpa(
             "points": round(points, 2),
             "projected": projected_grade is not None,
         }
-        for field in ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source"):
+        for field in ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source",
+                      "credit_candidates", "credit_choice", "crn", "attempts"):
             if field in course:
                 detail[field] = course[field]
 
@@ -192,6 +195,215 @@ def calculate_gpa(
             "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
         ),
     })
+
+
+# --- Graduation-plan evidence used by obs_calculate_gpa -------------------
+
+PLAN_BUCKETS = ("checkMetMezuniyetList", "unusedSinifOgrenciList")
+_KEY_PADDING = " \t\r\n\"'`"
+
+
+def _positive_credit(value: Any) -> float | None:
+    number = parse_credit(value)
+    return number if number else None
+
+
+def _name_key(value: Any) -> str:
+    return "".join(ch for ch in normalize_lookup_text(str(value or "")) if ch.isalnum())
+
+
+def plan_rows(info: Any) -> list[dict[str, Any]]:
+    """Reduce the MezuniyetimeNeKaldi rows to the fields the GPA tool reads."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(info, dict):
+        return rows
+    for bucket in PLAN_BUCKETS:
+        items = info.get(bucket)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                code = normalize_course_code(str(item.get("bransKodu") or ""))
+            except ValueError:
+                code = None
+            credit = item.get("kredisiDec")
+            if credit is None:
+                credit = item.get("kredisi")
+            rows.append({
+                "code": code,
+                "term": str(item.get("donem") or ""),
+                "grade": normalize_grade(item.get("harfNotu")),
+                "credit": _positive_credit(credit),
+                "counted_credit": _positive_credit(item.get("sayilanKredi")),
+                "name": _name_key(item.get("dersAdi")),
+                "met": bucket == "checkMetMezuniyetList" and item.get("isMet") is not False,
+                "unused": bucket == "unusedSinifOgrenciList",
+            })
+    return rows
+
+
+def plan_credit_table(rows: list[dict[str, Any]], term_code: Any) -> dict[str, dict[str, Any]]:
+    """Plan credit per course code, nearest evidence first.
+
+    A course's credit does not depend on the attempt, so the order is: a row of
+    the requested term, an undated plan slot, then a row of any other term. A
+    tier whose rows disagree is not overruled by a farther tier.
+    """
+    term = str(term_code) if term_code else ""
+    tiers: dict[str, dict[str, list[dict[str, Any]]]] = {"term": {}, "undated": {}, "other_term": {}}
+    for row in rows:
+        if row["code"] is None or row["credit"] is None:
+            continue
+        scope = "undated" if not row["term"] else "term" if not term or row["term"] == term else "other_term"
+        tiers[scope].setdefault(row["code"], []).append(row)
+    table: dict[str, dict[str, Any]] = {}
+    for code in {code for tier in tiers.values() for code in tier}:
+        for scope, tier in tiers.items():
+            matched = tier.get(code)
+            if not matched:
+                continue
+            credits = {row["credit"] for row in matched}
+            if len(credits) == 1:
+                entry: dict[str, Any] = {"credit": credits.pop(), "scope": scope}
+                counted = {row["counted_credit"] for row in matched
+                           if row["met"] and row["counted_credit"] is not None}
+                if len(counted) == 1:
+                    entry["counted_credit"] = counted.pop()
+                table[code] = entry
+            break
+    return table
+
+
+def resolve_projection_keys(
+    projected_grades: dict[str, str] | None,
+    courses: list[dict[str, Any]],
+) -> tuple[dict[str, str], list[str]]:
+    """Map what-if keys (course code or CRN) onto the course codes of this term.
+
+    Returns the translated mapping and the keys that matched no course. An
+    unmatched key stays in the mapping so the calculator still reports it.
+    """
+    codes: set[str] = set()
+    by_crn: dict[str, set[str]] = {}
+    for course in courses:
+        key = course_key(course.get("code"))
+        codes.add(key)
+        crn = str(course.get("crn") or "").strip()
+        if crn:
+            by_crn.setdefault(crn, set()).add(key)
+    translated: dict[str, str] = {}
+    unmatched: list[str] = []
+    for raw, grade in (projected_grades or {}).items():
+        text = str(raw).strip(_KEY_PADDING)
+        target = None
+        if len(by_crn.get(text, ())) == 1:
+            target = next(iter(by_crn[text]))
+        elif course_key(text) in codes:
+            target = course_key(text)
+        if target is None:
+            unmatched.append(str(raw))
+            translated[str(raw)] = grade
+            continue
+        if target in translated and normalize_grade(translated[target]) != normalize_grade(grade):
+            raise ValueError(f"Conflicting projected grades for {target}.")
+        translated[target] = grade
+    return translated, unmatched
+
+
+def reconcile_credit_candidates(
+    courses: list[dict[str, Any]],
+    official_gpa: float | None,
+    *,
+    max_ambiguous: int = 6,
+) -> dict[str, Any] | None:
+    """Choose between kredisi and sayilanKredi only where a plan row carries both.
+
+    The official term average decides, and only when exactly one combination of
+    the carried values reproduces it. Otherwise the current credit stays and
+    the courses are named. ``courses`` is updated in place.
+    """
+    ambiguous = [course for course in courses if len(course.get("credit_candidates") or ()) > 1]
+    if not ambiguous:
+        return None
+    status = "undetermined"
+    if official_gpa is None:
+        status = "no_official_average"
+    elif len(ambiguous) > max_ambiguous:
+        status = "too_many_candidates"
+    elif calculate_gpa(courses)["gpa"] is None:
+        status = "not_comparable"
+    else:
+        default = tuple(course["credit"] for course in ambiguous)
+        matches = []
+        for combination in itertools.product(*(course["credit_candidates"] for course in ambiguous)):
+            for course, credit in zip(ambiguous, combination, strict=True):
+                course["credit"] = credit
+            trial = calculate_gpa(courses)["gpa"]
+            if trial is not None and abs(trial - official_gpa) < 0.005:
+                matches.append(combination)
+        chosen = default
+        if default in matches:
+            status = "confirmed_by_official_average" if len(matches) == 1 else "undetermined"
+        elif len(matches) == 1:
+            chosen, status = matches[0], "resolved_by_official_average"
+        for course, credit in zip(ambiguous, chosen, strict=True):
+            course["credit"] = credit
+            if status == "resolved_by_official_average":
+                course["credit_choice"] = "matches_official_average"
+    return {
+        "status": status,
+        "courses": [{"code": course.get("code"), "kredisi": course.get("plan_credit"),
+                     "sayilanKredi": course.get("counted_credit"), "used_credit": course["credit"]}
+                    for course in ambiguous],
+    }
+
+
+def _term_order(term: str) -> tuple[int, int | str]:
+    return (0, int(term)) if term.isdigit() else (1, term)
+
+
+def attempt_notes(
+    rows: list[dict[str, Any]],
+    *,
+    code: str | None,
+    term_code: Any,
+    names: set[str],
+    credits: set[float],
+) -> dict[str, Any]:
+    """Other attempts of a course, and failed attempts that look like the same course.
+
+    A failed unused row with another code, the same normalised name and the same
+    credit is offered as ``likely_equivalent``. It is evidence, never a fact.
+    """
+    term = str(term_code) if term_code else ""
+    names = names | {row["name"] for row in rows if code and row["code"] == code and row["name"]}
+    names.discard("")
+    grouped: dict[str, list[dict[str, Any]]] = {"earlier": [], "later": [], "other_terms": [],
+                                                "likely_equivalent": []}
+    seen: set[tuple[Any, ...]] = set()
+    for row in sorted((row for row in rows if row["term"]), key=lambda row: _term_order(row["term"])):
+        if row["term"] == term:
+            continue
+        if code and row["code"] == code:
+            entry: dict[str, Any] = {"term": row["term"], "grade": row["grade"] or None}
+            if row["met"]:
+                entry["counted"] = True
+            bucket = ("other_terms" if not term else
+                      "earlier" if _term_order(row["term"]) < _term_order(term) else "later")
+        elif (row["unused"] and row["code"] and row["grade"] in FAILING_GRADES
+              and row["name"] in names and row["credit"] in credits):
+            entry = {"code": row["code"], "term": row["term"], "grade": row["grade"],
+                     "evidence": ["same_name", "same_credit"], "certain": False}
+            bucket = "likely_equivalent"
+        else:
+            continue
+        marker = (bucket, repr(sorted(entry.items())))
+        if marker not in seen:
+            seen.add(marker)
+            grouped[bucket].append(entry)
+    return {bucket: entries for bucket, entries in grouped.items() if entries}
 
 
 def calculate_target_gpa(
