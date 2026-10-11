@@ -1039,29 +1039,6 @@ class ObsPublicClient:
             f"Mevcut bölümler (ilk 20): {available}"
         )
 
-    # -- internal helpers -------------------------------------------------
-
-    def _resolve_brans_id_to_code(self, course_id: int | str) -> str | None:
-        """Best-effort reverse lookup: bransKoduId → course department code."""
-        cid = str(course_id)
-        index = self._build_course_index()
-        for key, value in index.items():
-            if str(value) == cid:
-                return key
-        return None
-
-    @staticmethod
-    def _looks_like_prereq_page(html: str) -> bool:
-        """Heuristic: does the HTML contain prerequisite-related content?"""
-        if not html or len(html) < 200:
-            return False
-        lower = html[:8000].casefold()
-        return any(
-            token in lower
-            for token in ("onsart", "önşart", "on sart", "ön sart", "dersonsart")
-        )
-
-
     # -- academic calendar (takvim.sis.itu.edu.tr) -----------------------
 
     def get_academic_calendar(self) -> dict[str, Any]:

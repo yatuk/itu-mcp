@@ -1749,50 +1749,6 @@ def extract_help_tickets(
     return parse_widget(html, page_url)
 
 
-def extract_cloud_quota(
-    html: str,
-    page_url: str,
-) -> dict[str, Any]:
-    """Parse the İTÜ Portal cloud/mail quota widget.
-
-    Selectors:
-    - Mail: ``p[data-placement="quota"]``
-    - Bulut: ``p[data-placement="quotaEski"]``
-    """
-    soup = make_soup(html)
-
-    mail_pct = None
-    mail_desc = None
-    cloud_pct = None
-    cloud_desc = None
-
-    # Mail quota: scoped under [data-panel="quota"]
-    mail_panel = soup.select_one('div[data-panel="quota"]')
-    if mail_panel:
-        quota_el = mail_panel.select_one('p[data-placement="quota"]')
-        if quota_el:
-            mail_pct = clean_text(quota_el.get_text(" ", strip=True))
-        desc_el = mail_panel.select_one('p[data-placement="description"]')
-        if desc_el:
-            mail_desc = clean_text(desc_el.get_text(" ", strip=True))
-
-    # Cloud quota: scoped under [data-panel="quotaEski"]
-    cloud_panel = soup.select_one('div[data-panel="quotaEski"]')
-    if cloud_panel:
-        cloud_el = cloud_panel.select_one('p[data-placement="quotaEski"]')
-        if cloud_el:
-            cloud_pct = clean_text(cloud_el.get_text(" ", strip=True))
-        desc_el = cloud_panel.select_one('p[data-placement="descriptionEski"]')
-        if desc_el:
-            cloud_desc = clean_text(desc_el.get_text(" ", strip=True))
-
-    return {
-        "url": page_url,
-        "mail": {"usage_percent": mail_pct, "details": mail_desc},
-        "cloud": {"usage_percent": cloud_pct, "details": cloud_desc},
-    }
-
-
 def extract_cafeteria_menu(
     html: str,
     page_url: str,
