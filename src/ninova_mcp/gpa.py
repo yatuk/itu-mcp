@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from dataclasses import dataclass, field
 from typing import Any
 
 from .archive import normalize_course_code
@@ -74,6 +75,178 @@ def validate_projected_grades(projected_grades: Any) -> dict[str, str]:
     return checked
 
 
+_FAILED_GRADES = ("FF", "VF")
+_LOW_GRADES = ("FD", "DD", "DD+", "DC", "DC+")
+# Evidence the caller attached to a course; copied to the counted course as is.
+_EVIDENCE_FIELDS = ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source",
+                    "credit_candidates", "credit_choice", "crn", "attempts")
+_RESULT_NOTE = (
+    "Hesap yalnız verilen dersleri kapsar. Eksik veya geçersiz not/kredi varsa "
+    "gpa verilmez; known_courses_gpa ve toplamlar yalnız doğrulanan kayıtları kapsar. "
+    "Bu sonuç onur derecesi, akademik durum veya kümülatif GANO belirlemez. "
+    "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
+)
+
+
+@dataclass
+class _CourseRow:
+    """One supplied course with its code, credit and grade read once."""
+
+    source: dict[str, Any]
+    code: Any
+    name: Any
+    key: str
+    credit_raw: Any
+    credit: float | None
+    grade: str | None
+    projected: bool
+
+    @property
+    def credit_gap(self) -> str:
+        """Why there is no usable credit: nothing was supplied, or it is not a credit."""
+        return "missing" if self.credit_raw is None or str(self.credit_raw).strip() == "" else "invalid"
+
+
+@dataclass
+class _Tally:
+    """Running totals and the courses sorted by what happened to them."""
+
+    total_points: float = 0.0
+    total_credits: float = 0.0
+    eligible_count: int = 0
+    counted: list[dict[str, Any]] = field(default_factory=list)
+    ff_risk: list[dict[str, Any]] = field(default_factory=list)
+    ungraded: list[dict[str, Any]] = field(default_factory=list)
+    unrecognized_grades: list[dict[str, Any]] = field(default_factory=list)
+    invalid_credits: list[dict[str, Any]] = field(default_factory=list)
+    excluded: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _projection_by_course(projected_grades: Any) -> dict[str, str]:
+    """What-if grades per course key; two keys of one course must agree."""
+    projected: dict[str, str] = {}
+    for code, grade in validate_projected_grades(projected_grades).items():
+        key = course_key(code)
+        if key in projected and projected[key] != grade:
+            raise ValueError(f"Conflicting projected grades for {key}.")
+        projected[key] = grade
+    return projected
+
+
+def _read_course_row(course: dict[str, Any], projected: dict[str, str]) -> _CourseRow:
+    code = course.get("code") or course.get("dersKodu") or "?"
+    name = course.get("name") or course.get("dersAdiTR") or ""
+
+    # Kredi (None check: 0 is a valid credit value)
+    credit_raw = course.get("credit")
+    if credit_raw is None:
+        credit_raw = course.get("kredi")
+
+    # A what-if value is an explicit override, including for a course that
+    # already has an OBS letter grade.  This matches the public tool's
+    # documented behaviour and lets users compare alternative outcomes.
+    key = course_key(code)
+    projected_grade = projected.get(key)
+    grade_raw = projected_grade if projected_grade is not None else course.get("grade")
+    if grade_raw is None or grade_raw == "":
+        grade_raw = course.get("harfNotu")
+    grade = (str(grade_raw).strip().upper() or None) if grade_raw is not None else None
+    return _CourseRow(
+        source=course, code=code, name=name, key=key, credit_raw=credit_raw,
+        credit=parse_credit(credit_raw), grade=grade, projected=projected_grade is not None,
+    )
+
+
+def _file_course(tally: _Tally, row: _CourseRow) -> None:
+    """Put the course where its grade sends it: ungraded, unknown, excluded or counted."""
+    if row.grade is None:
+        tally.ungraded.append({**row.source, "code": row.code, "name": row.name, "credit": row.credit,
+                               "credit_status": "valid" if row.credit is not None else row.credit_gap})
+    elif row.grade not in LETTER_TO_GRADE:
+        tally.unrecognized_grades.append({"code": row.code, "grade": row.grade})
+    elif LETTER_TO_GRADE[row.grade] is None:
+        # GE, KF, IA, MU gibi GANO'ya katılmayan notlar
+        tally.excluded.append({"code": row.code, "grade": row.grade, "credit": row.credit,
+                               "reason": "grade_excluded_from_gpa"})
+    else:
+        _count_course(tally, row, LETTER_TO_GRADE[row.grade])
+
+
+def _count_course(tally: _Tally, row: _CourseRow, coefficient: float) -> None:
+    """Add a course whose grade counts, unless its credit cannot be used."""
+    tally.eligible_count += 1
+    failure_note = f"{row.grade} notu bildirildi. Dersin tekrar veya yerine alma koşulları OBS kurallarına bağlıdır."
+    unusable = {"code": row.code, "grade": row.grade}
+    if row.credit is None:
+        tally.invalid_credits.append({**unusable, "reason": f"{row.credit_gap}_credit", "raw_credit": row.credit_raw})
+        if row.grade in _FAILED_GRADES:
+            tally.ff_risk.append({**unusable, "credit": None, "note": failure_note})
+        return
+    points = row.credit * coefficient
+    totals = (tally.total_credits + row.credit, tally.total_points + points)
+    if not all(math.isfinite(value) for value in (points, *totals)):
+        tally.invalid_credits.append({**unusable, "reason": "credit_arithmetic_overflow",
+                                      "raw_credit": row.credit_raw})
+        return
+    tally.total_credits, tally.total_points = totals
+
+    detail = {
+        "code": row.code,
+        "name": row.name,
+        "credit": row.credit,
+        "grade": row.grade,
+        "coefficient": coefficient,
+        "points": round(points, 2),
+        "projected": row.projected,
+    }
+    detail.update({name: row.source[name] for name in _EVIDENCE_FIELDS if name in row.source})
+    if row.grade in _FAILED_GRADES:
+        detail["note"] = failure_note
+        tally.ff_risk.append(detail)
+    elif row.grade in _LOW_GRADES:
+        detail["note"] = "Düşük not. Bu dersin ortalamaya katkısı kredi ağırlığına bağlıdır."
+    tally.counted.append(detail)
+
+
+def _gpa_result(
+    tally: _Tally, input_course_count: int, projected: dict[str, str], used_projections: set[str],
+) -> dict[str, Any]:
+    known_gpa = round(tally.total_points / tally.total_credits, 2) if tally.total_credits > 0 else None
+    complete = not (tally.invalid_credits or tally.unrecognized_grades or tally.ungraded)
+    if not complete:
+        status = "incomplete"
+    else:
+        status = "complete" if known_gpa is not None else "no_gpa_credits"
+    unused_projections = sorted(set(projected) - used_projections)
+    return {
+        "gpa": known_gpa if complete else None,
+        "known_courses_gpa": known_gpa,
+        "calculation_complete": complete,
+        "calculation_status": status,
+        "average_scope": "supplied_courses",
+        "input_course_count": input_course_count,
+        "gpa_eligible_course_count": tally.eligible_count,
+        "covered_course_count": len(tally.counted),
+        "excluded_course_count": len(tally.excluded),
+        "total_credits": round(tally.total_credits, 1),
+        "total_points": round(tally.total_points, 2),
+        "graded_course_count": len(tally.counted),
+        "ungraded_course_count": len(tally.ungraded),
+        "courses": tally.counted,
+        "ungraded": tally.ungraded,
+        "unrecognized_grades": tally.unrecognized_grades,
+        "invalid_credits": tally.invalid_credits,
+        "excluded_courses": tally.excluded,
+        "unused_projected_courses": unused_projections,
+        "projection_complete": not unused_projections,
+        "applied_projection_count": len(used_projections),
+        "ff_risk": tally.ff_risk,
+        "comment": None,
+        "scale": "4.00",
+        "note": _RESULT_NOTE,
+    }
+
+
 def calculate_gpa(
     courses: list[dict[str, Any]],
     *,
@@ -89,136 +262,15 @@ def calculate_gpa(
     ``projected_grades``: ``{"BLG 223E": "AA", ...}`` — henüz notu belli
     olmayan veya beklenen not için elle girilmiş tahmin.
     """
-    projected: dict[str, str] = {}
-    for code, grade in validate_projected_grades(projected_grades).items():
-        key, normalized_grade = course_key(code), grade
-        if key in projected and projected[key] != normalized_grade:
-            raise ValueError(f"Conflicting projected grades for {key}.")
-        projected[key] = normalized_grade
+    projected = _projection_by_course(projected_grades)
     used_projections: set[str] = set()
-
-    total_points = 0.0
-    total_credits = 0.0
-    details: list[dict[str, Any]] = []
-    ff_risk: list[dict[str, Any]] = []
-    ungraded: list[dict[str, Any]] = []
-    unrecognized_grades: list[dict[str, Any]] = []
-    invalid_credits: list[dict[str, Any]] = []
-    excluded_courses: list[dict[str, Any]] = []
-    eligible_count = 0
-
+    tally = _Tally()
     for course in courses:
-        code = course.get("code") or course.get("dersKodu") or "?"
-        name = course.get("name") or course.get("dersAdiTR") or ""
-
-        # Kredi (None check — 0 is a valid credit value)
-        credit_raw = course.get("credit")
-        if credit_raw is None:
-            credit_raw = course.get("kredi")
-        credit = parse_credit(credit_raw)
-
-        # Not
-        # A what-if value is an explicit override, including for a course that
-        # already has an OBS letter grade.  This matches the public tool's
-        # documented behaviour and lets users compare alternative outcomes.
-        key = course_key(code)
-        projected_grade = projected.get(key)
-        if projected_grade is not None:
-            used_projections.add(key)
-        grade_raw = projected_grade if projected_grade is not None else course.get("grade")
-        if grade_raw is None or grade_raw == "":
-            grade_raw = course.get("harfNotu")
-        grade = (str(grade_raw).strip().upper() or None) if grade_raw is not None else None
-
-        coefficient = LETTER_TO_GRADE.get(grade) if grade else None
-
-        if grade is None:
-            ungraded.append({**course, "code": code, "name": name, "credit": credit,
-                             "credit_status": "valid" if credit is not None else "missing" if credit_raw is None or str(credit_raw).strip() == "" else "invalid"})
-            continue
-
-        if grade not in LETTER_TO_GRADE:
-            unrecognized_grades.append({"code": code, "grade": grade})
-            continue
-
-        if coefficient is None:
-            # GE, KF, IA, MU gibi GANO'ya katılmayan notlar
-            excluded_courses.append({"code": code, "grade": grade, "credit": credit, "reason": "grade_excluded_from_gpa"})
-            continue
-
-        eligible_count += 1
-        failure_note = f"{grade} notu bildirildi. Dersin tekrar veya yerine alma koşulları OBS kurallarına bağlıdır."
-        if credit is None:
-            reason = "missing_credit" if credit_raw is None or str(credit_raw).strip() == "" else "invalid_credit"
-            invalid_credits.append({"code": code, "grade": grade, "reason": reason, "raw_credit": credit_raw})
-            if grade in ("FF", "VF"):
-                ff_risk.append({"code": code, "grade": grade, "credit": None, "note": failure_note})
-            continue
-        points = credit * coefficient
-        if not all(math.isfinite(value) for value in (points, total_credits + credit, total_points + points)):
-            invalid_credits.append({"code": code, "grade": grade, "reason": "credit_arithmetic_overflow", "raw_credit": credit_raw})
-            continue
-        total_credits += credit
-        total_points += points
-
-        detail = {
-            "code": code,
-            "name": name,
-            "credit": credit,
-            "grade": grade,
-            "coefficient": coefficient,
-            "points": round(points, 2),
-            "projected": projected_grade is not None,
-        }
-        for field in ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source",
-                      "credit_candidates", "credit_choice", "crn", "attempts"):
-            if field in course:
-                detail[field] = course[field]
-
-        # Risk flags
-        if grade in ("FF", "VF"):
-            detail["note"] = failure_note
-            ff_risk.append(detail)
-        elif grade in ("FD", "DD", "DD+", "DC", "DC+"):
-            detail["note"] = "Düşük not. Bu dersin ortalamaya katkısı kredi ağırlığına bağlıdır."
-
-        details.append(detail)
-
-    known_gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
-    complete = not (invalid_credits or unrecognized_grades or ungraded)
-    unused_projections = sorted(set(projected) - used_projections)
-    return _json_safe({
-        "gpa": known_gpa if complete else None,
-        "known_courses_gpa": known_gpa,
-        "calculation_complete": complete,
-        "calculation_status": "incomplete" if not complete else "complete" if known_gpa is not None else "no_gpa_credits",
-        "average_scope": "supplied_courses",
-        "input_course_count": len(courses),
-        "gpa_eligible_course_count": eligible_count,
-        "covered_course_count": len(details),
-        "excluded_course_count": len(excluded_courses),
-        "total_credits": round(total_credits, 1),
-        "total_points": round(total_points, 2),
-        "graded_course_count": len(details),
-        "ungraded_course_count": len(ungraded),
-        "courses": details,
-        "ungraded": ungraded,
-        "unrecognized_grades": unrecognized_grades,
-        "invalid_credits": invalid_credits,
-        "excluded_courses": excluded_courses,
-        "unused_projected_courses": unused_projections,
-        "projection_complete": not unused_projections,
-        "applied_projection_count": len(used_projections),
-        "ff_risk": ff_risk,
-        "comment": None,
-        "scale": "4.00",
-        "note": (
-            "Hesap yalnız verilen dersleri kapsar. Eksik veya geçersiz not/kredi varsa "
-            "gpa verilmez; known_courses_gpa ve toplamlar yalnız doğrulanan kayıtları kapsar. "
-            "Bu sonuç onur derecesi, akademik durum veya kümülatif GANO belirlemez. "
-            "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
-        ),
-    })
+        row = _read_course_row(course, projected)
+        if row.projected:
+            used_projections.add(row.key)
+        _file_course(tally, row)
+    return _json_safe(_gpa_result(tally, len(courses), projected, used_projections))
 
 
 # --- The result obs_calculate_gpa returns -----------------------------------
