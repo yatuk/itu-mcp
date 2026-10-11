@@ -15,8 +15,17 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def official_term_reference(payload: dict[str, Any], term_code: str | None) -> dict[str, Any]:
-    """Do not guess between concurrent programs or substitute another term."""
+def official_term_reference(
+    payload: dict[str, Any],
+    term_code: str | None,
+    *,
+    zero_average_is_final: bool = False,
+) -> dict[str, Any]:
+    """Do not guess between concurrent programs or substitute another term.
+
+    ``zero_average_is_final``: the caller knows every course of the term has a
+    failing grade, so an average of 0 with 0 earned credits is the real record.
+    """
     candidates = []
     if not isinstance(payload, dict) or type(payload.get('statusCode')) is not int or payload['statusCode'] != 0:
         return {'status': 'unavailable', 'gpa': None, 'credits': None,
@@ -52,7 +61,9 @@ def official_term_reference(payload: dict[str, Any], term_code: str | None) -> d
                     continue
                 # OBS can report 0 for a term that has no awarded credit yet.
                 # That is an unfinished term, not an official average of zero.
-                if gpa == 0 and not _number(term.get('verilenKredi')):
+                # verilenKredi is earned credit, so a term with only failed
+                # courses looks the same; the caller tells the two apart.
+                if gpa == 0 and not _number(term.get('verilenKredi')) and not zero_average_is_final:
                     continue
                 candidates.append({
                     'term_code': str(term_code),
@@ -68,7 +79,13 @@ def official_term_reference(payload: dict[str, Any], term_code: str | None) -> d
             'finality': 'not_reported_by_source'}
 
 
-def attach_official_reference(result: dict[str, Any], reference: dict[str, Any], *, projection: bool) -> None:
+def attach_official_reference(
+    result: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    projection: bool,
+    ambiguous_credits: list[dict[str, Any]] | None = None,
+) -> None:
     calculated = result.get('gpa')
     official = reference.get('gpa')
     result['calculated_term_gpa'] = calculated
@@ -99,3 +116,16 @@ def attach_official_reference(result: dict[str, Any], reference: dict[str, Any],
             'Use official_term_gpa for the reported OBS average. Degree-plan counted '
             'credit has not been assumed to be the GPA weight.'
         )
+        # A mismatch names every course whose plan row carries two credit values.
+        ambiguous = ambiguous_credits or []
+        result['mismatch_ambiguous_credit_courses'] = [course.get('code') for course in ambiguous]
+        if ambiguous:
+            result['calculation_warning'] += ' Ambiguous credit: ' + '; '.join(
+                f"{course.get('code')} ({_credit_text(course.get('kredisi'))} or "
+                f"{_credit_text(course.get('sayilanKredi'))})" for course in ambiguous
+            ) + '.'
+
+
+def _credit_text(value: Any) -> str:
+    number = _number(value)
+    return '?' if number is None else f'{number:g}'

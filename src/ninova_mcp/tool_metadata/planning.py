@@ -13,21 +13,30 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "the official term record. For factual average questions use preferred_term_gpa "
             "and preferred_term_gpa_source; the legacy gpa field remains the calculated estimate. "
             "This is a term average, not cumulative GANO. "
-            "Supports projected grades for what-if scenarios. "
+            "Supports projected grades for what-if scenarios, keyed by course code or CRN; "
+            "check projection_status and unmatched_projected_keys before reporting a what-if. "
+            "Each course may carry attempts (other terms of the same course, and "
+            "likely_equivalent failed attempts under another code, which are unconfirmed). "
+            "credit_ambiguity names courses whose plan row carries two credit values. "
             "Uses İTÜ 4.00-scale letter grade conversion."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "semester": {
-                    "type": "string",
-                    "description": "Semester id, code, or name (default: latest).",
+                    "type": ["string", "integer", "number"],
+                    "description": (
+                        "Term code as a number or string (202410), internal term id "
+                        "(akademikDonemId), or term name (\"2024-2025 Güz\"). Default: latest."
+                    ),
                 },
                 "projected_grades": {
                     "type": "object",
+                    "additionalProperties": {"type": "string"},
                     "description": (
-                        "Optional dict of course code → expected letter grade "
-                        'for what-if scenarios, e.g. {"BLG 223E": "AA"}.'
+                        "Optional what-if grades. Keys are course codes (any spacing or case) "
+                        'or CRNs of the term, values are letter grades, '
+                        'e.g. {"BLG 223E": "AA", "21547": "BB"}.'
                     ),
                 },
                 "include_official": {
