@@ -257,15 +257,41 @@ class PublicCatalogToolsMixin:
         query: str | None = None,
     ) -> dict[str, Any]:
         """Read the İTÜ academic calendar (public, no login needed)."""
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        from .academic_calendar import TIMEZONE, default_event_window
         from .planning import filter_academic_calendar
 
-        return filter_academic_calendar(
-            self.obs_public.get_academic_calendar(),
+        for value in (date_from, date_to):
+            if value:
+                date.fromisoformat(value)  # reject a bad date before any request
+        calendar = self.obs_public.get_academic_calendar(date_from=date_from, date_to=date_to)
+        result = filter_academic_calendar(
+            calendar,
             date_from=date_from,
             date_to=date_to,
             category=category,
             query=query,
         )
+        fetch_warning = calendar.get("coverage_warning")
+        if fetch_warning and fetch_warning not in str(result.get("coverage_warning") or ""):
+            result["coverage_warning"] = f"{fetch_warning} {result.get('coverage_warning') or ''}".strip()
+        if not (date_from or date_to or category or query) and calendar.get("coverage", {}).get("scope") == "academic_year":
+            # A whole academic year is several hundred rows; with no filter
+            # only the recent and upcoming ones are listed.
+            start, end = default_event_window(datetime.now(ZoneInfo(TIMEZONE)).date())
+            result["events"] = [
+                event for event in result["events"]
+                if event["start_date"] <= end.isoformat() and event["end_date"] >= start.isoformat()
+            ]
+            result["event_count"] = len(result["events"])
+            result["default_window"] = {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "note": "No filter was given, so only events in this window are listed. Pass date_from/date_to, category or query to search the whole academic year.",
+            }
+        return result
 
     def get_public_course_schedule(
         self,
