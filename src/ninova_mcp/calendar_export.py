@@ -9,8 +9,8 @@ exam schedule rows of the given course codes into single dated events.
 
 Nothing here invents a date or a time. A meeting whose day or time is a
 placeholder is skipped and reported. The first and last day of classes come
-from the caller, or from the academic calendar page when it happens to state
-them for the active term; otherwise the tool returns
+from the caller, or from the academic calendar when it states them for the
+term of the schedule; otherwise the tool returns
 ``status="term_dates_required"`` and no calendar. The tools return text only
 and never touch the filesystem, so they are safe on the remote transport.
 """
@@ -127,13 +127,14 @@ def find_term_dates(
     semester_label: str | None,
     program_type: str,
 ) -> dict[str, str | None]:
-    """Look for the first and last day of classes on the fetched calendar page.
+    """Look for the first and last day of classes in the fetched calendar.
 
     Only an event that states it outright is accepted: "Beginning of Fall
     Term" / "End of Fall Term" for the same academic year and the same level
-    (undergraduate or graduate) as the schedule. The calendar page covers one
-    displayed month, so most of the time at least one of the two is absent
-    and the caller has to supply it. Conflicting dates count as not found.
+    (undergraduate or graduate) as the schedule. The calendar's own ``terms``
+    list is read first; the event scan below covers a calendar without one.
+    A date the calendar does not state stays ``None`` and the caller has to
+    supply it. Conflicting dates count as not found.
     """
     from .parsing import normalize_lookup_text
 
@@ -143,6 +144,16 @@ def find_term_dates(
     if parsed is None or scope is None:
         return found
     academic_year, season = parsed
+    stated = [
+        term for term in calendar.get("terms") or []
+        if isinstance(term, dict) and term.get("academic_year") == academic_year
+        and term.get("term") == _SEASON_TERMS[season][0] and term.get("scope") == scope
+    ]
+    if len(stated) == 1:
+        found["term_start"] = stated[0].get("classes_start") or None
+        found["term_end"] = stated[0].get("classes_end") or None
+    if found["term_start"] and found["term_end"]:
+        return found
     season_pattern = _SEASON_TERMS[season][1]
     unit = r"(?:term|semester|school)" if season == "yaz" else r"(?:term|semester)"
     patterns = {
@@ -160,7 +171,7 @@ def find_term_dates(
                 if value:
                     candidates[key].add(str(value))
     for key, values in candidates.items():
-        if len(values) == 1:
+        if len(values) == 1 and not found[key]:
             found[key] = next(iter(values))
     return found
 
@@ -301,9 +312,9 @@ class CalendarExportToolsMixin:
                 "missing_parameters": missing,
                 "summary": (
                     f"Takvim üretilmedi: {' ve '.join(missing)} belirlenemedi. Akademik takvim "
-                    "sayfası yalnızca görüntülenen ayı kapsıyor ve bu dönemin ders başlangıç ya "
-                    "da bitiş gününü içermiyor. Tarih uydurulmadı; derslerin ilk ve son gününü "
-                    "term_start ve term_end (YYYY-AA-GG) olarak verin."
+                    "bu dönemin ders başlangıç ya da bitiş gününü açıkça belirtmiyor. Tarih "
+                    "uydurulmadı; derslerin ilk ve son gününü term_start ve term_end "
+                    "(YYYY-AA-GG) olarak verin."
                 ),
             })
             return result
@@ -530,9 +541,11 @@ CALENDAR_EXPORT_TOOLS: list[dict[str, Any]] = [
             "read from the public OBS course schedule (no login). Each meeting becomes a "
             "weekly recurring event in Europe/Istanbul time between the first and last day "
             "of classes. Those two dates are taken from term_start/term_end; when omitted "
-            "the academic calendar page is checked, but it covers only the displayed month, "
-            "so the result is often status='term_dates_required' with no calendar: ask the "
-            "user for the dates instead of guessing. Meetings whose day or time is a "
+            "they are read from the official academic calendar (\"Beginning/End of Fall "
+            "Term\" for that academic year and level) and 'term_date_sources' says where "
+            "each came from. If the calendar does not state one, the result is "
+            "status='term_dates_required' with no calendar: ask the user for the dates "
+            "instead of guessing. Meetings whose day or time is a "
             "placeholder ('-', '--') are listed in 'skipped' and never given a time; CRNs "
             "not found in the scanned departments are in 'missing_crns'. Holidays are not "
             "excluded from the recurrence. Returns the text in 'ics'; it does not write a file."
