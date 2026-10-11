@@ -170,25 +170,15 @@ class ObsPublicSchedule(ObsPublicTransport):
 
         self._dept_cache: dict[int, dict[str, Any]] = getattr(self, "_dept_cache", {})
 
-        # Exact code match
-        for d in depts:
-            if normalize_lookup_text(d.get("code") or "") == target:
-                self._dept_cache[int(d["brans_kodu_id"])] = d
-                return int(d["brans_kodu_id"])
-
-        # Try numeric ID
-        if department.strip().isdigit():
-            did = int(department.strip())
-            if any(d.get("brans_kodu_id") == did for d in depts):
-                return did
-
-        # Fuzzy match
-        for d in depts:
-            code = normalize_lookup_text(d.get("code") or "")
-            if code and (target in code or code in target):
-                self._dept_cache[int(d["brans_kodu_id"])] = d
-                return int(d["brans_kodu_id"])
-
+        exact = next((d for d in depts if normalize_lookup_text(d.get("code") or "") == target), None)
+        if exact is not None:
+            return self._remember_department(exact)
+        listed_id = _listed_department_id(depts, department)
+        if listed_id is not None:
+            return listed_id
+        partial = next((d for d in depts if _codes_overlap(normalize_lookup_text(d.get("code") or ""), target)), None)
+        if partial is not None:
+            return self._remember_department(partial)
         available = ", ".join(
             f"{d.get('code')} (id={d.get('brans_kodu_id')})" for d in depts[:20]
         )
@@ -196,3 +186,23 @@ class ObsPublicSchedule(ObsPublicTransport):
             f"Bölüm kodu bulunamadı: {department!r}. "
             f"Mevcut bölümler (ilk 20): {available}"
         )
+
+    def _remember_department(self, department: dict[str, Any]) -> int:
+        """Keep a department found by its code, so the schedule can name it; return its id."""
+        department_id = int(department["brans_kodu_id"])
+        self._dept_cache[department_id] = department
+        return department_id
+
+
+def _listed_department_id(depts: list[dict[str, Any]], department: str) -> int | None:
+    """The number the caller gave, when it is the id of a listed department."""
+    text = department.strip()
+    if not text.isdigit():
+        return None
+    department_id = int(text)
+    return department_id if any(d.get("brans_kodu_id") == department_id for d in depts) else None
+
+
+def _codes_overlap(code: str, target: str) -> bool:
+    """True when a department code holds the query or the query holds the code."""
+    return bool(code) and (target in code or code in target)

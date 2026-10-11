@@ -14,6 +14,41 @@ from .parsing import (
 )
 
 
+def _branch_index_match(index: dict[str, int], raw: str, target: str) -> dict[str, Any] | None:
+    """Resolve through the branch index: the key itself, or the first key the code starts with."""
+    if target in index:
+        return {
+            "code": raw.upper(),
+            "brans_kodu_id": index[target],
+            "source": "dept_index",
+        }
+    # Also try prefix match (e.g. "BBF 201E" → department code "bbf").
+    for key, value in index.items():
+        if len(key) >= 2 and target.startswith(key):
+            return {
+                "code": raw.upper(),
+                "brans_kodu_id": value,
+                "matched_key": key,
+                "source": "dept_index_prefix",
+            }
+    return None
+
+
+def _catalog_match(results: list[dict[str, Any]], raw: str, target: str) -> dict[str, Any]:
+    """Resolve through catalog search results: the exact code, else the first result."""
+    exact = next(
+        (item for item in results if normalize_lookup_text(item.get("code") or "") == target), None,
+    )
+    best = exact if exact is not None else results[0]
+    return {
+        "code": best.get("code") or raw.upper(),
+        "name": best.get("name"),
+        "brans_kodu_id": None,
+        "url": best.get("url"),
+        "source": "search_exact" if exact is not None else "search_fuzzy",
+    }
+
+
 class ObsPublicCatalog(ObsPublicTransport):
     """Branch index and course lookups of the public catalog."""
 
@@ -109,26 +144,10 @@ class ObsPublicCatalog(ObsPublicTransport):
         """
         raw = course_code.strip()
         target = normalize_lookup_text(raw)
-
         # Try the department-level index first (quick).
-        index = self._build_course_index()
-        if target in index:
-            return {
-                "code": raw.upper(),
-                "brans_kodu_id": index[target],
-                "source": "dept_index",
-            }
-
-        # Also try prefix match (e.g. "BBF 201E" → department code "bbf").
-        for key, value in index.items():
-            if len(key) >= 2 and target.startswith(key):
-                return {
-                    "code": raw.upper(),
-                    "brans_kodu_id": value,
-                    "matched_key": key,
-                    "source": "dept_index_prefix",
-                }
-
+        from_index = _branch_index_match(self._build_course_index(), raw, target)
+        if from_index is not None:
+            return from_index
         # Fallback: search the catalog.
         results = self.search_courses(raw)
         if not results:
@@ -136,23 +155,4 @@ class ObsPublicCatalog(ObsPublicTransport):
                 f"Course not found in OBS public catalog: {raw}. "
                 "Try a different code format (e.g. 'BBF 201E' vs 'BBF201E')."
             )
-
-        # Prefer exact code match.
-        for item in results:
-            if normalize_lookup_text(item.get("code") or "") == target:
-                return {
-                    "code": item.get("code") or raw.upper(),
-                    "name": item.get("name"),
-                    "brans_kodu_id": None,
-                    "url": item.get("url"),
-                    "source": "search_exact",
-                }
-
-        best = results[0]
-        return {
-            "code": best.get("code") or raw.upper(),
-            "name": best.get("name"),
-            "brans_kodu_id": None,
-            "url": best.get("url"),
-            "source": "search_fuzzy",
-        }
+        return _catalog_match(results, raw, target)
