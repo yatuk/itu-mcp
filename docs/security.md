@@ -128,6 +128,42 @@ server would then log in with those values, to the real İTÜ hosts. Start the s
 from a directory you trust, or pass credentials through the `env` block of the
 client.
 
+## Where the password lives
+
+There are three ways to give the server your İTÜ password. It looks for it in
+this order and uses the first one it finds:
+
+| Setup | Where the password is stored | Who can read it |
+| --- | --- | --- |
+| Client config (`env` block of the MCP client) | Plain text in the client's JSON config file | Anyone and anything that can read that file, including backups and synced copies of it |
+| `.env` file (working directory, or `NINOVA_ENV_FILE`) | Plain text in that file | Anyone and anything that can read that file |
+| OS keychain (`itu-mcp setup`) | Windows Credential Manager, macOS Keychain, or Secret Service / KWallet on Linux, under the service name `itu-mcp` | Any process running as your user account |
+
+Notes on the keychain:
+
+- It keeps the password out of config files, shell history, backups of your
+  dotfiles and screenshots of your settings. It does **not** protect it from
+  software running as you: any program started under your account can ask the
+  keychain for the entry, the same way this server does. macOS may ask you to
+  approve the first read; Windows and most Linux desktops do not.
+- Only real operating system stores are used. File based and plain text
+  `keyring` backends (`keyrings.alt`), the `fail` backend and the `null` backend
+  are refused, and `itu-mcp setup` then prints the manual path instead of
+  storing anything.
+- `keyring` is an optional dependency (`pip install "itu-mcp[keyring]"`). Without
+  it the server behaves as before and reads only the environment and `.env`.
+- `NINOVA_KEYRING=0` switches the keychain lookup off.
+- `itu-mcp connect` writes a client config entry with a command and arguments
+  only. If an existing `itu` entry holds `NINOVA_PASSWORD`, it asks before
+  replacing it and leaves it alone with `--yes`. The backup written next to the
+  config still contains the old password: delete it once the new setup works.
+- `itu-mcp doctor` reports where the credentials come from and whether a client
+  config holds the password in plain text. It never prints the values.
+- `itu-mcp logout --forget-password` removes the keychain entries.
+
+In every setup the password is held in the memory of the running server and is
+sent only to the pinned İTÜ hosts listed under "Network boundaries".
+
 ## Remote HTTP transport
 
 Whoever can call the remote endpoint acts as the student whose credentials the server

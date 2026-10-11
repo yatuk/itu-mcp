@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 from .client import NinovaAuthError, NinovaClient
+from .credentials import credentials_available
 from .obs_client import ObsClient, ObsError
 
 
@@ -18,7 +18,7 @@ class SessionToolsMixin:
     state_dir: Path
 
     def auth_status(self) -> dict[str, Any]:
-        credentials_present = bool(os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD"))
+        credentials_present = credentials_available()
         status: dict[str, Any] = {
             "credentials_present": credentials_present,
             "state_dir": str(self.state_dir),
@@ -26,7 +26,10 @@ class SessionToolsMixin:
         }
         if not credentials_present:
             status["authenticated"] = False
-            status["message"] = "Set NINOVA_USERNAME and NINOVA_PASSWORD to enable login."
+            status["message"] = (
+                "Set NINOVA_USERNAME and NINOVA_PASSWORD to enable login, "
+                "or run `itu-mcp setup`."
+            )
             return status
 
         try:
