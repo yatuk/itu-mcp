@@ -45,13 +45,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: python -m pip install --upgrade pip && python -m pip install .
+        run: python -m pip install --upgrade pip && python -m pip install . "pytest>=8"
 
       - name: Run tests
         env:
           NINOVA_USERNAME: dummy
           NINOVA_PASSWORD: dummy
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest tests/ -q
 
   lint:
     name: Lint (ruff)
