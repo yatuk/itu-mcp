@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 
 SERVER_INSTRUCTIONS = (
     "This connector reads the user's own İTÜ Ninova LMS and İTÜ OBS "
