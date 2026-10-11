@@ -432,51 +432,69 @@ def extract_message_thread_detail(html: str, page_url: str, base_url: str) -> di
     }
 
 
-def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, Any]]:
+_REMOTE_EMPTY_MARKERS = (
+    "herhangi bir uzaktan egitim oturumu bulunmamaktadir",
+    "no remote learning sessions", "no sessions found",
+)
+
+
+def _is_remote_empty_state(text: str) -> bool:
+    """True for a blank row or the page's "no sessions" message."""
+    normalized = normalize_lookup_text(text)
+    return not normalized or any(marker in normalized for marker in _REMOTE_EMPTY_MARKERS)
+
+
+def _remote_rows_without_headers(own_rows: list[Tag], page_url: str) -> list[dict[str, Any]]:
+    """A header-less table lists one session per single-cell row."""
     rows: list[dict[str, Any]] = []
+    for row in own_rows:
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != 1:
+            continue
+        text = clean_text(cells[0].get_text(" ", strip=True))
+        if _is_remote_empty_state(text):
+            continue
+        item = {"text": text, "title": text}
+        anchor = cells[0].find("a", href=True)
+        if anchor is not None:
+            item["meeting_url"] = urljoin(page_url, str(anchor["href"]))
+        rows.append(item)
+    return rows
+
+
+def _remote_session(headers: list[str], cells: list[Tag], page_url: str) -> dict[str, Any]:
+    """A session row keyed by the table's headers, plus the normalized title, times and meeting link."""
+    item: dict[str, Any] = {}
+    for header, cell in zip(headers, cells, strict=False):
+        item[header] = clean_text(cell.get_text(" ", strip=True)) or None
+        key = normalize_lookup_text(header)
+        anchor = cell.find("a", href=True)
+        if anchor is not None:
+            item[f"{header}_url"] = urljoin(page_url, anchor["href"])
+            if any(word in key for word in ("baglanti", "link", "katil")):
+                item["meeting_url"] = item[f"{header}_url"]
+        if key in {"baslik", "oturum", "title", "session"}:
+            item["title"] = item[header]
+        elif key in {"baslangic", "baslangic tarihi", "start", "start time"}:
+            item["start_at"] = ninova_datetime_iso(item[header])
+        elif key in {"bitis", "bitis tarihi", "end", "end time"}:
+            item["end_at"] = ninova_datetime_iso(item[header])
+    return item
+
+
+def _extract_remote_session_rows(table: Tag, page_url: str) -> list[dict[str, Any]]:
     own_rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
     headers = [clean_text(cell.get_text(" ", strip=True)) for row in own_rows
                for cell in row.find_all("th", recursive=False)]
-    def empty_state(text: str) -> bool:
-        normalized = normalize_lookup_text(text)
-        return not normalized or any(marker in normalized for marker in (
-            "herhangi bir uzaktan egitim oturumu bulunmamaktadir",
-            "no remote learning sessions", "no sessions found",
-        ))
     if not headers:
-        for row in own_rows:
-            cells = row.find_all("td", recursive=False)
-            if len(cells) != 1:
-                continue
-            text = clean_text(cells[0].get_text(" ", strip=True))
-            if not empty_state(text):
-                item = {"text": text, "title": text}
-                anchor = cells[0].find("a", href=True)
-                if anchor is not None:
-                    item["meeting_url"] = urljoin(page_url, str(anchor["href"]))
-                rows.append(item)
-        return rows
+        return _remote_rows_without_headers(own_rows, page_url)
 
+    rows: list[dict[str, Any]] = []
     for row in own_rows:
         cells = row.find_all("td", recursive=False)
-        if not cells or empty_state(row.get_text(" ", strip=True)):
+        if not cells or _is_remote_empty_state(row.get_text(" ", strip=True)):
             continue
-        item: dict[str, Any] = {}
-        for header, cell in zip(headers, cells, strict=False):
-            item[header] = clean_text(cell.get_text(" ", strip=True)) or None
-            anchor = cell.find("a", href=True)
-            if anchor is not None:
-                item[f"{header}_url"] = urljoin(page_url, anchor["href"])
-                if any(word in normalize_lookup_text(header) for word in ("baglanti", "link", "katil")):
-                    item["meeting_url"] = item[f"{header}_url"]
-            key = normalize_lookup_text(header)
-            if key in {"baslik", "oturum", "title", "session"}:
-                item["title"] = item[header]
-            elif key in {"baslangic", "baslangic tarihi", "start", "start time"}:
-                item["start_at"] = ninova_datetime_iso(item[header])
-            elif key in {"bitis", "bitis tarihi", "end", "end time"}:
-                item["end_at"] = ninova_datetime_iso(item[header])
-        rows.append(item)
+        rows.append(_remote_session(headers, cells, page_url))
     return rows
 
 
