@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from dataclasses import dataclass, field
 from typing import Any
 
 from .archive import normalize_course_code
@@ -26,15 +27,21 @@ def course_key(value: Any) -> str:
         return " ".join(str(value or "").upper().split())
 
 
-def parse_credit(value: Any) -> float | None:
-    """Parse a finite nonnegative credit value, preserving a genuine zero."""
+def finite_number(value: Any) -> float | None:
+    """Read a finite number; a decimal comma is accepted, a bool is not a number."""
     if value is None or isinstance(value, bool):
         return None
     try:
         number = float(str(value).strip().replace(",", "."))
     except (TypeError, ValueError, OverflowError):
         return None
-    return number if math.isfinite(number) and number >= 0 else None
+    return number if math.isfinite(number) else None
+
+
+def parse_credit(value: Any) -> float | None:
+    """Parse a finite nonnegative credit value, preserving a genuine zero."""
+    number = finite_number(value)
+    return number if number is not None and number >= 0 else None
 
 
 def _json_safe(value: Any) -> Any:
@@ -48,6 +55,24 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+COUNTED_GRADES = tuple(grade for grade, value in LETTER_TO_GRADE.items() if value is not None)
+UNCOUNTED_GRADES = tuple(sorted(grade for grade, value in LETTER_TO_GRADE.items() if value is None))
+
+
+def letter_grade_argument(value: Any, where: str) -> str:
+    """A letter grade given by the caller, normalized (``bb`` becomes ``BB``).
+
+    Raises ``ValueError`` naming ``where``, the value and the valid grades.
+    """
+    grade = normalize_grade(value) if isinstance(value, str) else ""
+    if grade not in LETTER_TO_GRADE:
+        raise ValueError(
+            f"Unknown letter grade {value!r} for {where}. Valid grades: {', '.join(COUNTED_GRADES)}. "
+            f"Accepted but not counted in GPA: {', '.join(UNCOUNTED_GRADES)}."
+        )
+    return grade
+
+
 def validate_projected_grades(projected_grades: Any) -> dict[str, str]:
     """What-if grades with normalized letter grades (``bb`` becomes ``BB``).
 
@@ -57,21 +82,187 @@ def validate_projected_grades(projected_grades: Any) -> dict[str, str]:
         return {}
     if not isinstance(projected_grades, dict):
         raise ValueError('projected_grades must be an object such as {"BLG 223E": "AA", "21547": "BB"}.')
-    counted = [grade for grade, value in LETTER_TO_GRADE.items() if value is not None]
-    uncounted = sorted(grade for grade, value in LETTER_TO_GRADE.items() if value is None)
     checked: dict[str, str] = {}
     for raw_key, raw_grade in projected_grades.items():
         if not course_key(raw_key):
             raise ValueError("projected_grades keys must be a course code or a CRN.")
-        grade = normalize_grade(raw_grade) if isinstance(raw_grade, str) else ""
-        if grade not in LETTER_TO_GRADE:
-            raise ValueError(
-                f"Unknown letter grade {raw_grade!r} for projected_grades[{str(raw_key)!r}]. "
-                f"Valid grades: {', '.join(counted)}. "
-                f"Accepted but not counted in GPA: {', '.join(uncounted)}."
-            )
-        checked[str(raw_key)] = grade
+        checked[str(raw_key)] = letter_grade_argument(raw_grade, f"projected_grades[{str(raw_key)!r}]")
     return checked
+
+
+_FAILED_GRADES = ("FF", "VF")
+_LOW_GRADES = ("FD", "DD", "DD+", "DC", "DC+")
+# Evidence the caller attached to a course; copied to the counted course as is.
+_EVIDENCE_FIELDS = ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source",
+                    "credit_candidates", "credit_choice", "crn", "attempts")
+_RESULT_NOTE = (
+    "Hesap yalnız verilen dersleri kapsar. Eksik veya geçersiz not/kredi varsa "
+    "gpa verilmez; known_courses_gpa ve toplamlar yalnız doğrulanan kayıtları kapsar. "
+    "Bu sonuç onur derecesi, akademik durum veya kümülatif GANO belirlemez. "
+    "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
+)
+
+
+@dataclass
+class _SuppliedCourse:
+    """One supplied course with its code, credit and grade read once."""
+
+    source: dict[str, Any]
+    code: Any
+    name: Any
+    key: str
+    credit_raw: Any
+    credit: float | None
+    grade: str | None
+    projected: bool
+
+    @property
+    def credit_gap(self) -> str:
+        """Why there is no usable credit: nothing was supplied, or it is not a credit."""
+        return "missing" if self.credit_raw is None or str(self.credit_raw).strip() == "" else "invalid"
+
+
+@dataclass
+class _Tally:
+    """Running totals and the courses sorted by what happened to them."""
+
+    total_points: float = 0.0
+    total_credits: float = 0.0
+    eligible_count: int = 0
+    counted: list[dict[str, Any]] = field(default_factory=list)
+    ff_risk: list[dict[str, Any]] = field(default_factory=list)
+    ungraded: list[dict[str, Any]] = field(default_factory=list)
+    unrecognized_grades: list[dict[str, Any]] = field(default_factory=list)
+    invalid_credits: list[dict[str, Any]] = field(default_factory=list)
+    excluded: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _projection_by_course(projected_grades: Any) -> dict[str, str]:
+    """What-if grades per course key; two keys of one course must agree."""
+    projected: dict[str, str] = {}
+    for code, grade in validate_projected_grades(projected_grades).items():
+        key = course_key(code)
+        if key in projected and projected[key] != grade:
+            raise ValueError(f"Conflicting projected grades for {key}.")
+        projected[key] = grade
+    return projected
+
+
+def _read_supplied_course(course: dict[str, Any], projected: dict[str, str]) -> _SuppliedCourse:
+    code = course.get("code") or course.get("dersKodu") or "?"
+    name = course.get("name") or course.get("dersAdiTR") or ""
+
+    # Kredi (None check: 0 is a valid credit value)
+    credit_raw = course.get("credit")
+    if credit_raw is None:
+        credit_raw = course.get("kredi")
+
+    # A what-if value is an explicit override, including for a course that
+    # already has an OBS letter grade.  This matches the public tool's
+    # documented behaviour and lets users compare alternative outcomes.
+    key = course_key(code)
+    projected_grade = projected.get(key)
+    grade_raw = projected_grade if projected_grade is not None else course.get("grade")
+    if grade_raw is None or grade_raw == "":
+        grade_raw = course.get("harfNotu")
+    grade = (str(grade_raw).strip().upper() or None) if grade_raw is not None else None
+    return _SuppliedCourse(
+        source=course, code=code, name=name, key=key, credit_raw=credit_raw,
+        credit=parse_credit(credit_raw), grade=grade, projected=projected_grade is not None,
+    )
+
+
+def _file_course(tally: _Tally, row: _SuppliedCourse) -> None:
+    """Put the course where its grade sends it: ungraded, unknown, excluded or counted."""
+    if row.grade is None:
+        tally.ungraded.append({**row.source, "code": row.code, "name": row.name, "credit": row.credit,
+                               "credit_status": "valid" if row.credit is not None else row.credit_gap})
+        return
+    if row.grade not in LETTER_TO_GRADE:
+        tally.unrecognized_grades.append({"code": row.code, "grade": row.grade})
+        return
+    coefficient = LETTER_TO_GRADE[row.grade]
+    if coefficient is None:
+        # GE, KF, IA, MU gibi GANO'ya katılmayan notlar
+        tally.excluded.append({"code": row.code, "grade": row.grade, "credit": row.credit,
+                               "reason": "grade_excluded_from_gpa"})
+        return
+    _count_course(tally, row, coefficient)
+
+
+def _count_course(tally: _Tally, row: _SuppliedCourse, coefficient: float) -> None:
+    """Add a course whose grade counts, unless its credit cannot be used."""
+    tally.eligible_count += 1
+    failure_note = f"{row.grade} notu bildirildi. Dersin tekrar veya yerine alma koşulları OBS kurallarına bağlıdır."
+    unusable = {"code": row.code, "grade": row.grade}
+    if row.credit is None:
+        tally.invalid_credits.append({**unusable, "reason": f"{row.credit_gap}_credit", "raw_credit": row.credit_raw})
+        if row.grade in _FAILED_GRADES:
+            tally.ff_risk.append({**unusable, "credit": None, "note": failure_note})
+        return
+    points = row.credit * coefficient
+    totals = (tally.total_credits + row.credit, tally.total_points + points)
+    if not all(math.isfinite(value) for value in (points, *totals)):
+        tally.invalid_credits.append({**unusable, "reason": "credit_arithmetic_overflow",
+                                      "raw_credit": row.credit_raw})
+        return
+    tally.total_credits, tally.total_points = totals
+
+    detail = {
+        "code": row.code,
+        "name": row.name,
+        "credit": row.credit,
+        "grade": row.grade,
+        "coefficient": coefficient,
+        "points": round(points, 2),
+        "projected": row.projected,
+    }
+    detail.update({name: row.source[name] for name in _EVIDENCE_FIELDS if name in row.source})
+    if row.grade in _FAILED_GRADES:
+        detail["note"] = failure_note
+        tally.ff_risk.append(detail)
+    elif row.grade in _LOW_GRADES:
+        detail["note"] = "Düşük not. Bu dersin ortalamaya katkısı kredi ağırlığına bağlıdır."
+    tally.counted.append(detail)
+
+
+def _gpa_result(
+    tally: _Tally, input_course_count: int, projected: dict[str, str], used_projections: set[str],
+) -> dict[str, Any]:
+    known_gpa = round(tally.total_points / tally.total_credits, 2) if tally.total_credits > 0 else None
+    complete = not (tally.invalid_credits or tally.unrecognized_grades or tally.ungraded)
+    if not complete:
+        status = "incomplete"
+    else:
+        status = "complete" if known_gpa is not None else "no_gpa_credits"
+    unused_projections = sorted(set(projected) - used_projections)
+    return {
+        "gpa": known_gpa if complete else None,
+        "known_courses_gpa": known_gpa,
+        "calculation_complete": complete,
+        "calculation_status": status,
+        "average_scope": "supplied_courses",
+        "input_course_count": input_course_count,
+        "gpa_eligible_course_count": tally.eligible_count,
+        "covered_course_count": len(tally.counted),
+        "excluded_course_count": len(tally.excluded),
+        "total_credits": round(tally.total_credits, 1),
+        "total_points": round(tally.total_points, 2),
+        "graded_course_count": len(tally.counted),
+        "ungraded_course_count": len(tally.ungraded),
+        "courses": tally.counted,
+        "ungraded": tally.ungraded,
+        "unrecognized_grades": tally.unrecognized_grades,
+        "invalid_credits": tally.invalid_credits,
+        "excluded_courses": tally.excluded,
+        "unused_projected_courses": unused_projections,
+        "projection_complete": not unused_projections,
+        "applied_projection_count": len(used_projections),
+        "ff_risk": tally.ff_risk,
+        "comment": None,
+        "scale": "4.00",
+        "note": _RESULT_NOTE,
+    }
 
 
 def calculate_gpa(
@@ -89,136 +280,15 @@ def calculate_gpa(
     ``projected_grades``: ``{"BLG 223E": "AA", ...}`` — henüz notu belli
     olmayan veya beklenen not için elle girilmiş tahmin.
     """
-    projected: dict[str, str] = {}
-    for code, grade in validate_projected_grades(projected_grades).items():
-        key, normalized_grade = course_key(code), grade
-        if key in projected and projected[key] != normalized_grade:
-            raise ValueError(f"Conflicting projected grades for {key}.")
-        projected[key] = normalized_grade
+    projected = _projection_by_course(projected_grades)
     used_projections: set[str] = set()
-
-    total_points = 0.0
-    total_credits = 0.0
-    details: list[dict[str, Any]] = []
-    ff_risk: list[dict[str, Any]] = []
-    ungraded: list[dict[str, Any]] = []
-    unrecognized_grades: list[dict[str, Any]] = []
-    invalid_credits: list[dict[str, Any]] = []
-    excluded_courses: list[dict[str, Any]] = []
-    eligible_count = 0
-
+    tally = _Tally()
     for course in courses:
-        code = course.get("code") or course.get("dersKodu") or "?"
-        name = course.get("name") or course.get("dersAdiTR") or ""
-
-        # Kredi (None check — 0 is a valid credit value)
-        credit_raw = course.get("credit")
-        if credit_raw is None:
-            credit_raw = course.get("kredi")
-        credit = parse_credit(credit_raw)
-
-        # Not
-        # A what-if value is an explicit override, including for a course that
-        # already has an OBS letter grade.  This matches the public tool's
-        # documented behaviour and lets users compare alternative outcomes.
-        key = course_key(code)
-        projected_grade = projected.get(key)
-        if projected_grade is not None:
-            used_projections.add(key)
-        grade_raw = projected_grade if projected_grade is not None else course.get("grade")
-        if grade_raw is None or grade_raw == "":
-            grade_raw = course.get("harfNotu")
-        grade = (str(grade_raw).strip().upper() or None) if grade_raw is not None else None
-
-        coefficient = LETTER_TO_GRADE.get(grade) if grade else None
-
-        if grade is None:
-            ungraded.append({**course, "code": code, "name": name, "credit": credit,
-                             "credit_status": "valid" if credit is not None else "missing" if credit_raw is None or str(credit_raw).strip() == "" else "invalid"})
-            continue
-
-        if grade not in LETTER_TO_GRADE:
-            unrecognized_grades.append({"code": code, "grade": grade})
-            continue
-
-        if coefficient is None:
-            # GE, KF, IA, MU gibi GANO'ya katılmayan notlar
-            excluded_courses.append({"code": code, "grade": grade, "credit": credit, "reason": "grade_excluded_from_gpa"})
-            continue
-
-        eligible_count += 1
-        failure_note = f"{grade} notu bildirildi. Dersin tekrar veya yerine alma koşulları OBS kurallarına bağlıdır."
-        if credit is None:
-            reason = "missing_credit" if credit_raw is None or str(credit_raw).strip() == "" else "invalid_credit"
-            invalid_credits.append({"code": code, "grade": grade, "reason": reason, "raw_credit": credit_raw})
-            if grade in ("FF", "VF"):
-                ff_risk.append({"code": code, "grade": grade, "credit": None, "note": failure_note})
-            continue
-        points = credit * coefficient
-        if not all(math.isfinite(value) for value in (points, total_credits + credit, total_points + points)):
-            invalid_credits.append({"code": code, "grade": grade, "reason": "credit_arithmetic_overflow", "raw_credit": credit_raw})
-            continue
-        total_credits += credit
-        total_points += points
-
-        detail = {
-            "code": code,
-            "name": name,
-            "credit": credit,
-            "grade": grade,
-            "coefficient": coefficient,
-            "points": round(points, 2),
-            "projected": projected_grade is not None,
-        }
-        for field in ("recorded_credit", "plan_credit", "counted_credit", "credit_source", "grade_source",
-                      "credit_candidates", "credit_choice", "crn", "attempts"):
-            if field in course:
-                detail[field] = course[field]
-
-        # Risk flags
-        if grade in ("FF", "VF"):
-            detail["note"] = failure_note
-            ff_risk.append(detail)
-        elif grade in ("FD", "DD", "DD+", "DC", "DC+"):
-            detail["note"] = "Düşük not. Bu dersin ortalamaya katkısı kredi ağırlığına bağlıdır."
-
-        details.append(detail)
-
-    known_gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
-    complete = not (invalid_credits or unrecognized_grades or ungraded)
-    unused_projections = sorted(set(projected) - used_projections)
-    return _json_safe({
-        "gpa": known_gpa if complete else None,
-        "known_courses_gpa": known_gpa,
-        "calculation_complete": complete,
-        "calculation_status": "incomplete" if not complete else "complete" if known_gpa is not None else "no_gpa_credits",
-        "average_scope": "supplied_courses",
-        "input_course_count": len(courses),
-        "gpa_eligible_course_count": eligible_count,
-        "covered_course_count": len(details),
-        "excluded_course_count": len(excluded_courses),
-        "total_credits": round(total_credits, 1),
-        "total_points": round(total_points, 2),
-        "graded_course_count": len(details),
-        "ungraded_course_count": len(ungraded),
-        "courses": details,
-        "ungraded": ungraded,
-        "unrecognized_grades": unrecognized_grades,
-        "invalid_credits": invalid_credits,
-        "excluded_courses": excluded_courses,
-        "unused_projected_courses": unused_projections,
-        "projection_complete": not unused_projections,
-        "applied_projection_count": len(used_projections),
-        "ff_risk": ff_risk,
-        "comment": None,
-        "scale": "4.00",
-        "note": (
-            "Hesap yalnız verilen dersleri kapsar. Eksik veya geçersiz not/kredi varsa "
-            "gpa verilmez; known_courses_gpa ve toplamlar yalnız doğrulanan kayıtları kapsar. "
-            "Bu sonuç onur derecesi, akademik durum veya kümülatif GANO belirlemez. "
-            "BL/BZ/T/E/M ve diğer katsayısız notlar hesaba katılmaz."
-        ),
-    })
+        row = _read_supplied_course(course, projected)
+        if row.projected:
+            used_projections.add(row.key)
+        _file_course(tally, row)
+    return _json_safe(_gpa_result(tally, len(courses), projected, used_projections))
 
 
 # --- The result obs_calculate_gpa returns -----------------------------------
@@ -263,6 +333,27 @@ def _course_row(row: dict[str, Any], credit_source: str | None, grade_source: st
     return kept
 
 
+def _is_stated_elsewhere(key: str, value: Any, result: dict[str, Any], projection_requested: bool) -> bool:
+    """Whether a result field says nothing the compact result does not already say."""
+    if key in _STATIC_RESULT_FIELDS or key in _DUPLICATE_RESULT_FIELDS:
+        return True
+    if key in _PROJECTION_FIELDS and not projection_requested:
+        return True
+    # Equal to ``gpa`` whenever the calculation is complete.
+    return key == "known_courses_gpa" and value == result.get("gpa")
+
+
+def _without_repeats(key: str, value: Any, credit_source: str | None, grade_source: str | None) -> Any:
+    """A kept result field with the parts that repeat another field removed."""
+    if key in ("courses", "ungraded"):
+        return [_course_row(row, credit_source, grade_source) for row in value]
+    if key == "ff_risk":
+        return [row.get("code") for row in value]
+    if key == "official_reference" and isinstance(value, dict):
+        return {name: item for name, item in value.items() if name not in _REFERENCE_DUPLICATES}
+    return value
+
+
 def compact_term_result(result: dict[str, Any], *, projection_requested: bool) -> dict[str, Any]:
     """The result of ``obs_calculate_gpa`` with every value stated once.
 
@@ -277,20 +368,9 @@ def compact_term_result(result: dict[str, Any], *, projection_requested: bool) -
     grade_source = _common_source(listed, "grade_source")
     compact: dict[str, Any] = {}
     for key, value in result.items():
-        if key in _STATIC_RESULT_FIELDS or key in _DUPLICATE_RESULT_FIELDS:
+        if _is_stated_elsewhere(key, value, result, projection_requested):
             continue
-        if key in _PROJECTION_FIELDS and not projection_requested:
-            continue
-        # Equal to ``gpa`` whenever the calculation is complete.
-        if key == "known_courses_gpa" and value == result.get("gpa"):
-            continue
-        if key in ("courses", "ungraded"):
-            value = [_course_row(row, credit_source, grade_source) for row in value]
-        elif key == "ff_risk":
-            value = [row.get("code") for row in value]
-        elif key == "official_reference" and isinstance(value, dict):
-            value = {name: item for name, item in value.items() if name not in _REFERENCE_DUPLICATES}
-        compact[key] = value
+        compact[key] = _without_repeats(key, value, credit_source, grade_source)
         if key == "courses":
             if credit_source:
                 compact["credit_source"] = credit_source
@@ -346,6 +426,19 @@ def plan_rows(info: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _agreed_plan_credit(matched: list[dict[str, Any]], scope: str) -> dict[str, Any] | None:
+    """The credit the rows of one tier agree on, with the counted credit of its met rows."""
+    credits = {row["credit"] for row in matched}
+    if len(credits) != 1:
+        return None
+    entry: dict[str, Any] = {"credit": credits.pop(), "scope": scope}
+    counted = {row["counted_credit"] for row in matched
+               if row["met"] and row["counted_credit"] is not None}
+    if len(counted) == 1:
+        entry["counted_credit"] = counted.pop()
+    return entry
+
+
 def plan_credit_table(rows: list[dict[str, Any]], term_code: Any) -> dict[str, dict[str, Any]]:
     """Plan credit per course code, nearest evidence first.
 
@@ -362,19 +455,10 @@ def plan_credit_table(rows: list[dict[str, Any]], term_code: Any) -> dict[str, d
         tiers[scope].setdefault(row["code"], []).append(row)
     table: dict[str, dict[str, Any]] = {}
     for code in {code for tier in tiers.values() for code in tier}:
-        for scope, tier in tiers.items():
-            matched = tier.get(code)
-            if not matched:
-                continue
-            credits = {row["credit"] for row in matched}
-            if len(credits) == 1:
-                entry: dict[str, Any] = {"credit": credits.pop(), "scope": scope}
-                counted = {row["counted_credit"] for row in matched
-                           if row["met"] and row["counted_credit"] is not None}
-                if len(counted) == 1:
-                    entry["counted_credit"] = counted.pop()
-                table[code] = entry
-            break
+        nearest = next(scope for scope, tier in tiers.items() if tier.get(code))
+        entry = _agreed_plan_credit(tiers[nearest][code], nearest)
+        if entry:
+            table[code] = entry
     return table
 
 
@@ -414,6 +498,44 @@ def resolve_projection_keys(
     return translated, unmatched
 
 
+def _why_official_average_cannot_decide(
+    courses: list[dict[str, Any]], ambiguous: list[dict[str, Any]], official_gpa: float | None, max_ambiguous: int,
+) -> str | None:
+    if official_gpa is None:
+        return "no_official_average"
+    if len(ambiguous) > max_ambiguous:
+        return "too_many_candidates"
+    if calculate_gpa(courses)["gpa"] is None:
+        return "not_comparable"
+    return None
+
+
+def _credit_combinations_matching(
+    courses: list[dict[str, Any]], ambiguous: list[dict[str, Any]], official_gpa: float,
+) -> list[tuple[Any, ...]]:
+    """Every combination of carried credits that reproduces the official average.
+
+    Tries each combination on ``courses`` in place; the caller sets the final credits.
+    """
+    matches = []
+    for combination in itertools.product(*(course["credit_candidates"] for course in ambiguous)):
+        for course, credit in zip(ambiguous, combination, strict=True):
+            course["credit"] = credit
+        trial = calculate_gpa(courses)["gpa"]
+        if trial is not None and abs(trial - official_gpa) < 0.005:
+            matches.append(combination)
+    return matches
+
+
+def _credit_choice(default: tuple[Any, ...], matches: list[tuple[Any, ...]]) -> tuple[tuple[Any, ...], str]:
+    """The credits to use and why: only a single matching combination overrules the default."""
+    if default in matches:
+        return default, "confirmed_by_official_average" if len(matches) == 1 else "undetermined"
+    if len(matches) == 1:
+        return matches[0], "resolved_by_official_average"
+    return default, "undetermined"
+
+
 def reconcile_credit_candidates(
     courses: list[dict[str, Any]],
     official_gpa: float | None,
@@ -429,27 +551,11 @@ def reconcile_credit_candidates(
     ambiguous = [course for course in courses if len(course.get("credit_candidates") or ()) > 1]
     if not ambiguous:
         return None
-    status = "undetermined"
-    if official_gpa is None:
-        status = "no_official_average"
-    elif len(ambiguous) > max_ambiguous:
-        status = "too_many_candidates"
-    elif calculate_gpa(courses)["gpa"] is None:
-        status = "not_comparable"
-    else:
+    status = _why_official_average_cannot_decide(courses, ambiguous, official_gpa, max_ambiguous)
+    if status is None and official_gpa is not None:
         default = tuple(course["credit"] for course in ambiguous)
-        matches = []
-        for combination in itertools.product(*(course["credit_candidates"] for course in ambiguous)):
-            for course, credit in zip(ambiguous, combination, strict=True):
-                course["credit"] = credit
-            trial = calculate_gpa(courses)["gpa"]
-            if trial is not None and abs(trial - official_gpa) < 0.005:
-                matches.append(combination)
-        chosen = default
-        if default in matches:
-            status = "confirmed_by_official_average" if len(matches) == 1 else "undetermined"
-        elif len(matches) == 1:
-            chosen, status = matches[0], "resolved_by_official_average"
+        matches = _credit_combinations_matching(courses, ambiguous, official_gpa)
+        chosen, status = _credit_choice(default, matches)
         for course, credit in zip(ambiguous, chosen, strict=True):
             course["credit"] = credit
             if status == "resolved_by_official_average":
@@ -464,6 +570,22 @@ def reconcile_credit_candidates(
 
 def _term_order(term: str) -> tuple[int, int | str]:
     return (0, int(term)) if term.isdigit() else (1, term)
+
+
+def _own_attempt(row: dict[str, Any], term: str) -> tuple[str, dict[str, Any]]:
+    """Another attempt of the same course, filed by when it happened."""
+    entry: dict[str, Any] = {"term": row["term"], "grade": row["grade"] or None}
+    if row["met"]:
+        entry["counted"] = True
+    if not term:
+        return "other_terms", entry
+    return ("earlier" if _term_order(row["term"]) < _term_order(term) else "later"), entry
+
+
+def _is_failed_lookalike(row: dict[str, Any], names: set[str], credits: set[float]) -> bool:
+    """A failed unused row with the name and credit of the course in question."""
+    return bool(row["unused"] and row["code"] and row["grade"] in FAILING_GRADES
+                and row["name"] in names and row["credit"] in credits)
 
 
 def attempt_notes(
@@ -489,16 +611,11 @@ def attempt_notes(
         if row["term"] == term:
             continue
         if code and row["code"] == code:
-            entry: dict[str, Any] = {"term": row["term"], "grade": row["grade"] or None}
-            if row["met"]:
-                entry["counted"] = True
-            bucket = ("other_terms" if not term else
-                      "earlier" if _term_order(row["term"]) < _term_order(term) else "later")
-        elif (row["unused"] and row["code"] and row["grade"] in FAILING_GRADES
-              and row["name"] in names and row["credit"] in credits):
+            bucket, entry = _own_attempt(row, term)
+        elif _is_failed_lookalike(row, names, credits):
+            bucket = "likely_equivalent"
             entry = {"code": row["code"], "term": row["term"], "grade": row["grade"],
                      "evidence": ["same_name", "same_credit"], "certain": False}
-            bucket = "likely_equivalent"
         else:
             continue
         marker = (bucket, repr(sorted(entry.items())))
@@ -509,7 +626,7 @@ def attempt_notes(
 
 
 _RETAKE_KEYS = frozenset({"credit", "old_grade"})
-_COUNTED_GRADES = tuple(grade for grade, value in LETTER_TO_GRADE.items() if value is not None)
+_COUNTED_GRADES = COUNTED_GRADES
 
 
 def _retake_totals(retakes: Any) -> tuple[float, float]:
@@ -545,6 +662,49 @@ def _retake_totals(retakes: Any) -> tuple[float, float]:
     return math.fsum(credits), math.fsum(points)
 
 
+def _finite_arguments(**arguments: Any) -> dict[str, float]:
+    """The named arguments as finite floats; the first bad one is named in the error."""
+    values = {}
+    for name, raw in arguments.items():
+        if isinstance(raw, bool):
+            raise ValueError(f"{name} must be a finite number")
+        try:
+            number = float(raw)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a finite number") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{name} must be a finite number")
+        values[name] = number
+    return values
+
+
+def _check_target_ranges(values: dict[str, float]) -> None:
+    if not 0.0 <= values["current_gpa"] <= 4.0:
+        raise ValueError("current_gpa must be between 0.00 and 4.00")
+    if not 0.0 <= values["target_gpa"] <= 4.0:
+        raise ValueError("target_gpa must be between 0.00 and 4.00")
+    if values["current_credits"] < 0:
+        raise ValueError("current_credits cannot be negative")
+    if values["future_credits"] <= 0:
+        raise ValueError("future_credits must be greater than zero")
+
+
+def _check_retakes_fit(values: dict[str, float], retake_credits: float, retake_points: float) -> None:
+    """Retakes are part of both the future credits and the current record."""
+    if retake_credits > values["future_credits"] + 1e-9:
+        raise ValueError(
+            "retakes add up to more credits than future_credits; future_credits is the total "
+            "to be taken, retakes included"
+        )
+    if retake_credits > values["current_credits"] + 1e-9:
+        raise ValueError("retakes add up to more credits than current_credits, which already counts them")
+    # current_gpa is a two-decimal value, so the points it implies are off by
+    # up to 0.005 per credit.
+    current_points = values["current_gpa"] * values["current_credits"]
+    if retake_points > current_points + 0.005 * values["current_credits"] + 1e-9:
+        raise ValueError("retakes carry more points than current_gpa and current_credits allow")
+
+
 def calculate_target_gpa(
     *,
     current_gpa: float,
@@ -562,43 +722,15 @@ def calculate_target_gpa(
     already counted in ``current_gpa``. A retake replaces its old grade: its
     credit does not grow the denominator and its old points leave the total.
     """
-    values = {}
-    for name, raw in {
-        "current_gpa": current_gpa, "current_credits": current_credits,
-        "target_gpa": target_gpa, "future_credits": future_credits,
-    }.items():
-        if isinstance(raw, bool):
-            raise ValueError(f"{name} must be a finite number")
-        try:
-            number = float(raw)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(f"{name} must be a finite number") from exc
-        if not math.isfinite(number):
-            raise ValueError(f"{name} must be a finite number")
-        values[name] = number
-    if not 0.0 <= values["current_gpa"] <= 4.0:
-        raise ValueError("current_gpa must be between 0.00 and 4.00")
-    if not 0.0 <= values["target_gpa"] <= 4.0:
-        raise ValueError("target_gpa must be between 0.00 and 4.00")
-    if values["current_credits"] < 0:
-        raise ValueError("current_credits cannot be negative")
-    if values["future_credits"] <= 0:
-        raise ValueError("future_credits must be greater than zero")
-
+    values = _finite_arguments(
+        current_gpa=current_gpa, current_credits=current_credits,
+        target_gpa=target_gpa, future_credits=future_credits,
+    )
+    _check_target_ranges(values)
     retake_credits, retake_points = _retake_totals(retakes)
     considered = retake_credits > 0
     current_points = values["current_gpa"] * values["current_credits"]
-    if retake_credits > values["future_credits"] + 1e-9:
-        raise ValueError(
-            "retakes add up to more credits than future_credits; future_credits is the total "
-            "to be taken, retakes included"
-        )
-    if retake_credits > values["current_credits"] + 1e-9:
-        raise ValueError("retakes add up to more credits than current_credits, which already counts them")
-    # current_gpa is a two-decimal value, so the points it implies are off by
-    # up to 0.005 per credit.
-    if retake_points > current_points + 0.005 * values["current_credits"] + 1e-9:
-        raise ValueError("retakes carry more points than current_gpa and current_credits allow")
+    _check_retakes_fit(values, retake_credits, retake_points)
 
     kept_points = current_points - retake_points
     resulting_credits = values["current_credits"] + values["future_credits"] - retake_credits

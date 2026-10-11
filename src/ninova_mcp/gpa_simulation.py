@@ -29,11 +29,13 @@ import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .gpa import LETTER_TO_GRADE, course_key, parse_credit
+from .gpa import COUNTED_GRADES, LETTER_TO_GRADE, UNCOUNTED_GRADES, course_key, parse_credit
+from .gpa import finite_number as _number
+from .gpa import letter_grade_argument as _grade_argument
 from .grading import FAILING_GRADES, normalize_grade
 
-GRADED = tuple(grade for grade, value in LETTER_TO_GRADE.items() if value is not None)
-UNGRADED = tuple(sorted(grade for grade, value in LETTER_TO_GRADE.items() if value is None))
+GRADED = COUNTED_GRADES
+UNGRADED = UNCOUNTED_GRADES
 _FAILING = frozenset(grade for grade in FAILING_GRADES if LETTER_TO_GRADE.get(grade) is not None)
 _EXTRA_KEYS = frozenset({"code", "grade", "credit", "replaces"})
 _AFTER_EVERYTHING = 10**9
@@ -77,16 +79,6 @@ def _term_key(term: Any) -> int:
     return int(text) if text.isdigit() else 0
 
 
-def _number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(str(value).strip().replace(",", "."))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _name_key(value: Any) -> str:
     """Case, accent, punctuation and whitespace insensitive course name."""
     text = str(value or "").translate({ord("ı"): "i", ord("İ"): "i"}).casefold()
@@ -118,16 +110,6 @@ def _root(groups: dict[str, str], key: str) -> str:
 
 
 # ---------------------------------------------------------------- arguments
-
-
-def _grade_argument(value: Any, where: str) -> str:
-    grade = normalize_grade(value) if isinstance(value, str) else ""
-    if grade not in LETTER_TO_GRADE:
-        raise ValueError(
-            f"Unknown letter grade {value!r} for {where}. Valid grades: {', '.join(GRADED)}. "
-            f"Accepted but not counted in GPA: {', '.join(UNGRADED)}."
-        )
-    return grade
 
 
 def _target_argument(value: Any) -> float | None:
