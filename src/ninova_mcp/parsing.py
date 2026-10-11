@@ -197,6 +197,49 @@ def split_trailing_ninova_datetime(value: str | None) -> tuple[str | None, str |
     return prefix or None, date_text, ninova_datetime_iso(date_text)
 
 
+_DAY_MONTH = r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+(?:\s+\d{4})?"
+_CLOCK = r"\d{1,2}:\d{2}"
+# A start/end cell whose two dates sit above their two times flattens to
+# "25 Şubat - 31 Aralık 00:00 18:00": both times trail both dates.
+_SPLIT_RANGE_RE = re.compile(rf"({_DAY_MONTH})\s*-\s*({_DAY_MONTH})\s+({_CLOCK})\s+({_CLOCK})")
+_ORDERED_RANGE_RE = re.compile(rf"({_DAY_MONTH}(?:\s+{_CLOCK})?)\s*-\s*({_DAY_MONTH}(?:\s+{_CLOCK})?)")
+
+
+def _is_day_month(value: str) -> bool:
+    parts = value.split()
+    return len(parts) >= 2 and normalize_lookup_text(parts[1]) in MONTH_NAMES
+
+
+def split_date_range(value: str | None) -> dict[str, Any] | None:
+    """Split a ``start - end`` date cell into its two ends.
+
+    Handles both the readable order (``25 Şubat 00:00 - 31 Aralık 18:00``) and
+    the flattened one where the times were appended after both dates. Returns
+    ``None`` for anything that is not a range of two Turkish dates. ISO values
+    are added only when the source carries a year; Ninova's dashboard does not.
+    """
+    text = clean_text(value)
+    if not text:
+        return None
+    match = _SPLIT_RANGE_RE.fullmatch(text)
+    if match:
+        start = f"{clean_text(match.group(1))} {match.group(3)}"
+        end = f"{clean_text(match.group(2))} {match.group(4)}"
+    else:
+        match = _ORDERED_RANGE_RE.fullmatch(text)
+        if not match:
+            return None
+        start, end = clean_text(match.group(1)), clean_text(match.group(2))
+    if not (_is_day_month(start) and _is_day_month(end)):
+        return None
+    result: dict[str, Any] = {"start": start, "end": end, "raw": text}
+    for key, part in (("start_iso", start), ("end_iso", end)):
+        iso = ninova_datetime_iso(part)
+        if iso:
+            result[key] = iso
+    return result
+
+
 def _iter_headings(soup: BeautifulSoup) -> list[dict[str, Any]]:
     headings: list[dict[str, Any]] = []
     for tag_name in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -258,11 +301,26 @@ def _table_to_rows(table: Tag) -> dict[str, Any]:
                 headers = cells
             rows.append(cells)
 
+    # A start/end cell is rewritten in reading order, and its two ends are
+    # also given separately under "date_ranges" (with the original text).
+    ranges_by_row: list[dict[int, dict[str, Any]]] = []
+    for row in rows:
+        found: dict[int, dict[str, Any]] = {}
+        for position, cell_text in enumerate(row):
+            date_range = split_date_range(cell_text)
+            if date_range:
+                found[position] = date_range
+                row[position] = f"{date_range['start']} - {date_range['end']}"
+        ranges_by_row.append(found)
+
     structured_rows: list[dict[str, Any] | list[str]] = []
     if headers and rows and len(headers) == len(rows[0]):
-        body_rows = rows[1:]
-        for row in body_rows:
-            structured_rows.append(dict(zip(headers, row, strict=False)))
+        for row, found in zip(rows[1:], ranges_by_row[1:], strict=True):
+            structured: dict[str, Any] = dict(zip(headers, row, strict=False))
+            named = {headers[position]: value for position, value in found.items() if position < len(headers)}
+            if named and "date_ranges" not in structured:
+                structured["date_ranges"] = named
+            structured_rows.append(structured)
     else:
         structured_rows = rows
 
@@ -332,7 +390,80 @@ def _extract_course_title(anchor: Tag) -> str:
     return anchor_text
 
 
+_YEAR_LIKE_NUMBER_RE = re.compile(r"(?:19|20)\d{2}")
+_COURSE_GROUP_RE = re.compile(r"/Sinif/(\d+)\.\d+/?$")
+_CRN_LABEL_RE = re.compile(r"\bCRN\s*:?\s*(\d{3,6})\b", re.I)
+
+
+def _course_group(url: str) -> str | None:
+    """First id of ``/Sinif/<course>.<section>``: shared by sections of one course."""
+    match = _COURSE_GROUP_RE.search(urlparse(url).path)
+    return match.group(1) if match else None
+
+
+def _is_year_like_code(code: str) -> bool:
+    """``CEN 2025`` reads as a branch followed by a year, not as a course number."""
+    number = re.sub(r"^[A-Z]+\s*", "", code)
+    return bool(_YEAR_LIKE_NUMBER_RE.fullmatch(number))
+
+
+def _pick_code(text: str) -> tuple[str | None, bool]:
+    """Return ``(code, uncertain)`` from text, never asserting a year-like number."""
+    candidates = [clean_text(match) for match in COURSE_CODE_RE.findall(text)]
+    for candidate in candidates:
+        if not _is_year_like_code(candidate):
+            return candidate, False
+    return None, bool(candidates)
+
+
+def _course_own_text(anchor: Tag, page_url: str, base_url: str) -> str:
+    """Text that belongs to the anchor's course but to none of its section links.
+
+    Section links carry free-text labels ("CEN 2025 Summer Internship"), so
+    the course code is looked for outside them. The walk goes up from the
+    anchor and stops before a container that also holds another course.
+    """
+    group = _course_group(urljoin(page_url, anchor["href"]))
+
+    def is_course_anchor(tag: Tag) -> bool:
+        absolute = urljoin(page_url, tag.get("href") or "")
+        return is_internal_ninova_url(absolute, base_url) and is_course_root(absolute)
+
+    def outside_section_links(piece: Any, container: Tag) -> bool:
+        for parent in piece.parents:
+            if parent.name in {"script", "style"} or (parent.name == "a" and is_course_anchor(parent)):
+                return False
+            if parent is container:
+                break
+        return True
+
+    node = anchor.parent
+    for _ in range(5):
+        if not isinstance(node, Tag) or node.name in {"body", "html", "[document]"}:
+            break
+        if any(
+            is_course_anchor(other) and _course_group(urljoin(page_url, other["href"])) != group
+            for other in node.find_all("a", href=True)
+        ):
+            break
+        text = clean_text(" ".join(
+            str(piece) for piece in node.find_all(string=True) if outside_section_links(piece, node)
+        ))
+        if COURSE_CODE_RE.search(text):
+            return text
+        node = node.parent
+    return ""
+
+
 def extract_courses(html: str, page_url: str, base_url: str) -> list[dict[str, Any]]:
+    """List the course links of the dashboard, one row per enrolled section.
+
+    ``code`` comes from the text next to the section links, not from the link
+    labels. When only a label is available the code read from it is flagged
+    with ``code_source: "section_label"``, and a branch followed by a year is
+    never reported as a code (``code`` is null and ``code_uncertain`` true).
+    ``section`` and ``crn`` tell two sections of one course apart.
+    """
     soup = make_soup(html)
     courses: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -344,15 +475,29 @@ def extract_courses(html: str, page_url: str, base_url: str) -> list[dict[str, A
             continue
         seen.add(absolute)
         context = _context_from_anchor(anchor)
-        code_match = COURSE_CODE_RE.search(context)
-        courses.append(
-            {
-                "code": code_match.group(0) if code_match else None,
-                "title": _extract_course_title(anchor),
-                "url": absolute,
-                "context": context,
-            }
-        )
+        title = _extract_course_title(anchor)
+        label = clean_text(anchor.get_text(" ", strip=True))
+        crn_match = _CRN_LABEL_RE.search(label)
+
+        code, uncertain = _pick_code(_course_own_text(anchor, page_url, base_url))
+        source = "course_element" if code else None
+        if code is None:
+            code, label_uncertain = _pick_code(context)
+            uncertain = uncertain or label_uncertain
+            source = "section_label" if code else None
+        course: dict[str, Any] = {
+            "code": code,
+            "title": title,
+            "url": absolute,
+            "context": context,
+            "section": label if label and label != title else None,
+            "crn": crn_match.group(1) if crn_match else None,
+        }
+        if source == "section_label" or (code is None and uncertain):
+            if source:
+                course["code_source"] = source
+            course["code_uncertain"] = True
+        courses.append(course)
     return courses
 
 
