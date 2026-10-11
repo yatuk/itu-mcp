@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import os
 import re
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -102,8 +102,16 @@ def _draft_crns(draft: Any) -> list[str] | None:
     return crns
 
 
-def save_registration_draft(obs: Any, crns: list[str], *, allow_replace: bool = False) -> dict[str, Any]:
-    """Save exactly the requested CRNs, preserving warnings and existing enrollments."""
+def save_registration_draft(
+    obs: Any, crns: list[str], *, allow_replace: bool = False,
+    confirm_write: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+) -> dict[str, Any]:
+    """Save exactly the requested CRNs, preserving warnings and existing enrollments.
+
+    ``confirm_write`` is the caller's last gate. It receives the exact change
+    about to be sent and returns None (no gate) or a record whose ``proceed``
+    must be exactly True for the POST to happen.
+    """
     selected = normalize_crns(crns)
     if os.getenv("NINOVA_OBS_REGISTRATION_WRITES") != "1":
         raise ObsError("OBS registration writes are disabled by the operator.")
@@ -137,6 +145,16 @@ def save_registration_draft(obs: Any, crns: list[str], *, allow_replace: bool = 
     if previous is not None and set(previous) == set(selected):
         return {**base, "status": "unchanged", "saved": True, "submission": None, "readback": None,
                 "reason": "draft_already_matches"}
+    confirmation = confirm_write(dict(base)) if confirm_write is not None else None
+    if confirmation is not None:
+        shown = {key: value for key, value in confirmation.items() if key not in ("proceed", "status")}
+        if confirmation.get("proceed") is not True:
+            return {
+                **base, "status": confirmation.get("status") or "confirmation_unavailable", "saved": False,
+                "submission": None, "readback": None, "confirmation": shown,
+                "next_step": confirmation.get("note") or "Nothing was sent.",
+            }
+        base["confirmation"] = shown
     submission = _post_once(obs, SAVE_DRAFT_PATH, {"ecrn": selected})
     readback = _readback(obs, term, selected)
     after = readback.pop("_crns", None)

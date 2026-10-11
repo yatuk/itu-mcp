@@ -11,7 +11,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
@@ -219,10 +219,14 @@ class ObsClient:
         from .registration_draft import read_registration_draft
         return read_registration_draft(self)
 
-    def save_registration_draft(self, crns: list[str], *, allow_replace: bool = False) -> dict[str, Any]:
+    def save_registration_draft(
+        self, crns: list[str], *, allow_replace: bool = False,
+        confirm_write: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any]:
         """Save a draft once and reconcile its contents; this does not enroll."""
         from .registration_write import save_registration_draft
-        return save_registration_draft(self, crns, allow_replace=allow_replace)
+        gate = {"confirm_write": confirm_write} if confirm_write is not None else {}
+        return save_registration_draft(self, crns, allow_replace=allow_replace, **gate)
 
     def validate_registration_crns(self, crns: list[str]) -> dict[str, Any]:
         """Run OBS's independent CRN check without saving or registering courses."""
@@ -567,8 +571,15 @@ class ObsPublicClient:
             raise ObsError("A full course code such as BLG 223E is required.") from exc
         return self.get_prerequisite_detail(branch, number)
 
-    def get_postrequisites(self, course_id: int | str) -> dict[str, Any]:
-        """Find exact course references in official branch prerequisite rules."""
+    def get_postrequisites(
+        self, course_id: int | str,
+        progress: Callable[[float, float | None, str | None], None] | None = None,
+    ) -> dict[str, Any]:
+        """Find exact course references in official branch prerequisite rules.
+
+        ``progress`` is an optional ``(done, total, message)`` callback, called
+        once per branch of a cold scan. Its failures are ignored.
+        """
         from .archive import normalize_course_code
         from .prerequisites import flatten_courses
 
@@ -587,7 +598,13 @@ class ObsPublicClient:
         unknown_branches: list[str] = []
         sources: list[str] = []
         scanned_courses = 0
-        for branch in branches[:max_scan]:
+        scan_total = len(branches[:max_scan])
+        for position, branch in enumerate(branches[:max_scan]):
+            if progress is not None:
+                try:
+                    progress(position, scan_total, f"Ön şart tablosu taranıyor ({position + 1}/{scan_total}): {branch}")
+                except Exception:
+                    pass
             try:
                 data = self.get_branch_prerequisites(branch)
             except ObsError:
@@ -615,6 +632,11 @@ class ObsPublicClient:
                         "credit_requirement": rule.get("credit_requirement"),
                         "credit_requirement_text": rule.get("credit_requirement_text"),
                     })
+        if progress is not None:
+            try:
+                progress(scan_total, scan_total, "Ön şart taraması tamamlandı")
+            except Exception:
+                pass
         complete = bool(branches) and not unknown_branches and len(branches) <= max_scan
         result: dict[str, Any] = {
             "course_id": target_code,

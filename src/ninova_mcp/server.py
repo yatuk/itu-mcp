@@ -88,6 +88,16 @@ def obs_registration_writes_enabled() -> bool:
     """Account writes require the operator's explicit, exact opt-in."""
     return os.getenv("NINOVA_OBS_REGISTRATION_WRITES") == "1"
 
+
+def _confirm_draft_write(plan: dict[str, Any]) -> dict[str, Any] | None:
+    """Ask the user about the exact draft change that is about to be sent."""
+    from .interaction import confirm_write, draft_confirmation_message
+
+    return confirm_write(draft_confirmation_message(
+        plan["term_code"], plan["requested_crns"], plan["previous_crns"],
+        plan["added_crns"], plan["removed_crns"],
+    ))
+
 SERVER_INSTRUCTIONS = (
     "This connector reads the user's own İTÜ Ninova LMS and İTÜ OBS "
     "(obs.itu.edu.tr student portal). Ninova tools cover course materials, "
@@ -622,7 +632,14 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
             observed_enrollment["baseline_complete"] = True
             observed_enrollment["last_complete_at"] = previous_enrollment.get("last_complete_at") or state.get("last_sync_at")
 
+        from .interaction import progress_steps
+
+        steps = progress_steps(len(courses))
         for course in courses:
+            steps.advance(
+                f"Ders eşitleniyor ({steps.done + 1}/{len(courses)}): "
+                f"{course.get('code') or course.get('title') or 'ders'}"
+            )
             try:
                 snapshot = self._collect_course_snapshot(
                     course,
@@ -675,6 +692,7 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
                 }
             )
 
+        steps.finish("Dersler okundu, değişiklikler kaydediliyor")
         removed_course_urls = (
             set(state["courses"]) - current_course_urls
             if enrollment_complete and has_complete_baseline(previous_enrollment) else set()
@@ -874,12 +892,17 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
         downloads: list[dict[str, Any]] = []
         seen_downloads: set[tuple[str, str]] = set()
 
+        from .interaction import progress_steps
+
+        # The number of pages is not known in advance, so no total is reported.
+        steps = progress_steps()
         while queue and len(pages) < max_pages:
             current_url, depth = queue.pop(0)
             normalized = self._strip_fragment(current_url)
             if normalized in visited:
                 continue
             visited.add(normalized)
+            steps.advance(f"Sayfa taranıyor ({len(pages) + 1}, en fazla {max_pages}): {normalized}")
 
             html, response = self.client.get_html(normalized)
             page = parse_html_page(response.url, html, base_url=self.client.base_url)
@@ -979,7 +1002,14 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
         selected = normalize_crns(crns)
         # Draft reads are uncached. The client reconciles the attempted write
         # against a fresh readback; retain its saved/rejected/uncertain result.
-        return self.obs.save_registration_draft(selected, allow_replace=allow_replace is True)
+        # With an MCP request (or NINOVA_REQUIRE_ELICITATION=1) the client asks
+        # the user through confirm_write just before the single POST.
+        from .interaction import current, elicitation_required
+
+        gate: dict[str, Any] = {}
+        if current() is not None or elicitation_required():
+            gate["confirm_write"] = _confirm_draft_write
+        return self.obs.save_registration_draft(selected, allow_replace=allow_replace is True, **gate)
 
     def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
         from .registration_tools import get_elective_group
@@ -1241,8 +1271,10 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
                 )
 
         if direction in ("postrequisites", "both"):
+            from .interaction import progress_kwargs
+
             post = self.obs_public.get_postrequisites(
-                course_code
+                course_code, **progress_kwargs()
             )
             result["postrequisites"] = post.get("postrequisites") or []
             for key in ("postrequisite_status", "complete", "scanned_courses", "scanned_branches",
@@ -3028,6 +3060,25 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
             )
             return preview
 
+        # Last gate before the upload: the user answers in the client itself.
+        # confirm=true from the model does not skip this.
+        from .interaction import confirm_write, public_confirmation, upload_confirmation_message
+
+        confirmation = confirm_write(upload_confirmation_message(
+            resolved_upload.get("course"), resolved_upload.get("assignment"), response.url,
+            slot, path.name, str(path), size,
+        ))
+        if confirmation is not None and confirmation["proceed"] is not True:
+            return {
+                **preview,
+                "dry_run": False,
+                "ok": False,
+                "uploaded": False,
+                "status": confirmation["status"],
+                "message": confirmation["note"],
+                "confirmation": public_confirmation(confirmation),
+            }
+
         file_bytes = path.read_bytes()
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = dict(form.get("hidden_fields") or {})
@@ -3068,6 +3119,7 @@ class NinovaMcpApp(ArchiveDatasetToolsMixin):
                 success = True
 
         return {
+            **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
             "dry_run": False,
             "ok": success,
             "message": (
@@ -5668,14 +5720,29 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
     """
     from mcp.types import ToolAnnotations
 
+    from .interaction import INTERACTIVE_TOOL_NAMES
+    from .mcp_interaction import ToolRunner
+
     metadata = {tool["name"]: tool for tool in TOOLS}
+    # One runner per server keeps tool calls one at a time, as they were when
+    # every tool blocked the event loop.
+    runner = ToolRunner(mcp)
     for name in tool_names:
         fn = getattr(app, name)
         meta = metadata.get(name, {})
 
+        # Async so the write tools can wait for the user's answer and the slow
+        # tools can report progress. The request context is bound by the
+        # runner, never passed as an argument: the copied signature below is
+        # still the method's own, so the public input schema is unchanged.
         @functools.wraps(fn)
-        def guarded_result(*args: Any, __fn: Callable[..., Any] = fn, **kwargs: Any) -> Any:
-            result = __fn(*args, **kwargs)
+        async def guarded_result(
+            *args: Any,
+            __fn: Callable[..., Any] = fn,
+            __interactive: bool = name in INTERACTIVE_TOOL_NAMES,
+            **kwargs: Any,
+        ) -> Any:
+            result = await runner.run(__fn, args, kwargs, interactive=__interactive)
             if isinstance(result, dict):
                 result.setdefault("untrusted_external_content", True)
                 result.setdefault(
