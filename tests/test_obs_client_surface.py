@@ -143,12 +143,79 @@ class ModuleSurfaceTests(unittest.TestCase):
         self.assertIs(server_namespace().ObsPublicClient, ObsPublicClient)
 
 
+class MovedNameTests(unittest.TestCase):
+    """The names live in other modules now; this module hands out the same objects."""
+
+    HOMES = {
+        "obs_errors": ("ObsError",),
+        "obs_session": ("DEFAULT_OBS_BASE_URL", "JWT_PATH", "STUDENT_HOME"),
+        "obs_semesters": ("_SEASON_WORDS", "_TERM_FILLER_WORDS", "_resolve_semester_by_name", "_semester_lookup_text",
+                          "_semester_recency", "_semester_tokens", "describe_semester"),
+        "obs_redaction": ("REDACTED", "_EMAIL", "_REDACTION_NOTE", "_SENSITIVE_CONTACT_TYPE", "_SENSITIVE_KEY",
+                          "redact_obs_profile"),
+    }
+
+    def test_reexported_names_are_the_same_objects(self) -> None:
+        import importlib
+
+        for module_name, names in self.HOMES.items():
+            module = importlib.import_module(f"ninova_mcp.{module_name}")
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertIs(getattr(obs_client, name), getattr(module, name))
+        self.assertEqual(sorted(name for names in self.HOMES.values() for name in names),
+                         sorted(set(MODULE_NAMES) - {"ObsClient", "ObsPublicClient"}))
+
+    def test_error_raised_by_any_part_is_the_one_callers_catch(self) -> None:
+        from unittest.mock import MagicMock, Mock
+
+        from ninova_mcp.obs_client import ObsError
+
+        client = ObsClient(ninova_client=MagicMock())
+        client.list_semesters = Mock(return_value={})  # type: ignore[method-assign]
+        client.list_programs = Mock(return_value={})  # type: ignore[method-assign]
+        public = ObsPublicClient()
+        for failing in (client.resolve_semester, client.default_program_id,
+                        lambda: public._validate_url("https://example.org/"),
+                        lambda: public.get_degree_plan("x"), lambda: public._normalize_program_type("x"),
+                        lambda: public.get_prerequisites("x"), lambda: public._calendar_page("en", "x"),
+                        lambda: ObsClient(ninova_client=MagicMock(), base_url="https://example.org")):
+            with self.assertRaises(ObsError):
+                failing()
+
+    def test_the_patched_clock_is_the_one_the_registration_check_reads(self) -> None:
+        # test_registration_pacing patches ninova_mcp.obs_client.time.monotonic
+        # and .sleep; the pacing code lives in another module and must see them.
+        from unittest.mock import MagicMock, patch
+
+        client = ObsClient(ninova_client=MagicMock())
+        client._api_request = MagicMock(return_value={"statusCode": 0, "ecrnResultList": []})  # type: ignore[method-assign]
+        client._last_registration_check = 100.0
+        with patch("ninova_mcp.obs_client.time.monotonic", return_value=100.5) as monotonic, \
+                patch("ninova_mcp.obs_client.time.sleep") as sleep:
+            client.validate_registration_crns(["10001"])
+        sleep.assert_called_once_with(1.5)
+        self.assertEqual(monotonic.call_count, 2)
+        self.assertEqual(client._last_registration_check, 100.5)
+
+
 class ClientSurfaceTests(unittest.TestCase):
+    # New private helpers may appear; nothing listed here may go or change.
     def test_obs_client_methods_and_signatures(self) -> None:
-        self.assertEqual(members(ObsClient), OBS_CLIENT_MEMBERS)
+        found = members(ObsClient)
+        for name, signature in OBS_CLIENT_MEMBERS.items():
+            with self.subTest(name=name):
+                self.assertEqual(found.get(name), signature)
+        self.assertEqual({name for name in found if not name.startswith("_")},
+                         {name for name in OBS_CLIENT_MEMBERS if not name.startswith("_")})
 
     def test_obs_public_client_methods_and_signatures(self) -> None:
-        self.assertEqual(members(ObsPublicClient), OBS_PUBLIC_CLIENT_MEMBERS)
+        found = members(ObsPublicClient)
+        for name, signature in OBS_PUBLIC_CLIENT_MEMBERS.items():
+            with self.subTest(name=name):
+                self.assertEqual(found.get(name), signature)
+        self.assertEqual({name for name in found if not name.startswith("_")},
+                         {name for name in OBS_PUBLIC_CLIENT_MEMBERS if not name.startswith("_")})
 
     def test_a_method_replaced_on_an_instance_is_the_one_its_callers_use(self) -> None:
         # Tests across the suite replace fetch methods on an instance; every
