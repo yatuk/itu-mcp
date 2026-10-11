@@ -294,6 +294,10 @@ class ArchiveDatasetToolsMixin:
                 f"{slug} dizini var ({found['term_section_count']} şube) ama filtreye uyan "
                 "şube yok."
             )
+        if found["enrolment_not_captured"]:
+            from .archive import ENROLMENT_NOT_CAPTURED_NOTE
+
+            result["enrolment_note"] = ENROLMENT_NOT_CAPTURED_NOTE
         return result
 
     def archive_exam_schedule(

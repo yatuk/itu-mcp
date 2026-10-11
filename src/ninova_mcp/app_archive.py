@@ -24,7 +24,7 @@ class ArchiveHistoryToolsMixin:
         ``course_name``, when the caller knows it, lets a missing code be
         matched to the same course under another department code.
         """
-        from .archive import split_course_code
+        from .archive import enrolment_uncaptured_terms, split_course_code
 
         try:
             branch, number = split_course_code(course_code)
@@ -35,7 +35,44 @@ class ArchiveHistoryToolsMixin:
         entry = history.get(canonical)
         if entry is None:
             raise ItuArchiveError(self._archive_missing_course_message(canonical, history, course_name))
+        # Whether a term's enrolment was captured is decided over the whole
+        # branch file, so it is attached here, once, for every tool that reads
+        # the entry (history, who taught, fill rate, the degree planner).
+        entry = dict(entry)
+        entry["enrolment_uncaptured_terms"] = enrolment_uncaptured_terms(
+            history, captured_terms=self._archive_terms_with_enrolment()
+        )
         return canonical, entry
+
+    def _archive_terms_with_enrolment(self) -> list[str]:
+        """Terms the index itself shows to hold enrolment: the live term.
+
+        ``index.json`` carries term-wide totals for the current term only. A
+        small branch whose sections are all still empty must not be read as
+        "enrolment not captured" when the term as a whole has students.
+        """
+        from .archive import stats_enrolment_captured
+
+        # The index is a best-effort refinement: an archive stand-in without
+        # it, or a failed read, leaves the branch-file rule on its own.
+        read_index = getattr(self.archive, "get_index", None)
+        try:
+            index = read_index() if callable(read_index) else None
+        except ItuArchiveError:
+            return []
+        if not isinstance(index, dict):
+            return []
+        slug = index.get("currentSlug")
+        if slug and stats_enrolment_captured(index.get("stats")):
+            return [str(slug)]
+        return []
+
+    @staticmethod
+    def _attach_enrolment_note(result: dict[str, Any]) -> None:
+        from .archive import ENROLMENT_NOT_CAPTURED_NOTE
+
+        if result.get("enrolment_not_captured_terms") or result.get("enrolment_not_captured"):
+            result["enrolment_note"] = ENROLMENT_NOT_CAPTURED_NOTE
 
     def _archive_missing_course_message(
         self, canonical: str, history: dict[str, Any], course_name: str | None = None,
@@ -132,6 +169,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = course_history(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
+        self._attach_enrolment_note(result)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -147,6 +185,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = who_taught(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
+        self._attach_enrolment_note(result)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -230,6 +269,25 @@ class ArchiveHistoryToolsMixin:
 
         return coverage, term_entry, meta, sections
 
+    @staticmethod
+    def _archive_enrolment_captured(meta: dict[str, Any], sections: list[dict[str, Any]]) -> bool:
+        """Whether one term's enrolment numbers are measurements.
+
+        The term-wide totals in ``meta.json`` decide when they are there;
+        otherwise every section of the loaded branch file is looked at. A
+        file with no section at all has nothing to disprove.
+        """
+        from .archive import enrolment_captured, stats_enrolment_captured
+
+        captured = stats_enrolment_captured(meta.get("stats") if isinstance(meta, dict) else None)
+        if captured is None:
+            captured = enrolment_captured(
+                (section.get("capacity"), section.get("enrolled"))
+                for section in sections
+                if isinstance(section, dict)
+            )
+        return captured is not False
+
     def archive_term_sections(
         self,
         term: str,
@@ -259,6 +317,7 @@ class ArchiveHistoryToolsMixin:
             raise ItuArchiveError("branch veya course_code verilmeli.")
 
         coverage, term_entry, meta, sections = self._resolve_archive_term_branch(term, branch)
+        captured = self._archive_enrolment_captured(meta, sections)
 
         matched = []
         for section in sections:
@@ -266,7 +325,7 @@ class ArchiveHistoryToolsMixin:
                 continue
             if instructor and _norm(instructor) not in _norm(section.get("instructor")):
                 continue
-            matched.append(summarize_section(section))
+            matched.append(summarize_section(section, enrolment_captured=captured))
 
         coverage_notes = {
             "term_missing": (
@@ -290,10 +349,12 @@ class ArchiveHistoryToolsMixin:
             "coverage": coverage,
             "branch_section_count": len(sections),
             "match_count": len(matched),
+            "enrolment_not_captured": bool(sections) and not captured,
             "sections": matched[:limit],
             "truncated": len(matched) > limit,
             "untrusted_external_content": True,
         }
+        self._attach_enrolment_note(result)
         note = coverage_notes[coverage]
         if note:
             result["coverage_note"] = note
@@ -361,8 +422,10 @@ class ArchiveHistoryToolsMixin:
             "average_fill_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
             "max_fill_ratio": max(ratios) if ratios else None,
             "always_fills": bool(ratios) and all(ratio >= 1.0 for ratio in ratios),
+            "enrolment_not_captured_terms": history["enrolment_not_captured_terms"],
             "offerings": history["offerings"],
         }
+        self._attach_enrolment_note(result)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -451,17 +514,18 @@ class ArchiveHistoryToolsMixin:
             raise ItuArchiveError(str(exc)) from exc
         canonical = f"{branch} {number}"
 
-        def _sections_for(term: str) -> tuple[str, list[dict[str, Any]]]:
-            coverage, _, _, sections = self._resolve_archive_term_branch(term, branch)
+        def _sections_for(term: str) -> tuple[str, list[dict[str, Any]], bool]:
+            coverage, _, meta, sections = self._resolve_archive_term_branch(term, branch)
+            captured = self._archive_enrolment_captured(meta, sections)
             matched = [
-                summarize_section(section)
+                summarize_section(section, enrolment_captured=captured)
                 for section in sections
                 if _norm(section.get("code")) == _norm(canonical)
             ]
-            return coverage, matched
+            return coverage, matched, captured or not sections
 
-        coverage_a, sections_a = _sections_for(term_a)
-        coverage_b, sections_b = _sections_for(term_b)
+        coverage_a, sections_a, captured_a = _sections_for(term_a)
+        coverage_b, sections_b, captured_b = _sections_for(term_b)
 
         result: dict[str, Any] = {
             "course_code": canonical,
@@ -479,7 +543,29 @@ class ArchiveHistoryToolsMixin:
             )
         else:
             result["comparable"] = True
-        result["diff"] = diff_term_offerings(sections_a, sections_b)
+        diff = diff_term_offerings(
+            sections_a, sections_b,
+            enrolment_captured_a=captured_a, enrolment_captured_b=captured_b,
+        )
+        result["diff"] = diff
+        not_captured = [
+            term for term, captured in ((term_a, captured_a), (term_b, captured_b)) if not captured
+        ]
+        if not_captured:
+            reason = (
+                f"{', '.join(not_captured)}: kayıtlı öğrenci sayıları arşive alınmamış (dönem "
+                "dökümündeki bütün şubelerde 0). Kayıtlı sayısı ve doluluk karşılaştırılamaz; şube "
+                "sayısı, kontenjan ve öğretim üyeleri karşılaştırıldı."
+            )
+        elif not diff["enrolment_comparable"]:
+            reason = "En az bir dönemde bu dersin kayıtlı öğrenci sayısı yok."
+        else:
+            reason = None
+        result["enrolment_comparison"] = {
+            "comparable": diff["enrolment_comparable"],
+            "not_captured_terms": not_captured,
+            "reason": reason,
+        }
         result["sections_a"] = sections_a
         result["sections_b"] = sections_b
         return result

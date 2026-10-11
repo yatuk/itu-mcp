@@ -87,13 +87,91 @@ def _fill_ratio(capacity: Any, enrolled: Any) -> float | None:
     return round(enr / cap, 3)
 
 
-def course_history(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict[str, Any]:
+# -- was enrolment captured at all? -------------------------------------------
+
+ENROLMENT_NOT_CAPTURED_NOTE = (
+    "enrolment_not_captured işaretli dönemlerde kayıtlı öğrenci sayısı arşive alınmamış: "
+    "o dönemin dökümündeki bütün şubelerde kayıtlı sayısı 0 (büyük olasılıkla kayıtlar "
+    "açılmadan önce alınmış). Bu sıfırlar ölçüm değildir; enrolled ve fill_ratio boş "
+    "bırakıldı, hiçbir ortalamaya ya da orana katılmadı."
+)
+
+
+def enrolment_captured(pairs: Any) -> bool | None:
+    """Whether a set of ``(capacity, enrolled)`` rows holds real enrolment.
+
+    ``None`` when there is no row. ``False`` when no row has a positive
+    enrolment: that is the rule "every section with a positive capacity has 0
+    enrolled", and it also covers the dumps where capacity is 0 everywhere.
+    One enrolled student anywhere in the rows means the numbers were captured,
+    so a section with 0 next to it is a genuinely empty section.
+    """
+    seen = False
+    for _capacity, enrolled in pairs:
+        seen = True
+        if _is_count(enrolled) and enrolled > 0:
+            return True
+    return False if seen else None
+
+
+def stats_enrolment_captured(stats: Any) -> bool | None:
+    """Read the term-wide ``stats`` block of ``meta.json`` or ``index.json``.
+
+    The block sums every branch, so it settles the question for the whole
+    term where one small branch file alone could not.
+    """
+    if not isinstance(stats, dict) or not _is_count(stats.get("enrolled")):
+        return None
+    return bool(stats["enrolled"] > 0)
+
+
+def enrolment_uncaptured_terms(history: Any, *, captured_terms: Any = ()) -> list[str]:
+    """Terms of one ``history/courses/<BRANCH>.json`` file without enrolment.
+
+    The decision is taken per term over every course of the branch file, not
+    per course. ``captured_terms`` names terms known from elsewhere to hold
+    enrolment (the live term, by the index totals); they are never returned.
+    """
+    by_term: dict[str, bool] = {}
+    for entry in history.values() if isinstance(history, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        for row in entry.get("rows") or []:
+            if not isinstance(row, list) or len(row) < 4:
+                continue
+            term = str(row[0] or "")
+            positive = _is_count(row[3]) and row[3] > 0
+            by_term[term] = by_term.get(term, False) or positive
+    known = {str(term) for term in captured_terms or ()}
+    return sorted(
+        (term for term, positive in by_term.items() if not positive and term not in known),
+        key=_term_sort_key,
+        reverse=True,
+    )
+
+
+def _uncaptured_set(entry: dict[str, Any], uncaptured_terms: Any) -> set[str]:
+    source = uncaptured_terms if uncaptured_terms is not None else entry.get("enrolment_uncaptured_terms")
+    return {str(term) for term in source or ()}
+
+
+def course_history(
+    entry: dict[str, Any],
+    *,
+    limit_terms: int | None = None,
+    uncaptured_terms: Any = None,
+) -> dict[str, Any]:
     """Turn one ``history/courses`` entry into a term-by-term offering record.
 
     Groups the flat section rows by term so "this course ran in 13 terms, always
     in Bahar, with these instructors" is readable in one pass.
+
+    ``uncaptured_terms`` (or the entry's own ``enrolment_uncaptured_terms``)
+    names the terms whose enrolment the archive never captured. Their sections
+    carry no ``enrolled`` and no ``fill_ratio``.
     """
     rows = _rows_as_dicts(entry.get("rows"), _COURSE_ROW_FIELDS)
+    uncaptured = _uncaptured_set(entry, uncaptured_terms)
     by_term: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_term.setdefault(str(row.get("term") or ""), []).append(row)
@@ -105,17 +183,19 @@ def course_history(entry: dict[str, Any], *, limit_terms: int | None = None) -> 
     offerings: list[dict[str, Any]] = []
     for term in ordered:
         sections = by_term[term]
+        missing = term in uncaptured
         offerings.append({
             "term": term,
             "season": season_of(term),
             "section_count": len(sections),
             "instructors": sorted({str(s.get("instructor") or "").strip() for s in sections} - {"", "--"}),
+            "enrolment_not_captured": missing,
             "sections": [
                 {
                     "instructor": s.get("instructor"),
                     "capacity": s.get("capacity"),
-                    "enrolled": s.get("enrolled"),
-                    "fill_ratio": _fill_ratio(s.get("capacity"), s.get("enrolled")),
+                    "enrolled": None if missing else s.get("enrolled"),
+                    "fill_ratio": None if missing else _fill_ratio(s.get("capacity"), s.get("enrolled")),
                     "days": s.get("days"),
                 }
                 for s in sections
@@ -127,6 +207,9 @@ def course_history(entry: dict[str, Any], *, limit_terms: int | None = None) -> 
         "course_name": entry.get("name"),
         "terms_offered": len(by_term),
         "seasonality": seasonality(list(by_term)),
+        "enrolment_not_captured_terms": sorted(
+            (term for term in by_term if term in uncaptured), key=_term_sort_key, reverse=True
+        ),
         "offerings": offerings,
         "truncated": limit_terms is not None and len(by_term) > len(ordered),
     }
@@ -225,8 +308,13 @@ def seasonality_sentence(course_code: str, summary: dict[str, Any]) -> str:
 
 
 def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict[str, Any]:
-    """Rank instructors for one course by how often and how recently they taught it."""
+    """Rank instructors for one course by how often and how recently they taught it.
+
+    Sections of a term whose enrolment was never captured (see
+    ``course_history``) count as taught but add nothing to the fill average.
+    """
     rows = _rows_as_dicts(entry.get("rows"), _COURSE_ROW_FIELDS)
+    uncaptured = _uncaptured_set(entry, None)
     if limit_terms is not None:
         keep = sorted({str(r.get("term") or "") for r in rows}, key=_term_sort_key, reverse=True)[:limit_terms]
         rows = [r for r in rows if str(r.get("term") or "") in set(keep)]
@@ -239,6 +327,8 @@ def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict
         bucket = grouped.setdefault(name, {"instructor": name, "terms": set(), "sections": 0, "ratios": []})
         bucket["terms"].add(str(row.get("term") or ""))
         bucket["sections"] += 1
+        if str(row.get("term") or "") in uncaptured:
+            continue
         ratio = _fill_ratio(row.get("capacity"), row.get("enrolled"))
         if ratio is not None:
             bucket["ratios"].append(ratio)
@@ -254,6 +344,7 @@ def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict
             "latest_term": terms[0] if terms else None,
             "terms": terms,
             "average_fill_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
+            "fill_ratio_section_count": len(ratios),
         })
     instructors.sort(
         key=lambda i: (i["term_count"], _term_sort_key(i["latest_term"] or "")),
@@ -262,6 +353,9 @@ def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict
     return {
         "course_code": entry.get("code"),
         "course_name": entry.get("name"),
+        "enrolment_not_captured_terms": sorted(
+            ({str(r.get("term") or "") for r in rows} & uncaptured), key=_term_sort_key, reverse=True
+        ),
         "instructors": instructors,
     }
 
@@ -307,12 +401,15 @@ def instructor_courses(entry: dict[str, Any], *, limit: int | None = None) -> di
     }
 
 
-def summarize_section(section: dict[str, Any]) -> dict[str, Any]:
+def summarize_section(section: dict[str, Any], *, enrolment_captured: bool = True) -> dict[str, Any]:
     """Flatten one archived section record into a compact, readable row.
 
     The archive stores day/time/building as parallel arrays because OBS packs
     multiple weekly sessions into one cell; recombine them into sessions.
+    ``enrolment_captured=False`` says the term's enrolment was never captured:
+    ``enrolled`` and ``fill_ratio`` are then left empty instead of 0.
     """
+    enrolled = section.get("enrolled") if enrolment_captured else None
     days = section.get("days") or []
     times = section.get("times") or []
     buildings = section.get("buildings") or []
@@ -332,8 +429,8 @@ def summarize_section(section: dict[str, Any]) -> dict[str, Any]:
         "instructor": section.get("instructor"),
         "level": section.get("level"),
         "capacity": section.get("capacity"),
-        "enrolled": section.get("enrolled"),
-        "fill_ratio": _fill_ratio(section.get("capacity"), section.get("enrolled")),
+        "enrolled": enrolled,
+        "fill_ratio": _fill_ratio(section.get("capacity"), enrolled),
         "sessions": sessions,
         "programs": section.get("programs"),
         "prerequisite_note": section.get("prereq") or None,
@@ -494,6 +591,9 @@ def same_course_other_branches(
 def diff_term_offerings(
     sections_a: list[dict[str, Any]],
     sections_b: list[dict[str, Any]],
+    *,
+    enrolment_captured_a: bool = True,
+    enrolment_captured_b: bool = True,
 ) -> dict[str, Any]:
     """Compare a course's sections between two terms.
 
@@ -502,32 +602,53 @@ def diff_term_offerings(
     turnover, section-count delta, and capacity/fill movement. This is the
     piece a manual side-by-side ``archive_course_history`` read cannot give
     directly — it names *what changed*, not just two snapshots to compare by eye.
+
+    A side whose enrolment was never captured keeps its sections, capacity and
+    instructors but has no enrolment total and no fill average, and the
+    enrolment comparison is reported as not comparable.
     """
 
-    def _summarize_side(sections: list[dict[str, Any]]) -> dict[str, Any]:
+    def _summarize_side(sections: list[dict[str, Any]], captured: bool) -> dict[str, Any]:
         instructors = sorted({
             s.get("instructor") for s in sections
             if s.get("instructor") and s.get("instructor") != "--"
         })
-        capacities = [s["capacity"] for s in sections if isinstance(s.get("capacity"), (int, float))]
-        enrolled = [s["enrolled"] for s in sections if isinstance(s.get("enrolled"), (int, float))]
-        ratios = [s["fill_ratio"] for s in sections if s.get("fill_ratio") is not None]
+        capacities = [s["capacity"] for s in sections if _is_count(s.get("capacity"))]
+        enrolled = [s["enrolled"] for s in sections if _is_count(s.get("enrolled"))] if captured else []
+        ratios = [s["fill_ratio"] for s in sections if s.get("fill_ratio") is not None] if captured else []
         return {
             "section_count": len(sections),
             "instructors": instructors,
             "total_capacity": sum(capacities) if capacities else None,
             "total_enrolled": sum(enrolled) if enrolled else None,
             "average_fill_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
+            "enrolment_not_captured": not captured,
         }
 
-    side_a = _summarize_side(sections_a)
-    side_b = _summarize_side(sections_b)
+    side_a = _summarize_side(sections_a, enrolment_captured_a)
+    side_b = _summarize_side(sections_b, enrolment_captured_b)
+
+    def _delta(key: str) -> Any:
+        if side_a[key] is None or side_b[key] is None:
+            return None
+        return round(side_b[key] - side_a[key], 3)
+
+    enrolment_comparable = (
+        enrolment_captured_a
+        and enrolment_captured_b
+        and side_a["total_enrolled"] is not None
+        and side_b["total_enrolled"] is not None
+    )
     return {
         "first": side_a,
         "second": side_b,
         "instructors_added": sorted(set(side_b["instructors"]) - set(side_a["instructors"])),
         "instructors_removed": sorted(set(side_a["instructors"]) - set(side_b["instructors"])),
         "section_count_delta": side_b["section_count"] - side_a["section_count"],
+        "capacity_delta": _delta("total_capacity"),
+        "enrolment_comparable": enrolment_comparable,
+        "enrolled_delta": _delta("total_enrolled") if enrolment_comparable else None,
+        "average_fill_ratio_delta": _delta("average_fill_ratio") if enrolment_comparable else None,
     }
 
 
@@ -786,9 +907,11 @@ def _split_sessions(when: Any, where: Any) -> list[dict[str, Any]]:
     return sessions
 
 
-def summarize_search_row(row: list[Any]) -> dict[str, Any]:
+def summarize_search_row(row: list[Any], *, enrolment_captured: bool = True) -> dict[str, Any]:
     """Name the columns of one term-wide ``search.json`` row."""
     cell = dict(zip(SEARCH_ROW_FIELDS, row, strict=False))
+    if not enrolment_captured:
+        cell["enrolled"] = None
     return {
         "crn": cell.get("crn"),
         "course_code": cell.get("code"),
@@ -833,10 +956,12 @@ def search_sections(
 
     usable = 0
     matched = []
+    any_enrolled = False
     for row in rows or []:
         if not isinstance(row, list) or len(row) < _SEARCH_ROW_REQUIRED:
             continue
         usable += 1
+        any_enrolled = any_enrolled or (_is_count(row[7]) and row[7] > 0)
         if code_target and code_target not in fold(row[1]).replace(" ", ""):
             continue
         if name_target and name_target not in fold(row[2]):
@@ -852,10 +977,14 @@ def search_sections(
                 continue
         matched.append(row)
 
+    # The index holds every branch of the term, so "no section anywhere has an
+    # enrolled student" means the term's enrolment was never captured.
+    captured = any_enrolled or not usable
     return {
         "term_section_count": usable,
         "match_count": len(matched),
-        "sections": [summarize_search_row(row) for row in matched[:limit]],
+        "enrolment_not_captured": not captured,
+        "sections": [summarize_search_row(row, enrolment_captured=captured) for row in matched[:limit]],
         "truncated": len(matched) > limit,
     }
 
