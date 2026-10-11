@@ -484,8 +484,8 @@
    "extract_prerequisite_list": {"__sha256__": "8e2bf7db9fcd8befc47a", "chars": 351}
   },
   "fixture:odev_gonder.html": {
-   "parse_html_page": {"__sha256__": "64282e471ca9ccd407c0", "chars": 10667},
-   "make_snapshot_payload": {"__sha256__": "16848ad2516b493c7114", "chars": 8908},
+   "parse_html_page": {"__sha256__": "35f1b49ade602c9259d8", "chars": 10652},
+   "make_snapshot_payload": {"__sha256__": "0fc48759156f368e2b5e", "chars": 8898},
    "summarize_dashboard": {"__sha256__": "610b33523ba78cddab26", "chars": 6196},
    "extract_courses": [{"code": "CEN 500", "title": "CEN 500 - 2026 Exemption and Abroad", "url": "https://ninova.itu.edu.tr/Sinif/32945.119022", "context": "Neredeyim: Ninova / KAMPÜS / CEN 500 - 2026 Exemption and Abroad / Ödevler / Internship Exemptions and Abroad Internships / Ödevi Yükle", "section": null, "crn": null, "code_source": "section_label", "code_uncertain": true}],
    "extract_announcement_detail": {"__sha256__": "ba9f4b6b6b0668ba4f69", "chars": 1348},
@@ -496,7 +496,7 @@
    "extract_message_thread_detail": {"__sha256__": "18c6fd35e370430e8a61", "chars": 159},
    "extract_attendance": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "student_name": null, "source_system": null, "disclaimer": "Dosyayı henüz göndermediniz.", "headers": [], "count": 0, "weeks": [], "total_present_marks": 0, "total_absent_marks": 0, "total_unmarked_or_absent_marks": 0, "absence_counts_reliable": true},
    "apply_attendance_calendar": {"url": "https://ninova.itu.edu.tr/Sinif/1234.5678/Sayfa", "student_name": null, "source_system": null, "disclaimer": "Dosyayı henüz göndermediniz.", "headers": [], "count": 0, "weeks": [], "total_present_marks": 0, "total_absent_marks": 0, "total_unmarked_or_absent_marks": 0, "absence_counts_reliable": true, "term_start": "2030-09-02", "total_future_marks": 0},
-   "extract_prerequisite_list": {"__sha256__": "963f0d69755a686b61f2", "chars": 3211}
+   "extract_prerequisite_list": {"__sha256__": "6b853c5e1f9642c4a3e3", "chars": 3201}
   },
   "fixture:odev_gonder.html|no_tables": {
    "parse_html_page": {"__sha256__": "5e4477ec160c68b1cf23", "chars": 7344},
@@ -511,8 +511,8 @@
    "extract_prerequisite_list": {"__sha256__": "080e713db5d80c78ef97", "chars": 1193}
   },
   "fixture:odev_gonder.html|drop_last_cell": {
-   "parse_html_page": {"__sha256__": "62635a74855652d1ff18", "chars": 10132},
-   "make_snapshot_payload": {"__sha256__": "3e2b88b9c60c40ff3135", "chars": 8442},
+   "parse_html_page": {"__sha256__": "182d45759b266f64473b", "chars": 10117},
+   "make_snapshot_payload": {"__sha256__": "772707e76cea9f20a015", "chars": 8432},
    "summarize_dashboard": {"__sha256__": "1ed3b24de257bce6c13a", "chars": 5974},
    "extract_courses": {"__sha256__": "4522ff64a3cee40c4b04", "chars": 360},
    "extract_announcement_detail": {"__sha256__": "ece9012bebe0e45c7deb", "chars": 1296},
@@ -522,11 +522,11 @@
    "extract_message_thread_detail": {"__sha256__": "18c6fd35e370430e8a61", "chars": 159},
    "extract_attendance": {"__sha256__": "48e8df0ee359cd299930", "chars": 310},
    "apply_attendance_calendar": {"__sha256__": "1855d16fbdab78d59d18", "chars": 363},
-   "extract_prerequisite_list": {"__sha256__": "6440148af51a317abb8c", "chars": 2967}
+   "extract_prerequisite_list": {"__sha256__": "ed4c24888af2f43f59d5", "chars": 2957}
   },
   "fixture:odev_gonder.html|extra_cell": {
-   "parse_html_page": {"__sha256__": "ba33b817845db57ce808", "chars": 10820},
-   "make_snapshot_payload": {"__sha256__": "f8c32dc61427ef394d5f", "chars": 9031},
+   "parse_html_page": {"__sha256__": "6d366e79fe4f6549a2e4", "chars": 10805},
+   "make_snapshot_payload": {"__sha256__": "2f505426440144fa1e92", "chars": 9021},
    "summarize_dashboard": {"__sha256__": "610b33523ba78cddab26", "chars": 6196},
    "extract_courses": {"__sha256__": "4522ff64a3cee40c4b04", "chars": 360},
    "extract_announcement_detail": {"__sha256__": "448adca525359af5fba9", "chars": 1369},
@@ -536,7 +536,7 @@
    "extract_message_thread_detail": {"__sha256__": "18c6fd35e370430e8a61", "chars": 159},
    "extract_attendance": {"__sha256__": "48e8df0ee359cd299930", "chars": 310},
    "apply_attendance_calendar": {"__sha256__": "1855d16fbdab78d59d18", "chars": 363},
-   "extract_prerequisite_list": {"__sha256__": "1bfd4443aec3c99ce9f5", "chars": 3334}
+   "extract_prerequisite_list": {"__sha256__": "52146082d28635a8b416", "chars": 3324}
   },
   "fixture:onsart_ara_cen.html": {
    "parse_html_page": {"__sha256__": "d860a808258fcb8fc181", "chars": 4972},

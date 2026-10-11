@@ -587,7 +587,7 @@ class TrackingToolsMixin:
             if not include_files:
                 continue
             try:
-                listing = self._walk_file_directory(course["url"] + path, recursive=True, max_depth=file_max_depth)
+                listing = self._walk_file_directory(course["url"] + path, recursive=True, max_depth=file_max_depth, scope=scope)
                 files[scope] = listing["entries"]
                 observations[scope] = listing["coverage"]
                 errors.extend({"scope": scope, **error} for error in listing.get("errors", []))
