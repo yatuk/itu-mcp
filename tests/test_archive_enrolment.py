@@ -269,12 +269,15 @@ class ToolTests(unittest.TestCase):
         by_term = {offering["term"]: offering for offering in result["offerings"]}
         self.assertTrue(by_term[EMPTY]["enrolment_not_captured"])
         self.assertEqual({row["enrolled"] for row in by_term[EMPTY]["sections"]}, {None})
-        self.assertIn("ölçüm değildir", result["enrolment_note"])
+        self.assertIn("0 değil", by_term[EMPTY]["data_quality"])
+        self.assertNotIn("enrolment_note", result)
 
     def test_course_history_marks_the_term(self) -> None:
         result = make_app().archive_course_history("TST 305E")
         self.assertEqual(result["enrolment_not_captured_terms"], [EMPTY])
-        self.assertIn("enrolment_note", result)
+        by_term = {offering["term"]: offering for offering in result["offerings"]}
+        self.assertIn("Kayıtlı sayısı", by_term[EMPTY]["data_quality"])
+        self.assertNotIn("data_quality", by_term[OLD])
 
     def test_who_taught_tool_uses_the_branch_wide_decision(self) -> None:
         result = make_app().archive_who_taught("TST 305E")
@@ -285,7 +288,8 @@ class ToolTests(unittest.TestCase):
         result = make_app().archive_fill_rate(course_code="ZRO 101")
         self.assertEqual(result["enrolment_not_captured_terms"], [])
         self.assertEqual(result["average_fill_ratio"], 0.0)
-        self.assertNotIn("enrolment_note", result)
+        self.assertNotIn("data_quality", result["offerings"][0])
+        self.assertEqual(result["capture_basis"], "term")
 
     def test_entry_handed_to_the_planner_carries_the_decision(self) -> None:
         _, entry = make_app()._archive_course_entry("TST 201E")
@@ -298,13 +302,16 @@ class ToolTests(unittest.TestCase):
         self.assertTrue(result["enrolment_not_captured"])
         self.assertEqual({row["enrolled"] for row in result["sections"]}, {None})
         self.assertEqual({row["fill_ratio"] for row in result["sections"]}, {None})
-        self.assertIn("enrolment_note", result)
+        self.assertIn("Kayıtlı sayısı", result["data_quality"])
+        # Capacity was captured in this term and is kept.
+        self.assertFalse(result["capacity_not_captured"])
+        self.assertEqual([row["capacity"] for row in result["sections"]], [80, 100, 60])
 
     def test_term_sections_falls_back_to_the_branch_file(self) -> None:
         result = make_app().archive_term_sections(term=OLD, branch="TST")
         self.assertFalse(result["enrolment_not_captured"])
         self.assertEqual([row["enrolled"] for row in result["sections"]], [90, 0])
-        self.assertNotIn("enrolment_note", result)
+        self.assertNotIn("data_quality", result)
 
     def test_term_totals_overrule_an_all_zero_branch_file(self) -> None:
         documents = dict(DOCUMENTS)
@@ -336,7 +343,7 @@ class ToolTests(unittest.TestCase):
     def test_search_sections_tool_says_so(self) -> None:
         result = make_app().archive_search_sections(term=EMPTY, course_code="TST")
         self.assertTrue(result["enrolment_not_captured"])
-        self.assertIn("enrolment_note", result)
+        self.assertIn("Kayıtlı sayısı", result["data_quality"])
         self.assertIsNone(result["sections"][0]["enrolled"])
 
 

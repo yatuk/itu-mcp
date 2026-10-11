@@ -281,20 +281,22 @@ class GradeDistributionTests(unittest.TestCase):
         self.assertEqual(guz["total"], 20)
         self.assertFalse(guz["total_mismatch"])
         self.assertNotIn("total_difference", guz)
-        self.assertEqual(guz["percentages"], {"AA": 20.0, "BA+": 30.0, "BA": 25.0, "FF": 25.0})
+        self.assertEqual(guz["grades"], {"AA": 4, "BA+": 6, "BA": 5, "FF": 5})
         self.assertIn("dersNo=101&yil=2024", guz["source_url"])
+        shares = app.archive_grade_distribution("tst101e", include_percentages=True)["terms"][1]
+        self.assertEqual(shares["percentages"], {"AA": 20.0, "BA+": 30.0, "BA": 25.0, "FF": 25.0})
         self.assertTrue(result["untrusted_external_content"])
 
     def test_plus_grades_kept_and_absent_grades_not_zero_filled(self) -> None:
         app, _ = make_app()
-        bahar = app.archive_grade_distribution("TST 101E")["terms"][0]
+        bahar = app.archive_grade_distribution("TST 101E", include_percentages=True)["terms"][0]
         self.assertEqual(list(bahar["grades"]), ["AA", "BB+", "VF"])
         self.assertNotIn("FF", bahar["grades"])
         self.assertNotIn("FF", bahar["percentages"])
 
     def test_total_mismatch_is_flagged_and_both_numbers_kept(self) -> None:
         app, _ = make_app()
-        result = app.archive_grade_distribution("TST 101E")
+        result = app.archive_grade_distribution("TST 101E", include_percentages=True)
         bahar = result["terms"][0]
         self.assertTrue(bahar["total_mismatch"])
         self.assertEqual(bahar["total"], 30)
@@ -312,7 +314,11 @@ class GradeDistributionTests(unittest.TestCase):
         self.assertEqual(english["term_count"], 2)
         self.assertEqual([t["term"] for t in turkish["terms"]], ["2025-2026-yaz", "2023-2024-guz"])
         self.assertEqual(english["related_codes"], [{"course_code": "TST 101", "term_count": 2}])
-        self.assertIn("related_codes_note", english)
+        # What related_codes means is said once, in the tool description.
+        self.assertNotIn("related_codes_note", english)
+        described = next(t for t in ARCHIVE_DATASET_TOOLS if t["name"] == "archive_grade_distribution")
+        self.assertIn("never merged", described["description"])
+        self.assertIn("do not add them up", described["description"])
         # Identical numbers under both codes are pointed out, term by term.
         self.assertEqual(english["terms"][1]["same_counts_as"], ["TST 101"])
         self.assertNotIn("same_counts_as", english["terms"][0])
@@ -357,10 +363,11 @@ class GradeDistributionTests(unittest.TestCase):
 
     def test_pure_function_tolerates_junk_records(self) -> None:
         records = [None, "x", {"code": "TST 101E"}, {"code": "TST 101E", "total": None, "grades": {"AA": "çok"}}]
-        result = grade_distribution(records, "TST 101E")
+        result = grade_distribution(records, "TST 101E", include_percentages=True)
         self.assertEqual(result["term_count"], 2)
         for entry in result["terms"]:
             self.assertTrue(entry["total_mismatch"])
+            # Nothing counted: no share, and no division.
             self.assertEqual(entry["percentages"], {})
         self.assertEqual(result["terms"][1]["grades"], {"AA": "çok"})
 
@@ -427,10 +434,14 @@ class CourseUnlocksTests(unittest.TestCase):
         app, _ = make_app()
         result = app.archive_course_unlocks("TST 101E")
         self.assertEqual(result["rule_tool"], "explain_course_eligibility")
-        self.assertIn("explain_course_eligibility", result["caveat"])
-        self.assertIn("Ve/Veya", result["caveat"])
-        self.assertIn("en düşük harf notu", result["caveat"])
-        self.assertIn("yalnızca bir sonraki düzey", result["caveat"])
+        self.assertEqual(result["depth"], "direct")
+        # The caveat is constant, so it lives in the description, not in every result.
+        self.assertNotIn("caveat", result)
+        described = next(t for t in ARCHIVE_DATASET_TOOLS if t["name"] == "archive_course_unlocks")
+        self.assertIn("explain_course_eligibility", described["description"])
+        self.assertIn("Ve/Veya", described["description"])
+        self.assertIn("minimum letter grades", described["description"])
+        self.assertIn("direct next level only", described["description"])
 
     def test_variants_are_not_merged(self) -> None:
         app, _ = make_app()
@@ -444,7 +455,7 @@ class CourseUnlocksTests(unittest.TestCase):
         self.assertEqual(result["coverage"], "not_listed_as_prerequisite")
         self.assertEqual(result["unlocks"], [])
         self.assertIn("coverage_note", result)
-        self.assertIn("caveat", result)
+        self.assertEqual(result["rule_tool"], "explain_course_eligibility")
 
     def test_never_fetches_the_full_graph(self) -> None:
         app, session = make_app()
@@ -676,8 +687,11 @@ class ArchiveStatusTests(unittest.TestCase):
         for key in result:
             self.assertNotIn("warning", key)
             self.assertNotIn("stale", key)
-        self.assertIn("hata", result["note"])
-        self.assertIn("değildir", result["note"])
+        # Said once in the description instead of in every result.
+        self.assertNotIn("note", result)
+        described = next(t for t in ARCHIVE_DATASET_TOOLS if t["name"] == "archive_status")
+        self.assertIn("is not an error", described["description"])
+        self.assertIn("data_age_days", described["description"])
 
     def test_unparseable_timestamp_gives_no_age(self) -> None:
         self.assertIsNone(status_summary({"lastSuccessAt": "dün"})["data_age_days"])

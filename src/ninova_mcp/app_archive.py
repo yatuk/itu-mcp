@@ -13,6 +13,12 @@ from .archive_client import ItuArchiveClient, ItuArchiveError, branch_path_segme
 # One request per branch, so a multi-branch call is bounded.
 MAX_TERM_SECTION_BRANCHES = 10
 
+# A history tool settles "was this term captured at all" against the term-wide
+# totals. For a past term those are in the term's meta.json: at most this many
+# of them are fetched in one call. Each stays in the client cache, so a later
+# call picks up where this one stopped.
+MAX_CAPTURE_META_READS = 4
+
 
 def split_branch_codes(branch: Any) -> list[str]:
     """Read ``"BLG, MAT"`` as a list of branch codes, naming every bad one."""
@@ -52,7 +58,7 @@ class ArchiveHistoryToolsMixin:
         ``course_name``, when the caller knows it, lets a missing code be
         matched to the same course under another department code.
         """
-        from .archive import enrolment_uncaptured_terms, split_course_code
+        from .archive import split_course_code
 
         try:
             branch, number = split_course_code(course_code)
@@ -63,44 +69,110 @@ class ArchiveHistoryToolsMixin:
         entry = history.get(canonical)
         if entry is None:
             raise ItuArchiveError(self._archive_missing_course_message(canonical, history, course_name))
-        # Whether a term's enrolment was captured is decided over the whole
-        # branch file, so it is attached here, once, for every tool that reads
-        # the entry (history, who taught, fill rate, the degree planner).
+        # Which terms hold no captured capacity or enrolment is attached
+        # here, once, for every tool that reads the entry (history, who
+        # taught, fill rate, the degree planner).
         entry = dict(entry)
-        entry["enrolment_uncaptured_terms"] = enrolment_uncaptured_terms(
-            history, captured_terms=self._archive_terms_with_enrolment()
-        )
+        entry.update(self._archive_capture_decision(history, entry))
         return canonical, entry
 
-    def _archive_terms_with_enrolment(self) -> list[str]:
-        """Terms the index itself shows to hold enrolment: the live term.
+    def _archive_capture_decision(self, history: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+        """Decide, per term of one course, whether capacity and enrolment were captured.
 
-        ``index.json`` carries term-wide totals for the current term only. A
-        small branch whose sections are all still empty must not be read as
-        "enrolment not captured" when the term as a whole has students.
+        The branch file can only say "every section of this branch has 0 in
+        this term", which is also what a small branch with genuinely empty
+        sections looks like. So each such term the course ran in is settled
+        against the term-wide totals: the index when it has them (the live
+        term), else the term's ``meta.json``, read once and cached by the
+        client. At most ``MAX_CAPTURE_META_READS`` uncached files are fetched
+        per call, newest term first. A term whose totals cannot be had keeps
+        the branch-file answer and is named in ``capture_basis_branch_terms``.
+        Terms with a positive count in the branch file need no check: the
+        two rules agree on them.
         """
-        from .archive import stats_enrolment_captured
+        from .archive import (
+            _term_sort_key,
+            capacity_uncaptured_terms,
+            enrolment_uncaptured_terms,
+            stats_capacity_captured,
+            stats_enrolment_captured,
+        )
+
+        own = {str(row[0] or "") for row in entry.get("rows") or [] if isinstance(row, list) and row}
+        branch_enrolment = set(enrolment_uncaptured_terms(history)) & own
+        branch_capacity = set(capacity_uncaptured_terms(history)) & own
+        doubtful = sorted(branch_enrolment | branch_capacity, key=_term_sort_key, reverse=True)
+        index_stats = self._archive_index_stats() if doubtful else {}
+
+        reads = 0
+        no_enrolment: list[str] = []
+        no_capacity: list[str] = []
+        by_branch: list[str] = []
+        for term in doubtful:
+            stats = index_stats.get(term)
+            if stats_enrolment_captured(stats) is None or stats_capacity_captured(stats) is None:
+                meta_stats, used = self._archive_term_stats(term, allow_request=reads < MAX_CAPTURE_META_READS)
+                reads += used
+                stats = meta_stats if meta_stats is not None else stats
+            enrolment = stats_enrolment_captured(stats)
+            capacity = stats_capacity_captured(stats)
+            if enrolment is None or capacity is None:
+                by_branch.append(term)
+            if (term in branch_enrolment) if enrolment is None else not enrolment:
+                no_enrolment.append(term)
+            if (term in branch_capacity) if capacity is None else not capacity:
+                no_capacity.append(term)
+        return {
+            "enrolment_uncaptured_terms": no_enrolment,
+            "capacity_uncaptured_terms": no_capacity,
+            "capture_basis": "branch" if by_branch else "term",
+            "capture_basis_branch_terms": by_branch,
+        }
+
+    def _archive_index_stats(self) -> dict[str, Any]:
+        """Term-wide totals the index already holds, by term. No extra request."""
+        from .archive import index_term_stats
 
         # The index is a best-effort refinement: an archive stand-in without
-        # it, or a failed read, leaves the branch-file rule on its own.
+        # it, or a failed read, leaves the other sources on their own.
         read_index = getattr(self.archive, "get_index", None)
         try:
             index = read_index() if callable(read_index) else None
         except ItuArchiveError:
-            return []
-        if not isinstance(index, dict):
-            return []
-        slug = index.get("currentSlug")
-        if slug and stats_enrolment_captured(index.get("stats")):
-            return [str(slug)]
-        return []
+            return {}
+        return index_term_stats(index)
+
+    def _archive_term_stats(self, term: str, *, allow_request: bool) -> tuple[dict[str, Any] | None, int]:
+        """The ``stats`` block of one term's ``meta.json`` and the requests it cost.
+
+        ``allow_request=False`` answers from the client cache only.
+        """
+        read = getattr(self.archive, "get_term_meta_if_available", None)
+        if not callable(read):
+            return None, 0
+        before = getattr(self.archive, "request_count", 0)
+        try:
+            meta = read(term, cached_only=not allow_request)
+        except ItuArchiveError:
+            meta = None
+        used = getattr(self.archive, "request_count", 0) - before
+        stats = meta.get("stats") if isinstance(meta, dict) else None
+        return (stats if isinstance(stats, dict) else None), max(0, used)
 
     @staticmethod
-    def _attach_enrolment_note(result: dict[str, Any]) -> None:
-        from .archive import ENROLMENT_NOT_CAPTURED_NOTE
-
-        if result.get("enrolment_not_captured_terms") or result.get("enrolment_not_captured"):
-            result["enrolment_note"] = ENROLMENT_NOT_CAPTURED_NOTE
+    def _attach_capture_basis(result: dict[str, Any], entry: dict[str, Any], term: str | None = None) -> None:
+        """Say whether the capture decision rests on term-wide totals or the branch file."""
+        by_branch = [
+            item for item in entry.get("capture_basis_branch_terms") or [] if term is None or item == term
+        ]
+        result["capture_basis"] = "branch" if by_branch else "term"
+        if by_branch:
+            result["capture_basis_branch_terms"] = by_branch
+            result["capture_basis_note"] = (
+                f"{', '.join(by_branch)}: dönem geneli toplam okunamadı (çağrı başına okuma sınırı, "
+                "eksik dosya ya da toplamsız döküm); karar yalnızca branş dosyasına göre verildi. "
+                "Küçük bir branşın gerçekten boş şubeleri bu dönemlerde 'alınmamış' görünebilir."
+            )
 
     def _archive_missing_course_message(
         self, canonical: str, history: dict[str, Any], course_name: str | None = None,
@@ -170,7 +242,13 @@ class ArchiveHistoryToolsMixin:
 
     def archive_list_terms(self) -> dict[str, Any]:
         """List every term the archive holds, with coverage and gaps."""
-        from .archive import is_empty_record, section_count_outliers
+        from .archive import (
+            index_term_stats,
+            is_empty_record,
+            section_count_outliers,
+            stats_capacity_captured,
+            stats_enrolment_captured,
+        )
 
         index = self.archive.get_index()
         # Only the live term carries a filled provenance; the older ones hold
@@ -180,6 +258,17 @@ class ArchiveHistoryToolsMixin:
             if isinstance(term, dict) else term
             for term in index.get("terms") or []
         ]
+        # Flags only where the index itself holds term-wide totals (today the
+        # live term). No file is fetched for the others, so they carry none.
+        stats_by_term = index_term_stats(index)
+        for term in terms:
+            stats = stats_by_term.get(str(term.get("slug") or "")) if isinstance(term, dict) else None
+            for flag, captured in (
+                ("enrolment_not_captured", stats_enrolment_captured(stats)),
+                ("capacity_not_captured", stats_capacity_captured(stats)),
+            ):
+                if captured is not None:
+                    term[flag] = not captured
         outliers = section_count_outliers(terms)
         result: dict[str, Any] = {
             "current_term": index.get("currentTerm"),
@@ -189,10 +278,6 @@ class ArchiveHistoryToolsMixin:
             "terms": terms,
             "missing_terms": [t.get("slug") for t in terms if isinstance(t, dict) and t.get("missing")],
             "coverage_may_differ": outliers,
-            "note": (
-                "Arşiv, OBS'nin yalnızca aktif dönemi yayınlaması nedeniyle tutuluyor. "
-                "Aktif dönem OBS'den, geçmiş dönemler tarihsel dökümlerden geliyor."
-            ),
             "untrusted_external_content": True,
         }
         if outliers:
@@ -220,7 +305,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = course_history(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
-        self._attach_enrolment_note(result)
+        self._attach_capture_basis(result, entry)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -236,7 +321,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = who_taught(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
-        self._attach_enrolment_note(result)
+        self._attach_capture_basis(result, entry)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -326,23 +411,34 @@ class ArchiveHistoryToolsMixin:
         return coverage, term_entry, meta, sections
 
     @staticmethod
-    def _archive_enrolment_captured(meta: dict[str, Any], sections: list[dict[str, Any]]) -> bool:
-        """Whether one term's enrolment numbers are measurements.
+    def _archive_term_capture(meta: dict[str, Any], sections: list[dict[str, Any]]) -> tuple[bool, bool]:
+        """Whether one term's enrolment and capacity numbers are measurements.
 
-        The term-wide totals in ``meta.json`` decide when they are there;
-        otherwise every section of the loaded branch file is looked at. A
-        file with no section at all has nothing to disprove.
+        Returns ``(enrolment_captured, capacity_captured)``. The term-wide
+        totals in ``meta.json`` decide when they are there; otherwise every
+        section of the loaded branch file is looked at. A file with no
+        section at all has nothing to disprove.
         """
-        from .archive import enrolment_captured, stats_enrolment_captured
+        from .archive import (
+            capacity_captured,
+            enrolment_captured,
+            stats_capacity_captured,
+            stats_enrolment_captured,
+        )
 
-        captured = stats_enrolment_captured(meta.get("stats") if isinstance(meta, dict) else None)
-        if captured is None:
-            captured = enrolment_captured(
-                (section.get("capacity"), section.get("enrolled"))
-                for section in sections
-                if isinstance(section, dict)
-            )
-        return captured is not False
+        stats = meta.get("stats") if isinstance(meta, dict) else None
+        pairs = [
+            (section.get("capacity"), section.get("enrolled"))
+            for section in sections
+            if isinstance(section, dict)
+        ]
+        enrolment = stats_enrolment_captured(stats)
+        if enrolment is None:
+            enrolment = enrolment_captured(pairs)
+        capacity = stats_capacity_captured(stats)
+        if capacity is None:
+            capacity = capacity_captured(pairs)
+        return enrolment is not False, capacity is not False
 
     def archive_term_sections(
         self,
@@ -358,7 +454,7 @@ class ArchiveHistoryToolsMixin:
         archive already holds the upcoming term's section list, so "which
         courses actually open in Güz" is checkable instead of guessable.
         """
-        from .archive import split_course_code, summarize_section
+        from .archive import data_quality_note, split_course_code, summarize_section
         from .archive_tools import known_archive_term
         from .parsing import normalize_lookup_text as _norm
 
@@ -380,20 +476,24 @@ class ArchiveHistoryToolsMixin:
         per_branch: dict[str, str] = {}
         section_total = 0
         not_captured = False
+        no_capacity = False
         term_entry: dict[str, Any] = {}
         meta: dict[str, Any] = {}
         for code in branches:
             coverage, term_entry, meta, sections = self._resolve_archive_term_branch(term, code)
-            captured = self._archive_enrolment_captured(meta, sections)
+            captured, seats = self._archive_term_capture(meta, sections)
             per_branch[code] = coverage
             section_total += len(sections)
             not_captured = not_captured or (bool(sections) and not captured)
+            no_capacity = no_capacity or (bool(sections) and not seats)
             for section in sections:
                 if target_code and _norm(section.get("code")) != _norm(target_code):
                     continue
                 if instructor and _norm(instructor) not in _norm(section.get("instructor")):
                     continue
-                matched.append(summarize_section(section, enrolment_captured=captured))
+                matched.append(
+                    summarize_section(section, enrolment_captured=captured, capacity_captured=seats)
+                )
 
         # Every code the dump does not hold is named, not just the first.
         unknown = [code for code, coverage in per_branch.items() if coverage == "branch_absent_from_term"]
@@ -415,11 +515,14 @@ class ArchiveHistoryToolsMixin:
             "branch_section_count": section_total,
             "match_count": len(matched),
             "enrolment_not_captured": not_captured,
+            "capacity_not_captured": no_capacity,
             "sections": matched[:limit],
             "truncated": len(matched) > limit,
             "untrusted_external_content": True,
         }
-        self._attach_enrolment_note(result)
+        quality = data_quality_note(enrolment_captured=not not_captured, capacity_captured=not no_capacity)
+        if quality:
+            result["data_quality"] = quality
         if len(branches) > 1:
             result["branch_coverage"] = per_branch
         if coverage == "term_missing":
@@ -511,9 +614,8 @@ class ArchiveHistoryToolsMixin:
             # A term next to a course code is a filter. It used to be read
             # only on the CRN path and silently dropped here.
             history["offerings"] = [o for o in history["offerings"] if o["term"] == term_slug]
-            history["enrolment_not_captured_terms"] = [
-                t for t in history["enrolment_not_captured_terms"] if t == term_slug
-            ]
+            for key in ("enrolment_not_captured_terms", "capacity_not_captured_terms"):
+                history[key] = [t for t in history[key] if t == term_slug]
         ratios = [
             section["fill_ratio"]
             for offering in history["offerings"]
@@ -528,8 +630,10 @@ class ArchiveHistoryToolsMixin:
             "sections_with_quota_data": len(ratios),
             "average_fill_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
             "max_fill_ratio": max(ratios) if ratios else None,
-            "always_fills": bool(ratios) and all(ratio >= 1.0 for ratio in ratios),
+            # No usable ratio: unknown, not "does not fill".
+            "always_fills": all(ratio >= 1.0 for ratio in ratios) if ratios else None,
             "enrolment_not_captured_terms": history["enrolment_not_captured_terms"],
+            "capacity_not_captured_terms": history["capacity_not_captured_terms"],
             "term_filter": term_slug,
             "offerings": history["offerings"],
         }
@@ -546,7 +650,7 @@ class ArchiveHistoryToolsMixin:
                     "dönemler available_terms alanında. Bu, dersin o dönem açılmadığını tek "
                     "başına göstermez; archive_term_sections coverage alanına bakın."
                 )
-        self._attach_enrolment_note(result)
+        self._attach_capture_basis(result, entry, term_slug)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
@@ -645,19 +749,19 @@ class ArchiveHistoryToolsMixin:
 
         term_facts: dict[str, tuple[list[str], Any]] = {}
 
-        def _sections_for(term: str) -> tuple[str, list[dict[str, Any]], bool]:
+        def _sections_for(term: str) -> tuple[str, list[dict[str, Any]], bool, bool]:
             coverage, _, meta, sections = self._resolve_archive_term_branch(term, branch)
-            captured = self._archive_enrolment_captured(meta, sections)
+            captured, seats = self._archive_term_capture(meta, sections)
             matched = [
-                summarize_section(section, enrolment_captured=captured)
+                summarize_section(section, enrolment_captured=captured, capacity_captured=seats)
                 for section in sections
                 if _norm(section.get("code")) == _norm(canonical)
             ]
             term_facts[term] = (term_levels(meta, sections), meta.get("sections"))
-            return coverage, matched, captured or not sections
+            return coverage, matched, captured or not sections, seats or not sections
 
-        coverage_a, sections_a, captured_a = _sections_for(term_a)
-        coverage_b, sections_b, captured_b = _sections_for(term_b)
+        coverage_a, sections_a, captured_a, seats_a = _sections_for(term_a)
+        coverage_b, sections_b, captured_b, seats_b = _sections_for(term_b)
         levels_a, total_a = term_facts[term_a]
         levels_b, total_b = term_facts[term_b]
 
@@ -739,16 +843,32 @@ class ArchiveHistoryToolsMixin:
         diff = diff_term_offerings(
             compared_a, compared_b,
             enrolment_captured_a=captured_a, enrolment_captured_b=captured_b,
+            capacity_captured_a=seats_a, capacity_captured_b=seats_b,
         )
         result["diff"] = diff
         not_captured = [
             term for term, captured in ((term_a, captured_a), (term_b, captured_b)) if not captured
         ]
+        no_capacity = [term for term, seats in ((term_a, seats_a), (term_b, seats_b)) if not seats]
+        if no_capacity:
+            capacity_reason: str | None = (
+                f"{', '.join(no_capacity)}: kontenjanlar arşive alınmamış (dönem dökümündeki bütün "
+                "şubelerde 0). Kontenjan karşılaştırılamaz; şube sayısı ve öğretim üyeleri karşılaştırıldı."
+            )
+        elif not diff["capacity_comparable"]:
+            capacity_reason = "En az bir dönemde bu dersin kontenjan sayısı yok."
+        else:
+            capacity_reason = None
+        result["capacity_comparison"] = {
+            "comparable": diff["capacity_comparable"],
+            "not_captured_terms": no_capacity,
+            "reason": capacity_reason,
+        }
         if not_captured:
             reason = (
                 f"{', '.join(not_captured)}: kayıtlı öğrenci sayıları arşive alınmamış (dönem "
                 "dökümündeki bütün şubelerde 0). Kayıtlı sayısı ve doluluk karşılaştırılamaz; şube "
-                "sayısı, kontenjan ve öğretim üyeleri karşılaştırıldı."
+                "sayısı ve öğretim üyeleri karşılaştırıldı."
             )
         elif not diff["enrolment_comparable"]:
             reason = "En az bir dönemde bu dersin kayıtlı öğrenci sayısı yok."

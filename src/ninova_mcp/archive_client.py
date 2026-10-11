@@ -65,6 +65,9 @@ class ItuArchiveClient:
         self._cache: TtlCache[Any] = TtlCache(ttl)
         self._min_request_interval = _request_delay_seconds()
         self._last_request_at = 0.0
+        # Requests actually sent (cache hits do not count). Lets a caller cap
+        # how many extra documents one tool call may cost.
+        self.request_count = 0
 
     @property
     def session(self) -> requests.Session:
@@ -105,6 +108,7 @@ class ItuArchiveClient:
 
         url = self.base_url + path
         self._throttle()
+        self.request_count += 1
         try:
             response = request_with_safe_redirects(
                 self.session,
@@ -143,6 +147,29 @@ class ItuArchiveClient:
         if not isinstance(payload, dict):
             raise ItuArchiveError(f"Archive meta.json has an unexpected shape: {segment}")
         return payload
+
+    def get_term_meta_if_available(self, slug: str, *, cached_only: bool = False) -> dict[str, Any] | None:
+        """``meta.json`` of one term, or ``None`` when it cannot be had.
+
+        For callers that treat the file as a refinement and can do without
+        it. A failed read is remembered for the cache TTL, so a term whose
+        file is missing costs one request and not one per call.
+        ``cached_only=True`` never sends a request: it answers from the cache
+        or with ``None``.
+        """
+        segment = term_path_segment(slug)
+        path = f"/terms/{segment}/meta.json"
+        cached = self._cache.get(f"archive:{path}")
+        if isinstance(cached, dict):
+            return cached
+        miss_key = f"archive-miss:{path}"
+        if cached_only or self._cache.get(miss_key):
+            return None
+        try:
+            return self.get_term_meta(segment)
+        except ItuArchiveError:
+            self._cache.set(miss_key, True)
+            return None
 
     def get_term_branch(self, slug: str, branch: str) -> list[dict[str, Any]]:
         """Every section record for one branch in one term."""

@@ -11,6 +11,18 @@ _TERM = (
     "'2025-2026 Güz Dönemi' / '2025-2026 Fall'."
 )
 
+# Said once per history tool instead of in a note on every result.
+_CAPTURE = (
+    "Placeholder counts: a term in enrolment_not_captured_terms has 0 enrolled in every "
+    "section of the whole term (dump taken before registration opened), so its enrolled "
+    "and fill_ratio are null: unknown, not zero. A term in capacity_not_captured_terms "
+    "also has 0 capacity everywhere: its capacity is null too. Such terms are left out of "
+    "every average and carry a one-line data_quality. A single 0 in a captured term is "
+    "real. capture_basis is 'term' when the decision rests on term-wide totals, 'branch' "
+    "when the totals of the terms in capture_basis_branch_terms could not be read and "
+    "only the course's branch file decided. "
+)
+
 ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "archive_list_terms",
@@ -19,9 +31,14 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "List every term held in the İTÜ ders arşivi (2016-2017 onward), including "
             "terms OBS no longer publishes and terms not yet active. Every archive tool "
             "that takes a term accepts the slug ('2025-2026-guz'), the OBS term id (202610) "
-            "or the label printed here ('2025-2026 Güz Dönemi'). Section counts of two terms "
+            "or the label printed here ('2025-2026 Güz Dönemi'). The archive exists because "
+            "OBS publishes only the active term: the active term comes from OBS, past terms "
+            "from historical dumps. Section counts of two terms "
             "are not comparable when 'coverage_may_differ' names one of them: the live term "
-            "holds graduate sections that older dumps may lack."
+            "holds graduate sections that older dumps may lack. A term carries "
+            "'enrolment_not_captured' / 'capacity_not_captured' only when the index itself "
+            "holds that term's totals (today the live term); for another term call a term "
+            "tool such as archive_term_sections, which reports both flags."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -34,8 +51,7 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "Answers 'is this course ever offered in the spring?', which OBS cannot. "
             "Read seasonality.pattern before claiming a season: insufficient_data (fewer than 3 "
             "term records) means the archive cannot tell, not that the course runs in one term; "
-            "summer school is counted apart from Güz and Bahar. An offering marked "
-            "enrolment_not_captured has no enrolled count or fill ratio (unknown, not zero). "
+            "summer school is counted apart from Güz and Bahar. " + _CAPTURE +
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
@@ -66,9 +82,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "List every instructor who has taught a course across archived terms, ranked "
             "by how many terms they taught it, with their most recent term and average "
             "section fill rate. Sections with no announced instructor are counted in "
-            "unannounced_section_count, never listed as a person. Terms whose enrolment the "
-            "archive never captured (enrolment_not_captured_terms) add nothing to the average; "
-            "fill_ratio_section_count says how many sections the average rests on. "
+            "unannounced_section_count, never listed as a person. "
+            "fill_ratio_section_count says how many sections an average rests on; "
+            "average_fill_ratio is null when it rests on none. " + _CAPTURE +
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
@@ -112,8 +128,12 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "List archived sections for a term, filtered by branch, course code, or "
             "instructor. Critically, the archive holds terms OBS has not published yet, "
             "so upcoming-term offerings can be checked instead of guessed. A null instructor "
-            "means none was announced; enrolment_not_captured means the term's enrolled "
-            "counts were never recorded (null, not zero)."
+            "means none was announced. enrolment_not_captured means no section of the whole "
+            "term has an enrolled student in the dump (taken before registration opened): "
+            "enrolled and fill_ratio are null, unknown and not zero. capacity_not_captured "
+            "means no section of the term has a capacity either: capacity is null too. "
+            "data_quality names what is missing in one line. A single 0 in a captured term "
+            "is a real 0."
         ),
         "inputSchema": {
             "type": "object",
@@ -141,10 +161,10 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "How full a section got. With a CRN, reads that term's quota time series. "
             "With a course code, reports capacity vs enrolment across every past section "
             "so you can judge whether the course reliably fills up; add a term to narrow "
-            "the course answer to that one term (term_filter says which). An offering marked "
-            "enrolment_not_captured has no enrolled count: the archive took that term's dump "
-            "before any enrolment existed, so it is unknown, not zero, and is left out of every "
-            "average. The CRN note states how old the last snapshot is and whether the archive "
+            "the course answer to that one term (term_filter says which). average_fill_ratio, "
+            "max_fill_ratio and always_fills are null when no section has a usable ratio. "
+            + _CAPTURE +
+            "The CRN note states how old the last snapshot is and whether the archive "
             "is scanning now (scan_active); the numbers are never live. "
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
@@ -213,11 +233,16 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "Diff one course's sections between two archived terms: instructor turnover, "
             "section-count delta, and capacity/fill movement, named explicitly rather than "
             "left for two separate archive_term_sections calls to be compared by eye. "
-            "Read three flags before quoting a number: 'comparable'; 'coverage_differs' "
+            "Read four flags before quoting a number: 'comparable'; 'coverage_differs' "
             "(the two dumps hold different study levels, listed under 'levels'; only the "
-            "shared levels are compared); and 'enrolment_comparison' (a term whose enrolment "
-            "was never captured has no enrolled count or fill ratio, and is not a term with "
-            "zero students)."
+            "shared levels are compared); 'enrolment_comparison' (a side marked "
+            "enrolment_not_captured has 0 enrolled in every section of the whole term: no "
+            "enrolled count or fill ratio, and not a term with zero students); and "
+            "'capacity_comparison' (a side marked capacity_not_captured has 0 capacity in "
+            "every section of the whole term: total_capacity and capacity_delta are null). "
+            "Each block gives 'comparable', 'not_captured_terms' and a 'reason'; a side's "
+            "'data_quality' names what is missing in one line. Section counts and "
+            "instructors are compared either way."
         ),
         "inputSchema": {
             "type": "object",
