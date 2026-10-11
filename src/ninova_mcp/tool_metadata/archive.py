@@ -21,7 +21,10 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Term-by-term offering history for a course from the archive: which terms it "
             "ran, how many sections, which instructors, and which season it opens in. "
-            "Answers 'is this course ever offered in the spring?', which OBS cannot."
+            "Answers 'is this course ever offered in the spring?', which OBS cannot. "
+            "Read seasonality.pattern before claiming a season: insufficient_data (fewer than 3 "
+            "term records) means the archive cannot tell, not that the course runs in one term; "
+            "summer school is counted apart from Güz and Bahar."
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."

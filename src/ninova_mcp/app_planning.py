@@ -620,6 +620,7 @@ class PlanningToolsMixin:
             never look like a claim about the course's actual schedule.
             """
             from .archive import seasonality as _seasonality
+            from .archive import seasonality_sentence
 
             try:
                 history = self.archive.get_course_history(branch)
@@ -631,13 +632,7 @@ class PlanningToolsMixin:
             summary = _seasonality(entry.get("terms") or [])
             if summary["total_terms"] == 0:
                 return None
-            note = None
-            if summary["only_season"]:
-                note = (
-                    f"{canonical} arşivde yalnızca {summary['only_season']} döneminde "
-                    f"açılmış ({summary['total_terms']} dönem)."
-                )
-            return {**summary, "note": note}
+            return {**summary, "note": seasonality_sentence(canonical, summary)}
 
         result: dict[str, Any] = {
             "course_code": canonical,

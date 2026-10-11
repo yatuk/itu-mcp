@@ -132,23 +132,96 @@ def course_history(entry: dict[str, Any], *, limit_terms: int | None = None) -> 
     }
 
 
+# Fewer term records than this say nothing about when a course opens: the
+# archive misses whole branches in older terms, so one record is often just
+# the current term.
+MIN_SEASONALITY_TERMS = 3
+_REGULAR_SEASONS = ("Güz", "Bahar")
+_SUMMER = "Yaz"
+
+
 def seasonality(term_slugs: list[str]) -> dict[str, Any]:
     """Summarise which seasons a course actually opens in.
 
-    "Only ever offered in Güz, 6 out of 6 terms" is the answer to "can I take
-    this in the spring?", which OBS cannot give at all.
+    Güz and Bahar are the regular terms; Yaz (summer school) is counted apart
+    and never decides the pattern of the other two. ``pattern`` is one of:
+
+    - ``no_data``: no term record.
+    - ``insufficient_data``: fewer than ``MIN_SEASONALITY_TERMS`` records.
+    - ``every_regular_term``: both regular terms, neither with two thirds of
+      the regular-term records.
+    - ``mostly_one_season``: both regular terms, one with at least two thirds
+      of the regular-term records (``dominant_season``).
+    - ``single_season``: only one regular term (``only_regular_season``).
+    - ``summer_only``: only summer records.
+
+    ``only_season`` is set only when every record is in one season and there
+    are enough records to say so.
     """
     counts: dict[str, int] = {}
     for slug in term_slugs:
         counts[season_of(slug)] = counts.get(season_of(slug), 0) + 1
     total = sum(counts.values())
-    dominant = max(counts, key=lambda k: counts[k]) if counts else None
+    regular = {season: counts.get(season, 0) for season in _REGULAR_SEASONS}
+    regular_total = sum(regular.values())
+    summer = counts.get(_SUMMER, 0)
+    larger = max(regular, key=lambda season: regular[season])
+
+    pattern = "no_data"
+    dominant: str | None = None
+    only_regular: str | None = None
+    if 0 < total < MIN_SEASONALITY_TERMS:
+        pattern = "insufficient_data"
+    elif total and regular_total == 0:
+        pattern, dominant = ("summer_only", _SUMMER) if summer == total else ("insufficient_data", None)
+    elif total and min(regular.values()) == 0:
+        pattern, dominant, only_regular = "single_season", larger, larger
+    elif total and 3 * regular[larger] >= 2 * regular_total:
+        pattern, dominant = "mostly_one_season", larger
+    elif total:
+        pattern = "every_regular_term"
     return {
         "counts": counts,
         "total_terms": total,
+        "pattern": pattern,
         "dominant_season": dominant,
-        "only_season": dominant if dominant and counts.get(dominant) == total and total > 0 else None,
+        "only_season": dominant if dominant and counts.get(dominant) == total else None,
+        "only_regular_season": only_regular,
+        "regular_terms": regular_total,
+        "summer_terms": summer,
+        "minimum_terms_for_a_pattern": MIN_SEASONALITY_TERMS,
     }
+
+
+def seasonality_sentence(course_code: str, summary: dict[str, Any]) -> str:
+    """One Turkish sentence for a ``seasonality`` summary, no stronger than the data."""
+    counts = summary.get("counts") or {}
+    total = summary.get("total_terms") or 0
+    summer = summary.get("summer_terms") or 0
+    pattern = summary.get("pattern")
+    dominant = summary.get("dominant_season")
+    by_season = ", ".join(
+        f"{season} {counts[season]}" for season in (*_REGULAR_SEASONS, _SUMMER) if counts.get(season)
+    )
+    if pattern == "insufficient_data":
+        return (
+            f"{course_code} için arşivde yalnızca {total} dönem kaydı var ({by_season}); hangi dönemlerde "
+            "açıldığını söylemek için yetersiz veri. Bu, dersin yalnızca o dönemde açıldığı anlamına gelmez."
+        )
+    if pattern == "every_regular_term":
+        return f"{course_code} her iki normal dönemde de açılıyor (dönem kaydı: {by_season})."
+    if pattern == "mostly_one_season":
+        return f"{course_code} çoğunlukla {dominant} döneminde açılıyor (dönem kaydı: {by_season})."
+    if pattern == "single_season" and summer:
+        return (
+            f"{course_code} normal dönemlerden yalnızca {dominant} döneminde açılıyor "
+            f"({counts.get(dominant, 0)} dönem kaydı); ayrıca {summer} yaz döneminde açılmış."
+        )
+    if pattern == "single_season":
+        return f"{course_code} yalnızca {dominant} döneminde açılıyor ({total} dönem kaydı)."
+    if pattern == "summer_only":
+        return f"{course_code} arşivde yalnızca Yaz döneminde açılmış ({total} dönem kaydı)."
+    return f"{course_code} için arşivde dönem kaydı yok."
 
 
 def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict[str, Any]:
@@ -469,21 +542,7 @@ def recommend_course_timing(
     separately into the sentence a student actually wants: which term to plan
     around, and who is likely to teach it.
     """
-    parts: list[str] = []
-    total = seasonality_summary.get("total_terms") or 0
-    only = seasonality_summary.get("only_season")
-    dominant = seasonality_summary.get("dominant_season")
-    counts = seasonality_summary.get("counts") or {}
-
-    if only and total > 0:
-        parts.append(f"{course_code} yalnızca {only} döneminde açılıyor ({total} dönem kaydı).")
-    elif dominant and total > 0:
-        parts.append(
-            f"{course_code} çoğunlukla {dominant} döneminde açılıyor "
-            f"({counts.get(dominant, 0)}/{total} dönem)."
-        )
-    else:
-        parts.append(f"{course_code} için arşivde mevsim eğilimi görülmüyor.")
+    parts: list[str] = [seasonality_sentence(course_code, seasonality_summary)]
 
     if top_instructors:
         top = top_instructors[0]
