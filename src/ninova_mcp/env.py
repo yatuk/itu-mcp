@@ -76,6 +76,8 @@ AUTO_ENV_RESTRICT_ONLY_KEYS: dict[str, Callable[[str], bool]] = {
     "NINOVA_REQUIRE_ELICITATION": _is_on,
     "NINOVA_REMOTE_REQUIRE_API_KEY": _is_on,
     "NINOVA_REMOTE_PROTECT_ALL": _is_on,
+    # Off = never read the OS keychain. On is the default already.
+    "NINOVA_KEYRING": _is_off,
 }
 
 # Keys an auto-discovered ``.env`` may never set. Any ``NINOVA_*`` key that is
@@ -130,6 +132,7 @@ AUTO_ENV_BLOCKED_KEYS: frozenset[str] = frozenset(
 _notice_lock = threading.Lock()
 _ignored_keys: set[str] = set()
 _reported: set[tuple[str, str]] = set()
+_file_loaded_keys: set[str] = set()
 
 
 def auto_env_allows(key: str, value: str) -> bool:
@@ -146,11 +149,18 @@ def ignored_env_keys() -> tuple[str, ...]:
         return tuple(sorted(_ignored_keys))
 
 
+def keys_loaded_from_file() -> frozenset[str]:
+    """Names of the keys a ``.env`` file put into the environment (no values)."""
+    with _notice_lock:
+        return frozenset(_file_loaded_keys)
+
+
 def reset_env_notices() -> None:
     """Forget what was reported. For tests."""
     with _notice_lock:
         _ignored_keys.clear()
         _reported.clear()
+        _file_loaded_keys.clear()
 
 
 def _report_ignored(path: Path, keys: list[str]) -> None:
@@ -251,6 +261,8 @@ def load_ninova_env(
         if not override and key in os.environ:
             continue
         os.environ[key] = value
+        with _notice_lock:
+            _file_loaded_keys.add(key)
     if ignored:
         _report_ignored(path, ignored)
     return path

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Annotated, Any
 
 from .client import NinovaError
 from .archive_client import ItuArchiveClient, ItuArchiveError
 from .community_data import CrossCheckDataClient, CrossCheckDataError
+from .credentials import credentials_available
 from .graduation import summarize_graduation_plan
 from .obs_client import ObsClient, ObsError, ObsPublicClient
 from .tool_params import publish_include_raw
@@ -195,9 +195,7 @@ class PlanningToolsMixin:
 
     def _obs_login_available(self) -> bool:
         """Whether an OBS read can be tried without starting a doomed login."""
-        return self._obs is not None or bool(  # type: ignore[attr-defined]
-            os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD")
-        )
+        return self._obs is not None or credentials_available()  # type: ignore[attr-defined]
 
     def _registered_course_rows(self) -> list[dict[str, Any]]:
         """Registered courses of the student's latest term, as OBS lists them."""

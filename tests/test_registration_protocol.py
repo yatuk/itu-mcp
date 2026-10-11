@@ -67,6 +67,7 @@ async def exchange() -> dict:
             "NINOVA_ENV_FILE": str(Path(directory) / "missing.env"),
             "NINOVA_STATE_DIR": str(Path(directory) / "state"),
             "NINOVA_SESSION_PERSIST": "0",
+            "NINOVA_KEYRING": "0",
             "NINOVA_USERNAME": "",
             "NINOVA_PASSWORD": "",
             "REGISTRATION_TEST_SECRET": "synthetic-private-environment-value",

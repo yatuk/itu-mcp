@@ -427,6 +427,14 @@ class ItuMailClient:
             os.getenv("NINOVA_MAIL_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS
         )
         self._imap_factory = imap_factory
+        if not self.username or not self.password:
+            # Shared İTÜ credentials stored by `itu-mcp setup` (OS keychain).
+            from .credentials import resolve_credentials
+
+            shared = resolve_credentials()
+            if shared.complete:
+                self.username = self.username or (shared.username or "").strip()
+                self.password = self.password or shared.password or ""
 
         if not 1 <= self.timeout <= 120:
             raise ItuMailError("NINOVA_MAIL_TIMEOUT_SECONDS must be between 1 and 120.")
@@ -436,7 +444,7 @@ class ItuMailClient:
         if not self.username or not self.password:
             raise ItuMailAuthError(
                 "Set NINOVA_MAIL_USERNAME/NINOVA_MAIL_PASSWORD or the shared "
-                "NINOVA_USERNAME/NINOVA_PASSWORD credentials."
+                "NINOVA_USERNAME/NINOVA_PASSWORD credentials, or run `itu-mcp setup`."
             )
 
         try:

@@ -44,6 +44,9 @@ dependencies = [
 
 [project.optional-dependencies]
 playwright = ["playwright>=1.40"]
+# OS keychain storage for `itu-mcp setup` (Windows Credential Manager,
+# macOS Keychain, Secret Service, KWallet).
+keyring = ["keyring>=24"]
 
 [project.urls]
 Homepage = "https://github.com/yatuk/itu-mcp"
