@@ -29,9 +29,31 @@ NINOVA_MAIL_USERNAME=your_email
 NINOVA_MAIL_PASSWORD=your_mail_password
 ```
 
-The server reads them from the process environment. If a `.env` file exists in the
-current working directory (or any parent), `NINOVA_*` variables are loaded from it
-without overriding variables already set in the environment.
+The server reads them from the process environment. It can also load `NINOVA_*`
+variables from one `.env` file, without overriding variables already set in the
+environment:
+
+- If `NINOVA_ENV_FILE` is set in the process environment, that file is read and no
+  other. Every `NINOVA_*` key in it counts, because you named the file yourself.
+- Otherwise the `.env` in the current working directory is read, if there is one.
+  Parent directories are not searched. So `cp .env.example .env` in a source
+  checkout works when the server is started from that directory.
+
+A `.env` that was only found in the working directory may set credentials, cache
+lifetimes, pacing, `NINOVA_COMPACT_DEFAULT`, the session cookie settings and the
+toolset variables. It may not set the security-relevant keys: `NINOVA_BASE_URL`,
+`NINOVA_OBS_BASE_URL`, `NINOVA_LIBRARY_BASE_URL`, `NINOVA_MAIL_HOST`,
+`NINOVA_MAIL_PORT`, `NINOVA_LIBRARY_CA_BUNDLE`, `NINOVA_LIBRARY_PROXY_URL`,
+`NINOVA_STATE_DIR`, `NINOVA_OBS_REGISTRATION_WRITES` and most remote transport
+settings. Two switches can be moved in the stricter direction only:
+`NINOVA_ALLOW_UPLOADS=0` and `NINOVA_REQUIRE_ELICITATION=1` are honoured, the
+opposite values are not. An ignored key is named on stderr at startup (the value is
+never printed). To use such a key, set it in the process environment, for example
+in the `env` block of the MCP client, or name the file with `NINOVA_ENV_FILE`.
+The reason is in [security.md](security.md#configuration-files).
+
+`ITU_ARCHIVE_*` and `PREREQ_CROSSCHECK_*` are read from the process environment
+only. They are never loaded from a `.env` file.
 
 ### Optional overrides
 
@@ -53,8 +75,8 @@ export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS="60" # capacity/schedule reads
 export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS="300"     # directory/SKS/news pages
 export NINOVA_LIBRARY_CACHE_TTL_SECONDS="300"
-export NINOVA_MAIL_HOST="imap.itu.edu.tr"
-export NINOVA_MAIL_PORT="993"
+export NINOVA_MAIL_HOST="imap.itu.edu.tr"            # the only accepted host
+export NINOVA_MAIL_PORT="993"                        # the only accepted port
 export NINOVA_MAIL_TIMEOUT_SECONDS="15"
 export ITU_ARCHIVE_BASE_URL="https://itu-ders.com/data"  # course archive
 export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates daily
@@ -307,7 +329,11 @@ the published tool set.
 - When a list parser returns zero items but the page still has content, tools may include a
   `parse_warning` field so the model can tell “empty” from “markup changed”.
 - Downloads default to `~/.ninova_state/downloads`; snapshots and tracking state live under
-  `~/.ninova_state/` unless `NINOVA_STATE_DIR` is set.
+  `~/.ninova_state/` unless `NINOVA_STATE_DIR` is set. Session, tracking and seat-watch
+  files are written owner-only on Linux and macOS; see
+  [security.md](security.md#data-stored-locally) for what applies on Windows.
+- In-memory caches keep at most 2048 entries each. Past that, expired entries are
+  dropped first and then the oldest ones.
 - The remote HTTP entrypoint uses the official Python MCP SDK's Streamable HTTP support.
 - CLI: `itu-mcp --version`, `--check-auth`, `--list-tools`, or no args for the stdio server.
 - **OBS** tools are prefixed with `obs_`. They reuse the same İTÜ username/password (SSO),

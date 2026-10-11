@@ -44,10 +44,60 @@ This project logs in to İTÜ Ninova, OBS, Portal and optionally İTÜ Mail with
   `NINOVA_LIBRARY_CA_BUNDLE`; there is no insecure `verify=false` switch.
 - `ItuMailClient` uses verified IMAPS, selects only `INBOX` in read-only mode, and
   fetches bodies and attachments with `BODY.PEEK` so unread state is preserved.
+  It connects only to `imap.itu.edu.tr` on port 993. Any other `NINOVA_MAIL_HOST` or
+  `NINOVA_MAIL_PORT` is refused before a connection is opened, wherever the value
+  came from. The mail login sends the İTÜ password, and a valid TLS certificate
+  only proves that a server owns its own name, so the name has to be the known one.
+  The match is exact; other hosts under `itu.edu.tr` are not accepted.
 - Public and library clients apply the same pre-request redirect validation, so an
   allowlisted page cannot bounce the client to localhost or an unrelated host.
 - User input is sent as query/form values, never concatenated into an arbitrary host,
   command, or filesystem path by these public tools.
+
+### Operator-configurable third-party sources
+
+Two public data sources are not İTÜ systems, and the operator can point them
+somewhere else:
+
+- `ITU_ARCHIVE_BASE_URL` (default `https://itu-ders.com/data`), the course archive
+  behind the `archive_*` tools and resources.
+- `PREREQ_CROSSCHECK_BASE_URL`, the community prerequisite feed behind the
+  `cross_check` field of `explain_course_eligibility`.
+
+No İTÜ credential or session cookie is sent to them. What they return is
+third-party text that reaches the model: course names, descriptions, instructor
+names and prerequisite strings. It is marked as untrusted like every other result,
+but whoever controls the configured host controls that text. Both variables are
+read from the process environment only and are never loaded from a `.env` file, so
+a file in the working directory cannot redirect them. Leave them unset unless you
+run your own copy of the data.
+
+## Configuration files
+
+An MCP client decides the working directory the server starts in, and that
+directory can be inside a tree somebody else wrote, such as a cloned repository.
+A `.env` found there is therefore treated as less trusted than the process
+environment:
+
+- Only the working directory itself is checked for a `.env`. Parent directories
+  are not searched.
+- Variables already in the process environment always take precedence.
+- A `.env` found this way cannot set the keys that decide where credentials go,
+  where state is written or which protections are on: base URL and host overrides,
+  the mail host and port, the library CA bundle and proxy, `NINOVA_STATE_DIR`,
+  `NINOVA_OBS_REGISTRATION_WRITES` and the remote transport settings that would
+  loosen it. `NINOVA_ALLOW_UPLOADS` and `NINOVA_REQUIRE_ELICITATION` can only be
+  moved to the stricter value. A `NINOVA_*` key the server does not know is ignored
+  as well.
+- Each ignored key is named on stderr at startup. Values are never printed.
+- A file named with `NINOVA_ENV_FILE` in the process environment is your explicit
+  choice, so every `NINOVA_*` key in it counts.
+
+What remains: a `.env` in the working directory can still supply
+`NINOVA_USERNAME` and `NINOVA_PASSWORD` when the process environment has none. The
+server would then log in with those values, to the real İTÜ hosts. Start the server
+from a directory you trust, or pass credentials through the `env` block of the
+client.
 
 ## Actions that change state
 
@@ -119,9 +169,29 @@ Mail bodies and attachment content cross the same untrusted-content boundary.
 
 Depending on the tools you call, the server may create:
 
-- `~/.ninova_state/` for snapshots, tracking state, downloads, and optionally
-  `session.json` (session cookies only — never the password). Override with `NINOVA_STATE_DIR`.
+- `~/.ninova_state/` for snapshots, tracking state, the seat-watch list, downloads,
+  and optionally `session.json` (session cookies only, never the password).
+  Override with `NINOVA_STATE_DIR`.
 - any explicit output directory you request through tools
 
-These paths are ignored by git by default. Session files are written with restrictive
-permissions when the OS allows it (`chmod 600`).
+These paths are ignored by git by default.
+
+File permissions:
+
+- Linux and macOS: `session.json`, the tracking state and the seat-watch state are
+  created with mode `0600`, and their directory with `0700`. An existing state
+  directory with wider permissions is tightened when one of these files is written.
+  The temporary file used during a write has mode `0600` from the start, and it
+  replaces the old file in one step, so an interrupted write leaves the old file
+  intact. A transcript saved by `obs_download_transcript` is `0600` as well; the
+  directory you chose for it is left as it is.
+- Windows: there are no such permission bits, and `chmod` there only toggles the
+  read-only flag. The files are protected by the access control list of your user
+  profile, where `~/.ninova_state` lives: other standard accounts on the machine
+  cannot read it, administrators can. If you move the state directory with
+  `NINOVA_STATE_DIR`, it gets the access rules of the place you chose. The server
+  does not change Windows ACLs.
+- Page snapshots and files saved by `download_resource` are written with the
+  default permissions of the process on every platform. Inside the default state
+  directory they are covered by its `0700` mode on Linux and macOS, once a
+  session, tracking or seat-watch file has been written there.
