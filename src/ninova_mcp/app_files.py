@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .client import NinovaClient, NinovaError
+from .local_files import (
+    LocalFileError,
+    create_new_file,
+    resolve_output_dir,
+    resolve_readable_file,
+    safe_download_name,
+)
+from .operator_settings import MAX_DOWNLOAD_MB_ENV, max_download_bytes
 from .parsing import (
     SnapshotReference,
     compare_snapshot_payloads,
@@ -22,6 +31,7 @@ from .parsing import (
 )
 from .text_extract import (
     DEFAULT_MAX_CHARS as TEXT_EXTRACT_DEFAULT_MAX_CHARS,
+    MAX_EXTRACT_BYTES,
     extract_text_from_bytes,
     extract_text_from_path,
     guess_extension,
@@ -79,7 +89,9 @@ class PageFileToolsMixin:
         max_pages: int = 25,
         include_downloads: bool = True,
     ) -> dict[str, Any]:
-        start_url = normalize_url(course_url, self.client.base_url)
+        # Ninova host only: the course path alone does not decide where the
+        # crawl goes.
+        start_url = self.client.ninova_url(course_url)
         course_path = self._extract_course_root_path(start_url)
         visited: set[str] = set()
         queue: list[tuple[str, int]] = [(start_url, 0)]
@@ -146,23 +158,76 @@ class PageFileToolsMixin:
         output_dir: str | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
+        """Save a Ninova file under the downloads directory.
+
+        ``output_dir`` and ``filename`` come from the model, so they cannot
+        leave the downloads directory (or a directory the operator listed in
+        NINOVA_EXTRA_DOWNLOAD_DIRS), cannot replace an existing file and
+        cannot produce a file that runs when it is opened.
+        """
+        # Every local check runs before the request, so a refused call sends nothing.
+        try:
+            target_dir = resolve_output_dir(output_dir, state_dir=self.state_dir)
+            requested_name = safe_download_name(filename) if filename else None
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
+        max_bytes = max_download_bytes()
+
         response = self.client.get(url, stream=True)
-        target_dir = Path(output_dir or (self.state_dir / "downloads")).expanduser().resolve()
-        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            try:
+                resolved_name, neutralised = requested_name or safe_download_name(
+                    self._filename_from_response(response)
+                )
+            except LocalFileError as exc:
+                raise NinovaError(str(exc)) from exc
+            self._refuse_oversized(response.headers.get("Content-Length"), max_bytes)
+            target_path, handle = create_new_file(target_dir, resolved_name)
+            written = 0
+            try:
+                with handle:
+                    for chunk in response.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise NinovaError(self._oversize_message(max_bytes))
+                        handle.write(chunk)
+            except BaseException:
+                target_path.unlink(missing_ok=True)
+                raise
+        finally:
+            response.close()
 
-        resolved_name = sanitize_filename(filename) if filename else self._filename_from_response(response)
-        target_path = self._unique_download_path(target_dir / resolved_name)
-        with target_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    handle.write(chunk)
-
-        return {
+        result: dict[str, Any] = {
             "url": response.url,
             "content_type": response.headers.get("Content-Type"),
             "content_length": response.headers.get("Content-Length"),
             "path": str(target_path),
+            "size_bytes": written,
         }
+        if neutralised:
+            result["filename_neutralised"] = True
+            result["filename_note"] = (
+                "This file type can run code when opened, so '.download' was appended to its name. "
+                "Rename it yourself only if you trust the file."
+            )
+        return result
+
+    @staticmethod
+    def _oversize_message(max_bytes: int) -> str:
+        return (
+            f"Download is larger than the {max_bytes // (1024 * 1024)} MiB limit and was not saved. "
+            f"The operator can raise the limit with {MAX_DOWNLOAD_MB_ENV}."
+        )
+
+    def _refuse_oversized(self, content_length: Any, max_bytes: int) -> None:
+        try:
+            declared = int(str(content_length).strip())
+        except (TypeError, ValueError):
+            return
+        if declared > max_bytes:
+            raise NinovaError(self._oversize_message(max_bytes))
 
     def read_resource_text(
         self,
@@ -175,7 +240,10 @@ class PageFileToolsMixin:
         """Download (or open) a Ninova file and return extracted plain text for the LLM.
 
         Provide either ``url`` (authenticated Ninova resource) or a local ``path``
-        previously saved via ``download_resource``.
+        previously saved via ``download_resource``. ``path`` must be inside the
+        downloads directory, or inside a directory the operator listed in
+        NINOVA_EXTRA_READ_DIRS; a bare file name is looked up in the downloads
+        directory.
         """
         if not url and not path:
             raise NinovaError("Provide either url or path.")
@@ -185,42 +253,57 @@ class PageFileToolsMixin:
         max_chars = max(1_000, min(int(max_chars), 200_000))
 
         if path:
-            extracted = extract_text_from_path(path, max_chars=max_chars)
+            try:
+                local_path = resolve_readable_file(path, state_dir=self.state_dir)
+            except LocalFileError as exc:
+                raise NinovaError(str(exc)) from exc
+            extracted = extract_text_from_path(local_path, max_chars=max_chars)
             extracted["source"] = "path"
             return extracted
 
         if url is None:  # narrowed above; keep runtime safety under python -O
             raise NinovaError("Provide a Ninova resource URL.")
+        try:
+            requested_name = safe_download_name(filename)[0] if filename else None
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
         response = self.client.get(url, stream=True)
         content_type = response.headers.get("Content-Type")
-        resolved_name = sanitize_filename(filename) if filename else self._filename_from_response(response)
+        try:
+            resolved_name = requested_name or safe_download_name(self._filename_from_response(response))[0]
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
+        # The type is decided from the name as the server or caller gave it,
+        # not from a name that had '.download' appended.
         extension = guess_extension(
             url=response.url,
             content_type=content_type,
-            filename=resolved_name,
+            filename=resolved_name.removesuffix(".download"),
         )
 
         chunks: list[bytes] = []
         total = 0
-        max_bytes = 25 * 1024 * 1024  # 25 MiB safety cap for in-memory extract
+        max_bytes = MAX_EXTRACT_BYTES  # safety cap for in-memory extract
         for chunk in response.iter_content(chunk_size=64 * 1024):
             if not chunk:
                 continue
             total += len(chunk)
             if total > max_bytes:
                 raise NinovaError(
-                    f"Resource larger than {max_bytes} bytes; download with "
-                    "download_resource and pass path= to read_resource_text."
+                    f"Resource larger than {max_bytes} bytes; it is too large for text extraction."
                 )
             chunks.append(chunk)
         data = b"".join(chunks)
 
         saved_path: str | None = None
         if save_download:
-            target_dir = (self.state_dir / "downloads").expanduser().resolve()
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self._unique_download_path(target_dir / resolved_name)
-            target_path.write_bytes(data)
+            try:
+                target_dir = resolve_output_dir(None, state_dir=self.state_dir)
+            except LocalFileError as exc:
+                raise NinovaError(str(exc)) from exc
+            target_path, handle = create_new_file(target_dir, resolved_name)
+            with handle:
+                handle.write(data)
             saved_path = str(target_path)
 
         extracted = extract_text_from_bytes(data, extension=extension, max_chars=max_chars)
@@ -286,7 +369,7 @@ class PageFileToolsMixin:
         label: str | None,
     ) -> SnapshotReference:
         if snapshot_path:
-            path = Path(snapshot_path).expanduser().resolve()
+            path = self._confined_snapshot_path(snapshot_path)
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))["snapshot"]
             except (OSError, json.JSONDecodeError, KeyError) as exc:
@@ -310,6 +393,25 @@ class PageFileToolsMixin:
             return SnapshotReference(path=candidate, payload=snapshot)
         raise NinovaError("No matching snapshot was found.")
 
+    def _confined_snapshot_path(self, snapshot_path: str) -> Path:
+        """Resolve a model-supplied snapshot path; only the snapshot directory is readable."""
+        text = str(snapshot_path)
+        if not text or "\x00" in text or text.startswith(("\\\\", "//")):
+            raise NinovaError("snapshot_path must be a file inside the snapshot directory.")
+        root = self.snapshot_dir.resolve()
+        candidate = Path(text).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        # Checked first without touching the filesystem, then with links followed.
+        lexical = Path(os.path.abspath(candidate))
+        roots = (Path(os.path.abspath(self.snapshot_dir)), root)
+        if not any(lexical.is_relative_to(item) for item in roots):
+            raise NinovaError("snapshot_path must be a file inside the snapshot directory.")
+        resolved = lexical.resolve()
+        if not resolved.is_relative_to(root):
+            raise NinovaError("snapshot_path must be a file inside the snapshot directory.")
+        return resolved
+
     def _snapshot_path(self, url: str, label: str | None) -> Path:
         parsed = urlparse(url)
         slug = slugify((label or parsed.path.strip("/") or "dashboard").replace("/", "-"))
@@ -331,15 +433,3 @@ class PageFileToolsMixin:
         parsed = urlparse(response.url)
         basename = Path(parsed.path).name
         return sanitize_filename(basename or "download")
-
-    def _unique_download_path(self, path: Path) -> Path:
-        if not path.exists():
-            return path
-        stem = path.stem or "download"
-        suffix = path.suffix
-        counter = 2
-        while True:
-            candidate = path.with_name(f"{stem}-{counter}{suffix}")
-            if not candidate.exists():
-                return candidate
-            counter += 1

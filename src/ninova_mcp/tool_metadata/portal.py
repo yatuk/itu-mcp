@@ -64,7 +64,7 @@ PORTAL_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "ticket_id": {"type": "string", "pattern": "^[0-9]{1,20}$", "description": "Numeric ID of one of your own tickets, from obs_get_help_tickets."},
-                "include_sensitive": {"type": "boolean", "default": False, "description": "Show the real names of the requester and staff instead of role labels."},
+                "include_sensitive": {"type": "boolean", "default": False, "description": "Show the real names of the requester and staff instead of role labels. Ignored unless the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT."},
             },
             "required": ["ticket_id"],
             "additionalProperties": False,

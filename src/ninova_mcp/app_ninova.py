@@ -6,6 +6,7 @@ course reference, walking a file directory and the course URL helpers.
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import os
 import re
@@ -40,6 +41,10 @@ from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 from .app_base import COURSES_CACHE_KEY, server_namespace
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+# The assignment upload page, as Ninova links it from an assignment and as its
+# own form posts back to it: /Sinif/<course>.<class>/Odev/<assignment>/OdevGonder
+UPLOAD_PATH_RE = re.compile(r"^/Sinif/(\d+\.\d+)/Odev/(\d+)/OdevGonder/?$")
+ASSIGNMENT_DETAIL_PATH_RE = re.compile(r"^/Sinif/\d+\.\d+/Odev/\d+/?$")
 
 
 def match_upload_slot(*args: Any, **kwargs: Any) -> Any:
@@ -310,6 +315,7 @@ class NinovaCourseToolsMixin:
             upload_url=upload_url,
         )
         html, response = self.client.get_html(resolved_upload["upload_url"])
+        self._require_upload_page_url(response.url, "The upload page")
         form = extract_assignment_upload_form(html, response.url, base_url=self.client.base_url)
         return {
             "course": resolved_upload.get("course"),
@@ -355,6 +361,19 @@ class NinovaCourseToolsMixin:
             raise NinovaError(
                 f"File too large ({size} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
             )
+        # Read once, here. The size and hash shown to the user and the bytes
+        # that are sent all come from this one read, so a file that changes on
+        # disk after the user approved cannot change what is uploaded.
+        with path.open("rb") as handle:
+            file_bytes = handle.read(MAX_UPLOAD_BYTES + 1)
+        size = len(file_bytes)
+        if size <= 0:
+            raise NinovaError(f"File is empty: {path}")
+        if size > MAX_UPLOAD_BYTES:
+            raise NinovaError(
+                f"File too large (more than {MAX_UPLOAD_BYTES} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
+            )
+        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
 
         resolved_upload = self._resolve_assignment_upload_url(
             course=course,
@@ -362,11 +381,20 @@ class NinovaCourseToolsMixin:
             upload_url=upload_url,
         )
         html, response = self.client.get_html(resolved_upload["upload_url"])
+        page_ids = self._require_upload_page_url(response.url, "The upload page")
         form = extract_assignment_upload_form(html, response.url, base_url=self.client.base_url)
         if not form.get("ok"):
             raise NinovaError(form.get("error") or "Could not parse assignment upload form.")
         if not form.get("submit_event_target"):
             raise NinovaError(form.get("error") or "Submit control not found on upload page.")
+        # The form's action is page content. The file is posted only to the
+        # upload page of the same assignment on the Ninova host.
+        post_url = form.get("form_url") or response.url
+        if self._require_upload_page_url(post_url, "The upload form's target") != page_ids:
+            raise NinovaError(
+                "The upload form's target belongs to a different assignment than the upload page. "
+                "Nothing was sent."
+            )
 
         try:
             slot = match_upload_slot(
@@ -400,7 +428,7 @@ class NinovaCourseToolsMixin:
             "course": resolved_upload.get("course"),
             "assignment": resolved_upload.get("assignment"),
             "upload_url": response.url,
-            "form_url": form.get("form_url"),
+            "form_url": post_url,
             "submit_label": form.get("submit_label"),
             "slot": {
                 "index": slot.get("index"),
@@ -413,6 +441,7 @@ class NinovaCourseToolsMixin:
                 "path": str(path),
                 "name": path.name,
                 "size_bytes": size,
+                "sha256": file_sha256,
             },
         }
 
@@ -430,6 +459,7 @@ class NinovaCourseToolsMixin:
         confirmation = confirm_write(upload_confirmation_message(
             resolved_upload.get("course"), resolved_upload.get("assignment"), response.url,
             slot, path.name, str(path), size,
+            post_url=post_url, sha256_hex=file_sha256,
         ))
         if confirmation is not None and confirmation["proceed"] is not True:
             return {
@@ -442,7 +472,6 @@ class NinovaCourseToolsMixin:
                 "confirmation": public_confirmation(confirmation),
             }
 
-        file_bytes = path.read_bytes()
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = dict(form.get("hidden_fields") or {})
         data["__EVENTTARGET"] = form["submit_event_target"]
@@ -455,7 +484,7 @@ class NinovaCourseToolsMixin:
         ]
 
         post_response = self.client.post_multipart(
-            form.get("form_url") or response.url,
+            post_url,
             data=data,
             files=files,
             referer=response.url,
@@ -515,14 +544,11 @@ class NinovaCourseToolsMixin:
         upload_url: str | None,
     ) -> dict[str, Any]:
         if upload_url:
-            normalized = normalize_url(upload_url, self.client.base_url)
-            if "OdevGonder" not in normalized and "/Odev/" not in normalized:
-                # Accept detail URLs; caller may pass Odev page — try append OdevGonder if needed later.
-                pass
-            if "/Odev/" in normalized and not normalized.rstrip("/").endswith("OdevGonder"):
+            normalized = self.client.ninova_url(upload_url)
+            if ASSIGNMENT_DETAIL_PATH_RE.match(urlparse(normalized).path):
                 # Detail URL like .../Odev/123 -> .../Odev/123/OdevGonder is common.
-                if "OdevGonder" not in normalized:
-                    normalized = normalized.rstrip("/") + "/OdevGonder"
+                normalized = normalized.split("?", 1)[0].split("#", 1)[0].rstrip("/") + "/OdevGonder"
+            self._require_upload_page_url(normalized, "upload_url")
             return {
                 "upload_url": normalized,
                 "course": None,
@@ -573,11 +599,28 @@ class NinovaCourseToolsMixin:
                 f"Assignment {chosen.get('title')!r} has no upload URL "
                 "(deadline may be closed or upload not enabled)."
             )
+        # This link was read from a Ninova page, so it is checked like any other.
+        self._require_upload_page_url(resolved_upload, "The assignment's upload link")
         return {
             "upload_url": resolved_upload,
             "course": resolved_course,
             "assignment": chosen,
         }
+
+    def _require_upload_page_url(self, url: str, what: str) -> tuple[str, str]:
+        """Return (course ID, assignment ID) of a Ninova upload page URL, or raise.
+
+        Accepts only the Ninova host and the path
+        ``/Sinif/<id>.<id>/Odev/<id>/OdevGonder``.
+        """
+        checked = self.client.ninova_url(url)
+        match = UPLOAD_PATH_RE.match(urlparse(checked).path)
+        if not match:
+            raise NinovaError(
+                f"{what} is not a Ninova assignment upload page "
+                "(/Sinif/<id>.<id>/Odev/<id>/OdevGonder). Nothing was sent."
+            )
+        return match.group(1), match.group(2)
 
     def _resolve_course(self, course: str) -> dict[str, Any]:
         if not course.strip():

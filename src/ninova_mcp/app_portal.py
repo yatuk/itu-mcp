@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from .client import NinovaClient, NinovaError
+from .operator_settings import SENSITIVE_OUTPUT_DISABLED_NOTE, sensitive_output_allowed
 from .parsing import normalize_lookup_text
 
 
@@ -224,7 +225,9 @@ class PortalToolsMixin:
         from requests import RequestException
 
         try:
-            html, response = self.client.get_html(ticket_url(identifier))
+            # The help desk host is reachable only from here, with a URL built
+            # from a validated ticket ID. The page tools cannot name this host.
+            html, response = self.client.get_help_desk_html(ticket_url(identifier))
         except RequestException as exc:
             raise NinovaError("Help ticket HTTP read failed.") from exc
         if help_url(response.url) is None:
@@ -269,8 +272,15 @@ class PortalToolsMixin:
                 "Help ticket ID is not in your own ticket list. "
                 "Call obs_get_help_tickets to see the IDs you can read."
             )
-        ticket = redact_ticket(self._read_help_ticket(identifier), include_sensitive=bool(include_sensitive))
-        return {"ticket": ticket, "untrusted_external_content": True}
+        # include_sensitive is written by the model. It is honoured only when
+        # the operator switched unredacted output on in the environment.
+        reveal = bool(include_sensitive) and sensitive_output_allowed()
+        ticket = redact_ticket(self._read_help_ticket(identifier), include_sensitive=reveal)
+        result: dict[str, Any] = {"ticket": ticket, "untrusted_external_content": True}
+        if include_sensitive and not reveal:
+            result["sensitive_output"] = "disabled_by_operator"
+            result["sensitive_output_note"] = SENSITIVE_OUTPUT_DISABLED_NOTE
+        return result
 
     def obs_get_help_tickets(
         self, query: str | None = None, limit: int = 20, include_details: bool = False,

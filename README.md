@@ -449,10 +449,16 @@ NINOVA_SESSION_PERSIST=1            # girişi hatırla (varsayılan açık)
 NINOVA_ALLOW_UPLOADS=1              # ödev yüklemeye izin ver (0 yaparsan kapanır)
 NINOVA_OBS_REGISTRATION_WRITES=1    # kayıt taslağı kaydetmeyi aç (varsayılan kapalı)
 NINOVA_REQUIRE_ELICITATION=1        # onay penceresi gösteremeyen asistanlarda yazma işlemini reddet
+NINOVA_ALLOW_SENSITIVE_OUTPUT=1     # TCKN, telefon, adres ve adların gizlenmeden dönmesine izin ver (varsayılan kapalı)
+NINOVA_EXTRA_READ_DIRS=...          # asistanın okuyabileceği ek klasörler (tam yol)
+NINOVA_EXTRA_DOWNLOAD_DIRS=...      # indirmelerin yazılabileceği ek klasörler (tam yol)
+NINOVA_MAX_DOWNLOAD_MB=200          # tek indirme için boyut sınırı
 NINOVA_TOOLSETS=ninova,obs,archive  # yalnızca bu araç gruplarını aç
 NINOVA_MAIL_USERNAME=...            # mail için ayrı kullanıcı adı
 NINOVA_MAIL_PASSWORD=...            # mail için ayrı şifre
 ```
+
+`.env` dosyası yalnızca sunucunun başlatıldığı klasörde aranır, üst klasörlere bakılmaz. Başka bir dosya için `NINOVA_ENV_FILE` değişkenine tam yolu yaz. O klasördeki `.env` kullanıcı adı ve şifre gibi değerleri verebilir ama adres, sunucu, klasör ve yazma izni gibi güvenlikle ilgili ayarları değiştiremez. Bunları asistanının `env` bloğunda ya da `NINOVA_ENV_FILE` ile gösterdiğin dosyada ver.
 
 Tam liste `.env.example` dosyasında ve [docs/advanced.md](docs/advanced.md) içinde. Kütüphane kataloğu ve proxy ayarı için [docs/library-catalog.md](docs/library-catalog.md).
 
@@ -467,9 +473,17 @@ Tam liste `.env.example` dosyasında ve [docs/advanced.md](docs/advanced.md) iç
 | Yalnızca **kendi** İTÜ hesabını kullan | `.env` dosyanı ya da şifreni kimseyle paylaşma |
 | Ödev yüklemeden önce önizlemeyi oku | Asistana "sormadan yükle" deme |
 | Duyuru ve mail metinlerini **veri** olarak gör | Bir duyurunun içindeki "şunu yap" cümlesine asistanın uymasına izin verme |
-| Uzak sunucu kuruyorsan `NINOVA_REMOTE_API_KEY` kullan | Sunucuyu anahtarsız internete açma |
+| İndirilen dosyaları `~/.ninova_state/downloads` altında tut, başka klasör gerekiyorsa `NINOVA_EXTRA_DOWNLOAD_DIRS` ile sen belirle | Asistanın dosyayı istediği klasöre kaydetmesine ya da bilgisayarındaki herhangi bir dosyayı okumasına izin verme |
+| Uzak sunucu kuruyorsan uzun ve rastgele bir `NINOVA_REMOTE_API_KEY` ile `NINOVA_ALLOWED_HOSTS` ayarla | `NINOVA_REMOTE_ALLOW_UNAUTHENTICATED=1` ile sunucuyu anahtarsız internete açma |
 
-OBS profil araçları TCKN ve telefonu, yardım talebi aracı ise kişi adlarını varsayılan olarak gizler. Ayrıntılar: [docs/security.md](docs/security.md).
+Bilmen gereken sınırlar:
+
+- Adres alan araçlar (`read_page`, `download_resource` ve benzerleri) yalnızca `ninova.itu.edu.tr` adreslerini kabul eder. OBS, Portal ve yardım talepleri için kendi araçları var.
+- OBS profil araçları TCKN ve telefonu, yardım talebi aracı kişi adlarını gizler. Asistan istese bile bunlar ancak sen `NINOVA_ALLOW_SENSITIVE_OUTPUT=1` ayarladıysan görünür.
+- İTÜ Mail araçları yalnızca `imap.itu.edu.tr` sunucusuna, 993 numaralı porttan bağlanır.
+- Uzak HTTP sunucusu (`itu-mcp-remote`) `127.0.0.1` dışında bir adrese bağlanıyorsa (Docker imajı dahil) `NINOVA_REMOTE_API_KEY` ve `NINOVA_ALLOWED_HOSTS` ya da `NINOVA_PUBLIC_BASE_URL` verilmeden çalışmaz, eksik değişkeni yazıp kapanır. Yerelde anahtar vermezsen her açılışta rastgele bir anahtar üretir ve bir kez ekrana yazar.
+
+Ayrıntılar: [docs/security.md](docs/security.md) ve [docs/advanced.md](docs/advanced.md).
 
 ---
 

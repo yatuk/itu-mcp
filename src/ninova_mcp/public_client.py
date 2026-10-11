@@ -12,7 +12,7 @@ import requests
 
 from .cache import TtlCache, parse_ttl_seconds
 from .client import DEFAULT_HEADERS, _request_delay_seconds
-from .http_security import request_with_safe_redirects
+from .http_security import request_with_safe_redirects, require_https_host
 from .parsing import clean_text, make_soup, normalize_lookup_text
 from .public_parsing import (
     extract_announcement_list,
@@ -84,9 +84,12 @@ class ItuPublicClient:
         return payload
 
     def _validate_url(self, url: str) -> None:
-        parsed = urlparse(url)
-        if parsed.scheme != "https" or (parsed.hostname or "").lower() not in self.ALLOWED_HOSTS:
-            raise ItuPublicError(f"Public source URL is not allowed: {url}")
+        # The host is read from the URL the HTTP library will send, not from
+        # urlparse, which reads some URLs differently.
+        try:
+            require_https_host(url, self.ALLOWED_HOSTS, allow_any_port=True)
+        except ValueError as exc:
+            raise ItuPublicError(f"Public source URL is not allowed: {url}") from exc
 
     def _throttle(self) -> None:
         remaining = self._min_request_interval - (time.monotonic() - self._last_request_at)

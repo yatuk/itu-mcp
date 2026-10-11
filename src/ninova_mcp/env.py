@@ -36,10 +36,6 @@ def _is_on(value: str) -> bool:
     return value.strip().lower() in _ON_VALUES
 
 
-def _is_exactly_one(value: str) -> bool:
-    return value == "1"
-
-
 # Keys an auto-discovered ``.env`` may set. None of them changes a host, a
 # path on disk or a protection: credentials (sent only to allowlisted hosts),
 # cache lifetimes, pacing, payload size and tool selection, which can only
@@ -79,7 +75,7 @@ AUTO_ENV_SAFE_KEYS: frozenset[str] = frozenset(
 # only. The predicate says whether a value is the stricter one.
 AUTO_ENV_RESTRICT_ONLY_KEYS: dict[str, Callable[[str], bool]] = {
     "NINOVA_ALLOW_UPLOADS": _is_off,
-    "NINOVA_REQUIRE_ELICITATION": _is_exactly_one,
+    "NINOVA_REQUIRE_ELICITATION": _is_on,
     "NINOVA_REMOTE_REQUIRE_API_KEY": _is_on,
     "NINOVA_REMOTE_PROTECT_ALL": _is_on,
 }
@@ -118,6 +114,11 @@ AUTO_ENV_BLOCKED_KEYS: frozenset[str] = frozenset(
         "NINOVA_ALLOWED_ORIGINS",
         "NINOVA_DISABLE_DNS_REBINDING_PROTECTION",
         "NINOVA_HEALTHZ_CHECK_AUTH",
+        "NINOVA_ALLOW_SENSITIVE_OUTPUT",
+        "NINOVA_EXTRA_DOWNLOAD_DIRS",
+        "NINOVA_EXTRA_READ_DIRS",
+        "NINOVA_EXTRA_SSO_HOSTS",
+        "NINOVA_MAX_DOWNLOAD_MB",
         "NINOVA_HEALTHZ_AUTH_CACHE_SECONDS",
         "NINOVA_REMOTE_ALLOW_UNAUTHENTICATED",
         "NINOVA_REMOTE_TRUSTED_PROXY_HOPS",

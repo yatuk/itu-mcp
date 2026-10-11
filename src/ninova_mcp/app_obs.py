@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from .graduation import summarize_graduation_plan
+from .local_files import LocalFileError, downloads_dir, resolve_output_dir
 from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
+from .operator_settings import SENSITIVE_OUTPUT_DISABLED_NOTE, sensitive_output_allowed
 from .parsing import normalize_lookup_text
 from .attendance_summary import summarize_obs_attendance
 
@@ -18,11 +20,24 @@ class ObsRecordToolsMixin:
     obs_public: ObsPublicClient
     state_dir: Path
 
-    def obs_get_profile(self, include_sensitive: bool = False) -> dict[str, Any]:
-        payload = self.obs.get_profile()
-        if include_sensitive:
+    def _redact_unless_operator_allows(
+        self, payload: dict[str, Any], include_sensitive: bool,
+    ) -> dict[str, Any]:
+        """Redact unless the model asked AND the operator enabled unredacted output.
+
+        ``include_sensitive`` is a tool argument, so on its own it is not a
+        decision by a person. The environment switch is.
+        """
+        if include_sensitive and sensitive_output_allowed():
             return payload
-        return redact_obs_profile(payload)
+        redacted = redact_obs_profile(payload)
+        if include_sensitive and isinstance(redacted, dict):
+            redacted["sensitive_output"] = "disabled_by_operator"
+            redacted["sensitive_output_note"] = SENSITIVE_OUTPUT_DISABLED_NOTE
+        return redacted
+
+    def obs_get_profile(self, include_sensitive: bool = False) -> dict[str, Any]:
+        return self._redact_unless_operator_allows(self.obs.get_profile(), bool(include_sensitive))
 
     def obs_list_programs(self) -> dict[str, Any]:
         return self.obs.list_programs()
@@ -43,10 +58,7 @@ class ObsRecordToolsMixin:
         return self.obs.get_internships()
 
     def obs_get_contacts(self, include_sensitive: bool = False) -> dict[str, Any]:
-        payload = self.obs.get_contacts()
-        if include_sensitive:
-            return payload
-        return redact_obs_profile(payload)
+        return self._redact_unless_operator_allows(self.obs.get_contacts(), bool(include_sensitive))
 
     def obs_list_registered_courses(self, semester: str | None = None) -> dict[str, Any]:
         resolved = self.obs.resolve_semester(semester)
@@ -146,7 +158,15 @@ class ObsRecordToolsMixin:
         english: bool = False,
         output_dir: str | None = None,
     ) -> dict[str, Any]:
-        target = Path(output_dir or (self.state_dir / "downloads" / "obs")).expanduser()
+        # output_dir is written by the model: it may only name a place inside
+        # the downloads directory or a directory the operator listed in
+        # NINOVA_EXTRA_DOWNLOAD_DIRS. Checked before OBS is contacted.
+        try:
+            target = resolve_output_dir(
+                output_dir, state_dir=self.state_dir, default=downloads_dir(self.state_dir) / "obs",
+            )
+        except LocalFileError as exc:
+            raise ObsError(str(exc)) from exc
         return self.obs.save_transcript_pdf(target, english=english)
 
     def _resolve_obs_class(

@@ -8,14 +8,14 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_profile",
         "title": "OBS Profile",
-        "description": "Read OBS personal/program profile. Sensitive fields are redacted unless include_sensitive=true.",
+        "description": "Read OBS personal/program profile. Sensitive fields are redacted. include_sensitive=true has an effect only when the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "include_sensitive": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Include TCKN and similar sensitive fields.",
+                    "description": "Include TCKN and similar sensitive fields. Ignored unless the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
                 }
             },
             "additionalProperties": False,

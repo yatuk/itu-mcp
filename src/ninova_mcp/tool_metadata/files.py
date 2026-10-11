@@ -83,7 +83,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
                 },
                 "output_dir": {
                     "type": "string",
-                    "description": "Directory to save the file into. Defaults to ./downloads.",
+                    "description": "Directory to save the file into. Must be inside the downloads directory (a relative name is a subdirectory of it) or a directory the operator listed in NINOVA_EXTRA_DOWNLOAD_DIRS.",
                 },
                 "filename": {
                     "type": "string",
@@ -110,7 +110,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
                 },
                 "path": {
                     "type": "string",
-                    "description": "Local filesystem path previously downloaded.",
+                    "description": "Path of a previously downloaded file. Must be inside the downloads directory or a directory the operator listed in NINOVA_EXTRA_READ_DIRS.",
                 },
                 "max_chars": {
                     "type": "integer",

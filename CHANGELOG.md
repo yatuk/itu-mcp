@@ -11,7 +11,95 @@
 - Elicitation desteklemeyen istemcilerde eski davranış sürer, sonuçta
   `confirmation.method = "argument_only"` yazar
 - Yeni `NINOVA_REQUIRE_ELICITATION=1` ayarı, onay penceresi gösteremeyen istemcilerde yazma
-  işlemini reddeder. Varsayılan kapalı
+  işlemini reddeder. Varsayılan kapalı. `true`, `yes` ve `on` da kabul edilir, tanınmayan bir
+  değer hata verir ve yazma yapılmaz
+
+#### Ağ sınırı
+
+- **Host denetimi gerçekten gönderilen adres üzerinden yapılıyor:**
+  `https://baska.example\@ninova.itu.edu.tr/` gibi bir adres `urlparse` için Ninova, `requests`
+  için başka bir sunucuydu ve istek o sunucuya gidiyordu. Artık adres `requests`'in hazırladığı
+  haliyle doğrulanıyor. Ters eğik çizgi, boşluk, kontrol karakteri ya da `kullanici@` içeren
+  adresler ve yönlendirmeler hiçbir istek gönderilmeden reddediliyor
+- **Araç argümanı host seçemiyor:** `read_page`, `download_resource`, `read_resource_text`,
+  `snapshot_page`, `diff_snapshot`, `crawl_course`, `get_assignment_upload_slots` ve
+  `submit_assignment` yalnızca `ninova.itu.edu.tr` adreslerini kabul ediyor. `*.itu.edu.tr` sonek
+  eşleşmesi kaldırıldı. Portal, OBS ve yardım masasına yalnızca kendi araçlarının sabit
+  adreslerinden erişilir. Giriş zincirine yeni bir İTÜ sunucusu eklenirse
+  `NINOVA_EXTRA_SSO_HOSTS` ile tanıtılır
+- **Şifre yalnızca giriş sayfasına gidiyor:** giriş formu `girisv3.itu.edu.tr` dışında bir yerde
+  görünürse şifre gönderilmiyor, tarayıcıyla giriş de aynı denetimi yapıyor. Yönlendirme, giriş
+  formunu ya da yüklenen dosyayı başka bir sunucuya taşıyamıyor
+- İTÜ Mail yalnızca `imap.itu.edu.tr:993` adresine bağlanıyor. Başka bir `NINOVA_MAIL_HOST` ya
+  da `NINOVA_MAIL_PORT` değeri bağlantı kurulmadan reddediliyor
+- Ders arşivi araçları dönem ve branş kodunu istek göndermeden önce biçim olarak doğruluyor
+
+#### Dosya sınırı
+
+- `read_resource_text(path=...)` yalnızca indirme klasörünü (`~/.ninova_state/downloads`)
+  okuyor. `download_resource` ve `obs_download_transcript` yalnızca oraya yazıyor.
+  `diff_snapshot(snapshot_path=...)` yalnızca anlık görüntü klasörünü okuyor. Oturum dosyası ve
+  durum klasörünün diğer dosyaları hiçbir koşulda okunamıyor. Başka klasörler yalnızca
+  `NINOVA_EXTRA_READ_DIRS` ve `NINOVA_EXTRA_DOWNLOAD_DIRS` ile açılır
+- İndirilen dosyalarda açıldığında kod çalıştıran türlerin (`.exe`, `.bat`, `.ps1`, `.lnk` ve
+  benzerleri) adına `.download` ekleniyor, Windows'un ayrılmış aygıt adları reddediliyor, mevcut
+  dosyanın üzerine yazılmıyor. İndirme boyutu 200 MiB ile sınırlı (`NINOVA_MAX_DOWNLOAD_MB`)
+- Metin çıkarmada 25 MiB üstü dosyalar okunmuyor, PDF'lerde ilk 50 sayfa okunuyor ve sonuç bunu
+  belirtiyor. Kapatılmamış `<script>` etiketleri artık işlemi yavaşlatmıyor
+- Oturum çerezleri, takip durumu ve kontenjan izleme dosyaları Linux ve macOS'ta `0600`, durum
+  klasörü `0700` izniyle yazılıyor. Windows'ta koruma kullanıcı profili klasörünün erişim
+  listesinden gelir
+
+#### Ödev yükleme ve hassas bilgi
+
+- Yükleme sayfası Ninova'da ve `/Sinif/<id>.<id>/Odev/<id>/OdevGonder` biçiminde olmalı,
+  sayfadaki form da aynı ödevin yükleme sayfasına gönderim yapmalı. Onay penceresi dosyanın
+  gerçekten gönderileceği adresi, boyutunu ve SHA-256 özetinin başını gösteriyor. Dosya onaydan
+  önce bir kez okunuyor, diskte sonradan değişse bile onaylanan içerik gönderiliyor
+- `obs_get_profile`, `obs_get_contacts` ve `get_help_ticket` araçlarında `include_sensitive=true`
+  artık tek başına yeterli değil. TC kimlik no, telefon, adres ve adlar yalnızca
+  `NINOVA_ALLOW_SENSITIVE_OUTPUT=1` ayarlıysa gizlenmeden döner. Varsayılan kapalı
+
+#### Ayar dosyası
+
+- `.env` artık yalnızca çalışma klasöründe aranıyor, üst klasörler taranmıyor. Başka bir dosya
+  için `NINOVA_ENV_FILE` kullan
+- Çalışma klasöründe bulunan `.env` güvenlikle ilgili anahtarları ayarlayamıyor: adres ve sunucu
+  ayarları, `NINOVA_STATE_DIR`, `NINOVA_OBS_REGISTRATION_WRITES`, ek klasörler, hassas çıktı izni
+  ve uzak sunucu ayarlarının çoğu. Yok sayılan anahtarların adları stderr'e yazılır, değerleri
+  yazılmaz. `NINOVA_ALLOW_UPLOADS` ve `NINOVA_REQUIRE_ELICITATION` oradan yalnızca sıkılaştırma
+  yönünde değişir
+
+#### Uzak HTTP sunucusu
+
+- **Artık varsayılan olarak kapalı:** `itu-mcp-remote`, `127.0.0.1` dışında bir adrese
+  bağlanıyorsa `NINOVA_REMOTE_API_KEY` verilmeden başlamaz. Aynı durumda `NINOVA_ALLOWED_HOSTS`
+  ya da `NINOVA_PUBLIC_BASE_URL` da zorunludur. Eksik değişken hata mesajında yazar, süreç 2
+  koduyla kapanır
+- Yerel adreste anahtar verilmezse sunucu her açılışta rastgele bir anahtar üretir ve bir kez
+  stderr'e yazar. Host ve Origin denetimi her bağlanma adresinde açık
+- Bilerek açık sunucu çalıştırmak isteyenler için iki ayar var, ikisi de her açılışta uyarı
+  basar: `NINOVA_REMOTE_ALLOW_UNAUTHENTICATED=1` ve `NINOVA_DISABLE_DNS_REBINDING_PROTECTION=1`
+- `NINOVA_REMOTE_MCP_PATH` artık boş, `/` ya da `/healthz` olamaz. Bu değerlerle anahtar ve hız
+  sınırı devre dışı kalıyordu
+- Anahtar ve hız sınırı `GET /` ile `GET /healthz` dışındaki her yola ve her metoda uygulanıyor.
+  `NINOVA_REMOTE_PROTECT_ALL` yok sayılıyor
+- `GET /` ve `GET /healthz` artık MCP yolunu, sürümü, durum klasörünü ve ayarları döndürmüyor
+- Vekil sunucu arkasında istemci adresi `X-Forwarded-For` başlığının sağından okunuyor. Yeni
+  `NINOVA_REMOTE_TRUSTED_PROXY_HOPS` (varsayılan 1) güvenilen vekil sayısını belirler
+- `submit_assignment` ve `obs_save_registration_draft` uzak sunucuda hiçbir ayarla açılamaz
+- Çalışma klasöründeki `.env` içinde yok sayılan bir uzak ayar varsa sunucu başlamaz ve
+  anahtarın adını yazar
+- Docker imajı root olmayan `itumcp` kullanıcısıyla (uid 10001) çalışıyor, durum dosyaları
+  `/data` biriminde tutuluyor, taban imaj özet değeriyle sabitlendi
+
+#### Yayın hattı ve bağımlılıklar
+
+- GitHub Actions adımları commit SHA'sına sabitlendi, iş izinleri daraltıldı. `mcp-publisher` ve
+  pakete giren CPython çalışma zamanı sabit sürümden indirilip SHA-256 ile doğrulanıyor
+- Bağımlılık alt sınırları yükseltildi: `pypdf>=6.14.2`, `starlette>=1.3.1`, `requests>=2.33.0`,
+  `mcp>=1.28.1`, `lxml>=6.1.0`
+- Depodaki `mcp-publisher` ikili dosyaları ve `scripts/_probe_onsart.py` kaldırıldı
 
 ### Yeni araçlar
 
@@ -56,6 +144,19 @@
 
 ### Yükseltirken bilmen gerekenler
 
+- **Adres alan araçlar** Ninova dışındaki İTÜ adreslerini reddeder. Yardım talepleri için
+  `get_help_ticket`, OBS ve Portal için kendi araçlarını kullan
+- **`output_dir` ve `path`** artık indirme klasörünün içinde olmalı. Göreli bir ad indirme
+  klasörünün alt klasörü sayılır. Başka klasör için `NINOVA_EXTRA_DOWNLOAD_DIRS` ya da
+  `NINOVA_EXTRA_READ_DIRS` kullan
+- **Üst klasördeki `.env` okunmaz.** Kimlik bilgilerin oradaysa asistanının `env` bloğuna taşı
+  ya da `NINOVA_ENV_FILE` ile dosyayı göster
+- **Uzak sunucu:** `NINOVA_REMOTE_HOST=0.0.0.0` ile anahtarsız ya da `NINOVA_ALLOWED_HOSTS`
+  olmadan çalışan kurulumlar (yalnızca `docker run` ile başlatılanlar dahil) bu sürümde
+  başlamaz. Docker'da durum klasörü `/root/.ninova_state` yerine `/data` oldu. İki vekil
+  arkasındaki kurulumlarda `NINOVA_REMOTE_TRUSTED_PROXY_HOPS=2` gerekir. `/` ve `/healthz`
+  yanıtındaki `mcp_path`, `version` gibi alanları okuyan izleme betikleri güncellenmeli
+- `pip install` starlette'i 0.x sürümünden 1.x sürümüne yükseltebilir
 - Bir onay penceresi açıkken diğer araç çağrıları bekler: bütün çağrılar tek bir kilitten geçer
 - Kontenjan izleme listesi `NINOVA_STATE_DIR` altında `seat-watch-state.json` dosyasında
   tutulur. Uzak sunucuda bu liste sunucuya erişen herkes için ortaktır

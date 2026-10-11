@@ -242,13 +242,38 @@ class DraftElicitationTests(InteractionTestCase):
         self.assertEqual(outcome.data["status"], "saved")
         self.assertEqual(self.obs.posts, [["10001", "10002"]])
 
-    def test_require_variable_is_exact_and_default_off(self) -> None:
-        for value in ("", "0", "true", "yes", " 1 "):
+    def test_require_variable_accepts_the_usual_spellings_and_is_default_off(self) -> None:
+        for value in ("", "  ", "0", "false", "No", "OFF"):
             with self.subTest(value=value):
                 os.environ[interaction.REQUIRE_ELICITATION_ENV] = value
                 self.assertFalse(interaction.elicitation_required())
+        for value in ("1", "true", "TRUE", "yes", "On", " 1 "):
+            with self.subTest(value=value):
+                os.environ[interaction.REQUIRE_ELICITATION_ENV] = value
+                self.assertTrue(interaction.elicitation_required())
         os.environ.pop(interaction.REQUIRE_ELICITATION_ENV)
         self.assertFalse(interaction.elicitation_required())
+
+    def test_require_variable_spelled_true_refuses_a_client_without_elicitation(self) -> None:
+        os.environ[interaction.REQUIRE_ELICITATION_ENV] = "true"
+        outcome = call(self.server, DRAFT, self.arguments)
+        self.assertEqual(outcome.data["status"], "elicitation_required")
+        self.assertEqual(self.obs.posts, [])
+
+    def test_unrecognised_require_value_fails_clearly_and_sends_nothing(self) -> None:
+        from ninova_mcp.operator_settings import OperatorSettingError
+
+        for value in ("enabled", "2", "evet"):
+            with self.subTest(value=value):
+                os.environ[interaction.REQUIRE_ELICITATION_ENV] = value
+                with self.assertRaisesRegex(OperatorSettingError, interaction.REQUIRE_ELICITATION_ENV):
+                    interaction.elicitation_required()
+                # Even a client that can show the dialog does not get a write through.
+                for answer in (accept, None):
+                    outcome = call(self.server, DRAFT, self.arguments, answer=answer)
+                    self.assertTrue(outcome.is_error)
+                    self.assertIn(interaction.REQUIRE_ELICITATION_ENV, outcome.text)
+        self.assertEqual(self.obs.posts, [])
 
     def test_earlier_guards_run_before_any_dialog(self) -> None:
         # Missing confirmation and invalid CRNs are schema errors.

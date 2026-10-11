@@ -68,7 +68,12 @@ export NINOVA_COMPACT_DEFAULT="0"                    # 1 = shrink heavy tool pay
 export NINOVA_SESSION_PERSIST="1"                    # cache cookies under NINOVA_STATE_DIR
 export NINOVA_SESSION_MAX_AGE_SECONDS="43200"        # 12h default
 export NINOVA_ALLOW_UPLOADS="1"
-export NINOVA_REQUIRE_ELICITATION="0"                # 1 = refuse account writes unless the client can ask the user
+export NINOVA_REQUIRE_ELICITATION="0"                # 1/true/yes/on = refuse account writes unless the client can ask the user
+export NINOVA_ALLOW_SENSITIVE_OUTPUT="0"             # 1 = let include_sensitive=true return unredacted ID, phone, address, names
+export NINOVA_EXTRA_READ_DIRS=""                     # extra absolute directories read_resource_text(path=) may read
+export NINOVA_EXTRA_DOWNLOAD_DIRS=""                 # extra absolute directories downloads may be written to
+export NINOVA_MAX_DOWNLOAD_MB="200"                  # download_resource size limit in MiB
+export NINOVA_EXTRA_SSO_HOSTS=""                     # extra exact itu.edu.tr hosts the sign-on redirect chain may pass through
 export NINOVA_OBS_BASE_URL="https://obs.itu.edu.tr"  # OBS student portal
 export NINOVA_OBS_JWT_TTL_SECONDS="1500"
 export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
@@ -340,10 +345,12 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 - `sync_all_courses` — snapshot every visible course and detect changes (`include_assignment_details` default false for speed).
 - `get_updates` — recently detected changes from the local tracking state.
 - `get_upcoming_deadlines` — upcoming assignment deadlines from the tracking state.
-- `read_page` — read and structure any Ninova HTML page.
+- `read_page`: read and structure any Ninova HTML page. Like every tool that takes a URL
+  or path, it accepts the Ninova host only.
 - `crawl_course` — inventory internal pages and downloadable resources inside a course.
-- `download_resource` — download a file or page response to disk.
-- `read_resource_text` — extract plain text from a PDF/DOCX/TXT (URL or local path) for the LLM.
+- `download_resource`: download a file or page response into the downloads directory.
+- `read_resource_text`: extract plain text from a PDF/DOCX/TXT (URL, or a path inside the
+  downloads directory) for the LLM.
 - `get_assignment_upload_slots` — list file slots / fill status on an assignment upload page.
 - `submit_assignment` — upload a **local** file to one slot (requires `confirm=true`; dry-run otherwise).
 - `snapshot_page` — save a structured snapshot of a page for later tracking.
@@ -357,6 +364,36 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
 - Set `NINOVA_ALLOW_UPLOADS=0` to disable uploads entirely.
 - Remote HTTP transport does **not** expose upload tools (local stdio only).
 - Always verify the target course/assignment/slot with the user before `confirm=true`.
+- The upload page must be `https://ninova.itu.edu.tr/Sinif/<id>.<id>/Odev/<id>/OdevGonder`
+  (an assignment detail URL is completed to it), and its form must post back to the same
+  assignment's upload page. The preview and the result carry `form_url` and
+  `file.sha256`. The file is read once, before the confirmation dialog, and those bytes
+  are what is sent.
+
+### Local files and URLs
+
+- URL and path arguments (`read_page`, `download_resource`, `read_resource_text`,
+  `snapshot_page`, `diff_snapshot`, `crawl_course`, the assignment tools) accept
+  `https://ninova.itu.edu.tr/...` or a Ninova path. Other İTÜ hosts are refused; use the
+  dedicated OBS, portal and help desk tools for those.
+- `download_resource(output_dir=...)` and `obs_download_transcript(output_dir=...)` take
+  a directory inside `<NINOVA_STATE_DIR>/downloads` (a relative name is a subdirectory
+  of it). To save elsewhere, list the directory in `NINOVA_EXTRA_DOWNLOAD_DIRS`.
+- `read_resource_text(path=...)` takes a path inside the downloads directory, or a bare
+  file name. To read elsewhere, list the directory in `NINOVA_EXTRA_READ_DIRS`.
+- Both variables take absolute directories separated by `;` on Windows and `:`
+  elsewhere, for example `NINOVA_EXTRA_READ_DIRS="C:\Users\me\Dersler;D:\Notlar"`.
+  The state directory's own files are never readable or writable through these tools.
+- A downloaded file whose type runs code when opened gets `.download` appended to its
+  name, and the result says so (`filename_neutralised`). Downloads above
+  `NINOVA_MAX_DOWNLOAD_MB` (default 200) are refused.
+- `include_sensitive=true` on `obs_get_profile`, `obs_get_contacts` and
+  `get_help_ticket` returns unredacted data only when `NINOVA_ALLOW_SENSITIVE_OUTPUT=1`
+  is set. Without it the result stays redacted and carries
+  `sensitive_output: "disabled_by_operator"`.
+- If login starts failing with "URL is not allowed" for an `itu.edu.tr` host, İTÜ has
+  added a host to the sign-on redirect chain. Add that exact host to
+  `NINOVA_EXTRA_SSO_HOSTS` (comma separated).
 
 ### Confirmation dialogs (elicitation)
 
@@ -370,8 +407,9 @@ MCP client itself, just before anything is sent. This is in addition to `confirm
   `status: declined_by_user` or `cancelled_by_user`.
 - Client does not support elicitation: behaviour is unchanged and the result contains
   `confirmation.method = "argument_only"`.
-- `NINOVA_REQUIRE_ELICITATION=1`: clients without elicitation are refused with
-  `status: elicitation_required`. Default is off.
+- `NINOVA_REQUIRE_ELICITATION=1` (also `true`, `yes`, `on`): clients without elicitation
+  are refused with `status: elicitation_required`. Default is off. An unrecognised
+  value is an error and no write goes through.
 
 Other tool calls on the same server wait while a dialog is open, because tool calls are
 handled one at a time.
@@ -417,9 +455,10 @@ the published tool set.
   during bulk syncs.
 - When a list parser returns zero items but the page still has content, tools may include a
   `parse_warning` field so the model can tell “empty” from “markup changed”.
-- Downloads default to `~/.ninova_state/downloads`; snapshots and tracking state live under
-  `~/.ninova_state/` unless `NINOVA_STATE_DIR` is set. Session, tracking and seat-watch
-  files are written owner-only on Linux and macOS; see
+- Downloads go to `~/.ninova_state/downloads`; snapshots and tracking state live under
+  `~/.ninova_state/` unless `NINOVA_STATE_DIR` is set. Other download or read
+  directories need `NINOVA_EXTRA_DOWNLOAD_DIRS` / `NINOVA_EXTRA_READ_DIRS`. Session,
+  tracking and seat-watch files are written owner-only on Linux and macOS; see
   [security.md](security.md#data-stored-locally) for what applies on Windows.
 - In-memory caches keep at most 2048 entries each. Past that, expired entries are
   dropped first and then the oldest ones.
@@ -427,7 +466,8 @@ the published tool set.
 - CLI: `itu-mcp --version`, `--check-auth`, `--list-tools`, or no args for the stdio server.
 - **OBS** tools are prefixed with `obs_`. They reuse the same İTÜ username/password (SSO),
   open `obs.itu.edu.tr/ogrenci/`, fetch a JWT from `/ogrenci/auth/jwt`, and call
-  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact TCKN/phone by default.
+  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact TCKN/phone by default;
+  `include_sensitive=true` needs `NINOVA_ALLOW_SENSITIVE_OUTPUT=1`.
 
 ### OBS tools
 
@@ -438,9 +478,9 @@ the published tool set.
 - `obs_get_course_grades` / `obs_get_attendance` — per class (`sinifId` or course code)
 - `obs_get_schedule` — weekly + final calendar
 - `obs_get_graduation_remaining` — remaining courses / debts
-- `obs_download_transcript` — save transcript PDF under state dir; writes to a caller-supplied
-  directory, so like `download_resource`/`snapshot_page` it is not exposed by the remote HTTP
-  transport
+- `obs_download_transcript`: save transcript PDF under the downloads directory (`obs/` by
+  default); it writes to disk, so like `download_resource`/`snapshot_page` it is not exposed
+  by the remote HTTP transport
 
 ### Portal and derived planning tools
 

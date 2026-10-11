@@ -14,13 +14,12 @@ import os
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 
 from .cache import TtlCache, parse_ttl_seconds
 from .client import DEFAULT_HEADERS, _request_delay_seconds
-from .http_security import request_with_safe_redirects
+from .http_security import request_target, request_with_safe_redirects, require_https_host
 
 
 class ItuArchiveError(RuntimeError):
@@ -45,14 +44,18 @@ class ItuArchiveClient:
         cache_ttl: float | None = None,
     ) -> None:
         raw_base = (base_url or os.getenv("ITU_ARCHIVE_BASE_URL") or self.DEFAULT_BASE_URL).rstrip("/")
-        parsed = urlparse(raw_base)
         # The base URL is local operator config (env or constructor), never
         # anything read off the network, so a fork may point this at its own
-        # Pages host. HTTPS stays mandatory.
-        if parsed.scheme != "https" or not parsed.hostname:
+        # Pages host. HTTPS stays mandatory. The host is taken from the URL
+        # the HTTP library will send, the same reading every request gets.
+        try:
+            base_target = request_target(raw_base)
+        except ValueError as exc:
+            raise ItuArchiveError("ITU_ARCHIVE_BASE_URL must be an https:// URL") from exc
+        if base_target.scheme != "https":
             raise ItuArchiveError("ITU_ARCHIVE_BASE_URL must be an https:// URL")
         self.base_url = raw_base
-        self._allowed_host = parsed.hostname.lower()
+        self._allowed_host = base_target.host
         self._session = session
         ttl = cache_ttl if cache_ttl is not None else parse_ttl_seconds(
             os.getenv("ITU_ARCHIVE_CACHE_TTL_SECONDS"), self.DEFAULT_CACHE_TTL
@@ -71,9 +74,10 @@ class ItuArchiveClient:
     # -- internals --------------------------------------------------------
 
     def _validate_url(self, url: str) -> None:
-        parsed = urlparse(url)
-        if parsed.scheme != "https" or (parsed.hostname or "").lower() != self._allowed_host:
-            raise ItuArchiveError(f"Archive request destination is not allowlisted: {url}")
+        try:
+            require_https_host(url, {self._allowed_host}, allow_any_port=True)
+        except ValueError as exc:
+            raise ItuArchiveError(f"Archive request destination is not allowlisted: {url}") from exc
 
     def _throttle(self) -> None:
         if self._min_request_interval <= 0:
@@ -132,36 +136,43 @@ class ItuArchiveClient:
 
     def get_term_meta(self, slug: str) -> dict[str, Any]:
         """Branch list and section counts for one term."""
-        payload = self._get_json(f"/terms/{slug}/meta.json")
+        segment = term_path_segment(slug)
+        payload = self._get_json(f"/terms/{segment}/meta.json")
         if not isinstance(payload, dict):
-            raise ItuArchiveError(f"Archive meta.json has an unexpected shape: {slug}")
+            raise ItuArchiveError(f"Archive meta.json has an unexpected shape: {segment}")
         return payload
 
     def get_term_branch(self, slug: str, branch: str) -> list[dict[str, Any]]:
         """Every section record for one branch in one term."""
-        payload = self._get_json(f"/terms/{slug}/branches/{branch.upper()}.json", optional=True)
+        term_segment = term_path_segment(slug)
+        branch_segment = branch_path_segment(branch)
+        payload = self._get_json(f"/terms/{term_segment}/branches/{branch_segment}.json", optional=True)
         if payload is None:
             return []
         if not isinstance(payload, list):
-            raise ItuArchiveError(f"Archive branch file has an unexpected shape: {slug}/{branch}")
+            raise ItuArchiveError(
+                f"Archive branch file has an unexpected shape: {term_segment}/{branch_segment}"
+            )
         return payload
 
     def get_course_history(self, branch: str) -> dict[str, Any]:
         """Cross-term history for every course in one branch."""
-        payload = self._get_json(f"/history/courses/{branch.upper()}.json", optional=True)
+        segment = branch_path_segment(branch)
+        payload = self._get_json(f"/history/courses/{segment}.json", optional=True)
         if payload is None:
             return {}
         if not isinstance(payload, dict):
-            raise ItuArchiveError(f"Archive course history has an unexpected shape: {branch}")
+            raise ItuArchiveError(f"Archive course history has an unexpected shape: {segment}")
         return payload
 
     def get_instructor_history(self, letter: str) -> dict[str, Any]:
         """Cross-term history for instructors whose index letter is ``letter``."""
-        payload = self._get_json(f"/history/instructors/{letter.lower()}.json", optional=True)
+        segment = instructor_letter_segment(letter)
+        payload = self._get_json(f"/history/instructors/{segment}.json", optional=True)
         if payload is None:
             return {}
         if not isinstance(payload, dict):
-            raise ItuArchiveError(f"Archive instructor history has an unexpected shape: {letter}")
+            raise ItuArchiveError(f"Archive instructor history has an unexpected shape: {segment}")
         return payload
 
     def get_instructor_names(self) -> list[list[Any]]:
@@ -180,11 +191,12 @@ class ItuArchiveClient:
 
     def get_quota(self, slug: str) -> dict[str, Any]:
         """Derived fill summary for one term, keyed by CRN."""
-        payload = self._get_json(f"/quota/{slug}.json", optional=True)
+        segment = term_path_segment(slug)
+        payload = self._get_json(f"/quota/{segment}.json", optional=True)
         if payload is None:
             return {}
         if not isinstance(payload, dict):
-            raise ItuArchiveError(f"Archive quota file has an unexpected shape: {slug}")
+            raise ItuArchiveError(f"Archive quota file has an unexpected shape: {segment}")
         return payload
 
     # -- extra datasets ----------------------------------------------------
@@ -277,4 +289,17 @@ def term_path_segment(slug: str) -> str:
             f"Dönem kodu geçersiz: {slug!r}. '2025-2026-guz' biçiminde olmalı "
             "(guz, bahar veya yaz)."
         )
+    return candidate
+
+
+def instructor_letter_segment(letter: str) -> str:
+    """Return an instructor index letter as a safe URL path segment, or raise.
+
+    The letter comes from the archive's own ``names.json``. It is still
+    interpolated into a request path, so only a short run of letters, digits,
+    ``_`` and ``-`` is accepted: no slash, dot, percent escape or query.
+    """
+    candidate = str(letter or "").strip().lower()
+    if not 1 <= len(candidate) <= 16 or not all(ch.isalnum() or ch in "_-" for ch in candidate):
+        raise ItuArchiveError(f"Öğretim üyesi dizin harfi geçersiz: {letter!r}.")
     return candidate
