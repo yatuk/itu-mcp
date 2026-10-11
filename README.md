@@ -238,11 +238,14 @@ Ayazağa'dan sonraki mekik 13:30.
 > Bu dönem hepsinden BB alırsam
   ortalamam kaç olur?
 
-● itu · obs_calculate_gpa
+● itu · obs_simulate_cumulative_gpa
 
-Şu anki GANO:      2.84
+Şu anki GANO:      2.08
 Dönem tahmini:     3.00
-Dönem sonu GANO:   2.89
+Dönem sonu GANO:   2.74
+
+Tekrar aldığın 2 ders eski notun
+yerine sayıldı, 1 ders yeni eklendi.
 
 Bu bir tahmin, resmi ortalama
 OBS'de açıklanır.
@@ -414,7 +417,7 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>export_course_schedule_ics</code> · <code>export_exam_schedule_ics</code>
     </td>
     <td valign="top">
-      <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
+      <code>obs_calculate_gpa</code> · <code>obs_simulate_cumulative_gpa</code> · <code>calculate_target_gpa</code><br/>
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>library_*</code>

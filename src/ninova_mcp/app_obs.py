@@ -60,7 +60,7 @@ class ObsRecordToolsMixin:
     def obs_get_contacts(self, include_sensitive: bool = False) -> dict[str, Any]:
         return self._redact_unless_operator_allows(self.obs.get_contacts(), bool(include_sensitive))
 
-    def obs_list_registered_courses(self, semester: str | None = None) -> dict[str, Any]:
+    def obs_list_registered_courses(self, semester: str | int | None = None) -> dict[str, Any]:
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
         return {
@@ -72,7 +72,7 @@ class ObsRecordToolsMixin:
     def obs_get_course_grades(
         self,
         class_id: int | None = None,
-        semester: str | None = None,
+        semester: str | int | None = None,
         course: str | None = None,
         include_midterms: bool = True,
         include_letter: bool = True,
@@ -105,7 +105,7 @@ class ObsRecordToolsMixin:
     def obs_get_attendance(
         self,
         class_id: int | None = None,
-        semester: str | None = None,
+        semester: str | int | None = None,
         course: str | None = None,
         include_summary: bool = True,
         max_absence_ratio: float = 0.30,
@@ -134,7 +134,7 @@ class ObsRecordToolsMixin:
             )
         return result
 
-    def obs_get_schedule(self, semester: str | None = None) -> dict[str, Any]:
+    def obs_get_schedule(self, semester: str | int | None = None) -> dict[str, Any]:
         resolved = self.obs.resolve_semester(semester)
         return {
             "semester": resolved,
@@ -173,7 +173,7 @@ class ObsRecordToolsMixin:
         self,
         *,
         class_id: int | None,
-        semester: str | None,
+        semester: str | int | None,
         course: str | None,
     ) -> dict[str, Any]:
         if class_id is not None:
@@ -213,7 +213,7 @@ class ObsRecordToolsMixin:
 
     def get_personal_exam_calendar(
         self,
-        semester: str | None = None,
+        semester: str | int | None = None,
         course: str | None = None,
     ) -> dict[str, Any]:
         """Read the authenticated student's OBS final calendar directly."""

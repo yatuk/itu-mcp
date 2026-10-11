@@ -1,5 +1,43 @@
 # Changelog
 
+## Yayınlanmamış
+
+### Yeni araçlar
+
+- **`obs_simulate_cumulative_gpa`:** "Bu dönem hepsinden BB alırsam genel ortalamam kaç olur?"
+  sorusunu tek çağrıda yanıtlar. Mevcut GANO'yu kendi OBS kaydından yeniden kurar, her geçmiş
+  dönemin resmi genel ortalamasıyla karşılaştırır, sonra kayıtlı derslere verilen notları uygular
+  - Tekrar alınan ders eski notun yerine geçer, kredi ikinci kez eklenmez. Geçilmiş bir dersi
+    yükseltmek için tekrar almak da aynı şekilde hesaplanır
+  - Kodu değişmiş dersler (aynı ad ve kredi, farklı kod) yalnızca resmi dönem ortalamaları bunu
+    gerektiriyorsa eşdeğer sayılır. Kullanılan her eşdeğerlik gerekçesiyle sonuçta listelenir
+  - Seçmeli derslerde `kredisi` ile `sayilanKredi` farklıysa doğru ağırlık o dönemin resmi
+    ortalamasına göre seçilir. Karar verilemezse sonuç aralık olarak verilir
+  - `projected_grades` ders kodu ya da CRN ile not alır, `default_grade` adı geçmeyen tüm kayıtlı
+    derslere uygulanır, `extra_courses` şu an kayıtlı olmayan varsayımsal dersleri ekler
+  - Kredisi bulunamayan ders tahmin edilmez, sonuç eksik olarak işaretlenir. Eşleşmeyen ders
+    anahtarı ya da geçersiz harf notu sessizce yok sayılmaz
+  - Salt okunur bir tahmindir, resmi sonuç değildir
+
+### Düzeltmeler
+
+- `obs_calculate_gpa` ve diğer OBS araçlarında `semester` artık sayı olarak gönderilen dönem
+  kodunu kabul ediyor (`202410`). Tırnaklı ve ondalıklı yazımlar da tanınıyor, tam kod ya da
+  kimlik eşleşmesi ad parçası eşleşmesinden önce geliyor
+- `obs_calculate_gpa`: `projected_grades` anahtarı olarak CRN kabul ediliyor. Eşleşmeyen
+  anahtarlar `unmatched_projected_keys`, `valid_projected_keys` ve `projection_status` alanlarıyla
+  bildiriliyor
+- `obs_calculate_gpa`: bu dönem kayıtlı olunan dersin kredisi, ders planında yalnızca başka bir
+  dönemin satırı varsa da bulunuyor
+- `obs_calculate_gpa`: seçmeli yuvayı dolduran derste `kredisi` ile `sayilanKredi` farklıysa
+  resmi dönem ortalamasını veren değer kullanılıyor. Karar verilemeyen dersler `credit_ambiguity`
+  alanında adlandırılıyor
+- `obs_calculate_gpa`: bütün derslerin başarısız olduğu dönemde resmi ortalama (0.00) artık
+  "yok" sayılmıyor
+- `obs_calculate_gpa`: her ders için `attempts` alanı aynı dersin diğer dönemlerdeki notlarını
+  ve farklı kodla alınmış olası eşdeğer başarısız denemeleri gösteriyor
+- README'deki "hepsinden BB alırsam" örneği genel ortalamayı veremeyen araca işaret ediyordu
+
 ## v1.1.0
 
 ### Güvenlik

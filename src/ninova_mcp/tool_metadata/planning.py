@@ -12,7 +12,7 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "Calculate a term GPA estimate from OBS registered courses and compare it with "
             "the official term record. For factual average questions use preferred_term_gpa "
             "and preferred_term_gpa_source; the legacy gpa field remains the calculated estimate. "
-            "This is a term average, not cumulative GANO. "
+            "This is a term average, not cumulative GANO; for cumulative what-if questions use obs_simulate_cumulative_gpa. "
             "Supports projected grades for what-if scenarios, keyed by course code or CRN; "
             "check projection_status and unmatched_projected_keys before reporting a what-if. "
             "Each course may carry attempts (other terms of the same course, and "

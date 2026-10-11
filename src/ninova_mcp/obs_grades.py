@@ -30,7 +30,7 @@ def _rows(payload: Any, field: str, scope: str) -> list[dict[str, Any]]:
 def _registered_class(
     obs: Any,
     class_record: dict[str, Any],
-    semester: str | None,
+    semester: str | int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve the class to an official term without matching by course name."""
     class_id = _identifier(class_record.get("sinifId"))
@@ -83,7 +83,7 @@ def get_class_letter_grades(
     obs: Any,
     class_record: dict[str, Any],
     *,
-    semester: str | None = None,
+    semester: str | int | None = None,
 ) -> dict[str, Any]:
     """Return only the requested class's row, matched by exact term and CRN.
 

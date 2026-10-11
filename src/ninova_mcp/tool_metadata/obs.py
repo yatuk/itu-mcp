@@ -101,7 +101,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "class_id": {"type": "integer", "description": "OBS sinifId."},
-                "semester": {"type": "string", "description": "Semester when resolving by course name/code."},
+                "semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name; used when resolving by course name/code."},
                 "course": {
                     "type": "string",
                     "description": "Course code/title/CRN to resolve (e.g. 'EHB 222E').",
@@ -158,7 +158,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "semester": {"type": "string"},
+                "semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."},
             },
             "additionalProperties": False,
         },
@@ -203,7 +203,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "description": "Read the signed-in student's official OBS final calendar and registered courses.",
         "inputSchema": {
             "type": "object",
-            "properties": {"semester": {"type": "string"}, "course": {"type": "string"}},
+            "properties": {"semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."}, "course": {"type": "string"}},
             "additionalProperties": False,
         },
     },

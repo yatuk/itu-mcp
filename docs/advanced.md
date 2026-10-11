@@ -509,6 +509,7 @@ the published tool set.
   time without assuming a timezone. Detail reads share the course-cache TTL
   (60 seconds by default).
 - `obs_get_cloud_quota`
+- `obs_simulate_cumulative_gpa(projected_grades, default_grade, extra_courses, semester)`: projects the cumulative GPA from the student's own record; a retake replaces the earlier grade; read-only estimate
 - `obs_calculate_gpa(projected_grades)` — projected values override existing grades
 - `calculate_target_gpa` — aggregate target-GPA estimate without reading OBS
 - `estimate_relative_grade(class_scores, my_score)` — likely letter grade under İTÜ's

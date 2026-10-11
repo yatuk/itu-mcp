@@ -135,6 +135,8 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
     lines = [
         "Ortalamamı hesapla ve senaryo çalıştır.\n",
         "1. Önce `obs_calculate_gpa()` ile mevcut durumu al.",
+        "   Genel ortalama (GANO) soruluyorsa `obs_simulate_cumulative_gpa` kullan: "
+        "tekrar alınan dersleri eski notun yerine sayar. `obs_calculate_gpa` yalnızca dönem ortalaması verir.",
     ]
     if projected.strip():
         lines.append(

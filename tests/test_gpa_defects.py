@@ -408,3 +408,25 @@ class CreditReconciliationEdgeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherSemesterToolsTests(unittest.TestCase):
+    """The term code arrives as a JSON number from some clients."""
+
+    NAMES = (
+        "obs_list_registered_courses",
+        "obs_get_course_grades",
+        "obs_get_attendance",
+        "obs_get_schedule",
+        "get_personal_exam_calendar",
+    )
+
+    def test_semester_accepts_a_number_on_every_obs_tool(self) -> None:
+        server = FastMCP("semester-types")
+        register_tools(server, make_app([]), list(self.NAMES))
+        tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+        self.assertEqual(set(tools), set(self.NAMES))
+        for name, tool in tools.items():
+            with self.subTest(tool=name):
+                options = tool.inputSchema["properties"]["semester"].get("anyOf", [])
+                self.assertLessEqual({"string", "integer"}, {option.get("type") for option in options})
