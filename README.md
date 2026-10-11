@@ -49,6 +49,8 @@
 | "Bu dersi geçen yıl kim verdi, kaç kişi AA aldı?" | Ders arşivi |
 | "Kütüphanede bu kitap var mı?" | Kütüphane kataloğu |
 | "Okunmamış maillerimi özetle" | İTÜ Mail |
+| "Bu şubede yer açılınca haberim olsun" | Kontenjan takibi |
+| "Ders programımı telefonumun takvimine ekle" | Takvim dosyası (.ics) |
 
 > Şifren bilgisayarından çıkmaz. Program yalnızca İTÜ'nün kendi sunucularıyla konuşur.
 > İstanbul Teknik Üniversitesi ile resmi bir bağlantısı yoktur.
@@ -265,7 +267,7 @@ Daha fazla fikir:
 - "Kütüphanede Introduction to Algorithms var mı?"
 - "Son okunmamış maillerimi listele, ekindeki PDF'i özetle."
 
-Asistanın `/` menüsünde hazır akışlar da var: `weekly_briefing` (haftalık özet), `plan_next_term` (gelecek dönem planı), `check_course_eligibility`, `research_course` ve `gpa_scenario`.
+Asistanın `/` menüsünde hazır akışlar da var: `weekly_briefing` (haftalık özet), `plan_next_term` (gelecek dönem planı), `registration_week` (kayıt haftası kontrolü), `check_course_eligibility`, `research_course` ve `gpa_scenario`.
 
 ---
 
@@ -299,6 +301,8 @@ Neredeyse her şey yalnızca okur. İki istisna var ve ikisi de senin açık ona
 - **Ödev yükleme.** Önce neyi nereye yükleyeceğini gösterir, sen onaylayınca yükler.
 - **Kayıt taslağı kaydetme.** Varsayılan olarak kapalıdır. Açsan bile taslaktan ders silinecekse durur ve sana sorar.
 
+İkisinde de, asistanın destekliyorsa, program göndermeden hemen önce sana doğrudan bir onay penceresi açar: hangi dosya, hangi ödev, hangi CRN'ler yazılacak, hangileri taslaktan çıkacak. Asistanın kendi kendine "onaylıyorum" demesi bu pencereyi atlatamaz. Onaylamazsan hiçbir şey gönderilmez.
+
 Ders kaydı yapmaz, ders bırakmaz, mail göndermez.
 
 </details>
@@ -318,6 +322,33 @@ Veriyi doğrudan İTÜ sistemlerinden çeker, uydurmaz. Yine de OBS bazı bilgil
 <br />
 
 MCP destekleyen her istemciyle: Claude Code, Claude Desktop, Cursor, Codex ve benzerleri. ChatGPT ya da Claude.ai gibi web arayüzleri için uzak sunucu kurulumu gerekir, anlatımı [docs/advanced.md](docs/advanced.md) içinde.
+
+</details>
+
+<details>
+<summary><strong>Yer açılınca haber verebilir mi?</strong></summary>
+
+<br />
+
+Kısmen. Dolu bir şubenin CRN'ini izleme listesine ekleyebilirsin (`watch_course_sections`), sonra "izlediğim şubelerde yer açıldı mı" diye sorduğunda son kontrolden bu yana ne değiştiğini söyler. Giriş gerektirmez.
+
+Ama program arka planda çalışmaz ve kendiliğinden bildirim göndermez. Kontenjan yalnızca sen sorduğunda okunur. Düzenli takip istiyorsan asistanında birkaç dakikada bir bu soruyu soran zamanlanmış bir görev kurman gerekir.
+
+</details>
+
+<details>
+<summary><strong>Araç sayısı çok fazla, azaltabilir miyim?</strong></summary>
+
+<br />
+
+Evet. Araçlar gruplara ayrılmış durumda ve her aracın tanımı sohbetin başında asistana yüklenir. Kullanmadığın grupları kapatırsan asistan doğru aracı daha kolay seçer.
+
+```bash
+NINOVA_TOOLSETS=ninova,obs,archive        # yalnızca bu gruplar açık olsun
+NINOVA_DISABLED_TOOLSETS=library,mail     # ya da: bunlar dışında her şey açık olsun
+```
+
+Gruplar: `core`, `ninova`, `files`, `obs`, `registration`, `portal`, `planning`, `public`, `campus`, `library`, `archive`, `mail`. İkisini de yazmazsan her şey açık kalır. Hangi grupta ne olduğunu `itu-mcp --list-toolsets` gösterir.
 
 </details>
 
@@ -382,7 +413,9 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>obs_get_grade_distribution</code><br/>
       <code>search_itu_directory</code> · <code>search_campus_locations</code><br/>
       <code>get_shuttle_schedule</code> · <code>get_sports_facility_hours</code><br/>
-      <code>get_itu_announcements</code> · <code>get_academic_calendar</code>
+      <code>get_itu_announcements</code> · <code>get_academic_calendar</code><br/>
+      <code>watch_course_sections</code> · <code>check_watched_course_sections</code><br/>
+      <code>export_course_schedule_ics</code> · <code>export_exam_schedule_ics</code>
     </td>
     <td valign="top">
       <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
@@ -419,6 +452,8 @@ Her aracın ne yaptığı, parametreleri ve sınırları: [docs/advanced.md](doc
 NINOVA_SESSION_PERSIST=1            # girişi hatırla (varsayılan açık)
 NINOVA_ALLOW_UPLOADS=1              # ödev yüklemeye izin ver (0 yaparsan kapanır)
 NINOVA_OBS_REGISTRATION_WRITES=1    # kayıt taslağı kaydetmeyi aç (varsayılan kapalı)
+NINOVA_REQUIRE_ELICITATION=1        # onay penceresi gösteremeyen asistanlarda yazma işlemini reddet
+NINOVA_TOOLSETS=ninova,obs,archive  # yalnızca bu araç gruplarını aç
 NINOVA_MAIL_USERNAME=...            # mail için ayrı kullanıcı adı
 NINOVA_MAIL_PASSWORD=...            # mail için ayrı şifre
 ```
@@ -454,6 +489,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[playwright]"
 python -m pytest tests/ -q
+python -m ruff check src/ tests/
 ```
 
 | Kaynak | Bağlantı |

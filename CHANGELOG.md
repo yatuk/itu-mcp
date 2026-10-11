@@ -1,5 +1,65 @@
 # Changelog
 
+## Yayınlanmamış
+
+### Güvenlik
+
+- **Yazma işlemlerinde kullanıcı onayı:** `submit_assignment` ve `obs_save_registration_draft`
+  artık göndermeden hemen önce MCP elicitation ile kullanıcıya doğrudan soruyor. Modelin
+  verdiği `confirm=true` bu soruyu atlatamaz. Reddetme, pencereyi kapatma ve geçersiz yanıtta
+  hiçbir şey gönderilmez
+- Elicitation desteklemeyen istemcilerde eski davranış sürer, sonuçta
+  `confirmation.method = "argument_only"` yazar
+- Yeni `NINOVA_REQUIRE_ELICITATION=1` ayarı, onay penceresi gösteremeyen istemcilerde yazma
+  işlemini reddeder. Varsayılan kapalı
+
+### Yeni araçlar
+
+- **Kontenjan izleme:** `watch_course_sections`, `unwatch_course_sections`,
+  `list_watched_course_sections`, `check_watched_course_sections`. İzlenen CRN'ler için herkese
+  açık ders programını branş başına tek istekle okur ve son kontrolden bu yana değişeni
+  bildirir: dolu şubede yer açıldı, açık şube doldu, kontenjan artırıldı, şube programdan
+  kalktı. Giriş gerekmez, en fazla 20 şube izlenir. Sunucu arka planda çalışmaz, kontrol
+  yalnızca araç çağrıldığında yapılır. Eksik veri "yer açıldı" sayılmaz, `unknown` olarak döner
+- **Takvime aktarma:** `export_course_schedule_ics` ve `export_exam_schedule_ics`. Herkese açık
+  ders programından ve final takviminden iCalendar (`.ics`) metni üretir. Derslerin ilk ve son
+  günü verilmezse ve akademik takvimde de yoksa araç tarih uydurmaz, `term_dates_required`
+  döner. Saati belli olmayan şubeler yazılmaz, `skipped` altında listelenir
+- **Yeni MCP kaynakları:** `itu://calendar/academic`, `itu://archive/terms`,
+  `itu://campus/buildings` ve üç şablon: `itu://archive/catalog/{course_code}`,
+  `itu://archive/grades/{course_code}`, `itu://degree-plan/{program_code}`. Hepsi herkese açık
+  veridir. Giriş gerektiren hiçbir veri kaynak olarak sunulmuyor
+- **Kayıt haftası istemi:** `registration_week(candidates)`. Aday dersleri çakışma, ön şart,
+  geçmiş doluluk ve not dağılımı açısından karşılaştırır. Hiçbir şeyi kaydetmez
+
+### Araç grupları
+
+- Araçlar 12 gruba ayrıldı: `core`, `ninova`, `files`, `obs`, `registration`, `portal`,
+  `planning`, `public`, `campus`, `library`, `archive`, `mail`. Her araç tam olarak bir gruba
+  ait, grubu olmayan bir araç eklenirse test başarısız olur
+- `NINOVA_TOOLSETS` yalnızca seçilen grupları açar, `NINOVA_DISABLED_TOOLSETS` seçilen grupları
+  kapatır. İkisi de yoksa davranış eskisiyle aynı: bütün araçlar açık
+- `core` grubu (`auth_status`, `refresh_session`, `obs_auth_status`) her zaman açık kalır.
+  Bilinmeyen bir grup adı sunucuyu başlatmaz ve geçerli adları listeler
+- Aynı seçim uzak sunucuda da geçerli ve yalnızca daraltır
+- CLI: yeni `--list-toolsets`, `--list-tools` artık etkin seçimi yazdırır
+
+### İyileştirmeler ve düzeltmeler
+
+- **İlerleme bildirimi:** `sync_all_courses`, `crawl_course`, `obs_get_course_prerequisites`
+  ve `obs_get_elective_group` uzun süren işlemlerde adım adım ilerleme gönderiyor
+- Ders programı artık `NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS` süresince (varsayılan 60
+  saniye) önbellekte tutuluyor. Önceden bu ayar uygulanmıyor, kontenjan sayıları bir saate
+  kadar eski kalabiliyordu. Sonuçlara okuma zamanını veren `fetched_at` alanı eklendi
+- CI: testler artık Windows'ta da koşuyor (Python 3.11 ve 3.14) ve `ruff check` derlemeyi
+  durduruyor
+
+### Yükseltirken bilmen gerekenler
+
+- Bir onay penceresi açıkken diğer araç çağrıları bekler: bütün çağrılar tek bir kilitten geçer
+- Kontenjan izleme listesi `NINOVA_STATE_DIR` altında `seat-watch-state.json` dosyasında
+  tutulur. Uzak sunucuda bu liste sunucuya erişen herkes için ortaktır
+
 ## v1.0.0
 
 İlk kararlı sürüm. 0.7.2'den bu yana araç sayısı iki katına yaklaştı, test sayısı 321'den

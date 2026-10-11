@@ -42,7 +42,7 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "ninova": (
-        "Ninova courses: announcements, files, assignments, grades, upload",
+        "Ninova courses: announcements, files, assignments, grades, upload, change tracking and deadlines",
         (
             "get_dashboard",
             "list_courses",
@@ -61,11 +61,6 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "get_dashboard_assignments",
             "get_assignment_upload_slots",
             "submit_assignment",
-        ),
-    ),
-    "tracking": (
-        "Ninova change tracking: sync, updates, upcoming deadlines",
-        (
             "sync_all_courses",
             "get_updates",
             "get_upcoming_deadlines",
@@ -136,7 +131,7 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "public": (
-        "Public OBS catalog: course search, schedules, prerequisites, exams, calendar",
+        "Public OBS catalog: course search, schedules, prerequisites, exams, calendar, seat watch, calendar export",
         (
             "obs_search_courses",
             "obs_get_course_prerequisites",
@@ -146,6 +141,12 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "get_public_exam_schedule",
             "find_open_course_sections",
             "find_empty_classrooms",
+            "watch_course_sections",
+            "unwatch_course_sections",
+            "list_watched_course_sections",
+            "check_watched_course_sections",
+            "export_course_schedule_ics",
+            "export_exam_schedule_ics",
         ),
     ),
     "campus": (

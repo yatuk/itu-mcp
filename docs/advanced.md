@@ -83,14 +83,13 @@ only the groups you need. Each tool belongs to exactly one group:
 | Toolset | Tools | What it covers |
 |---|---|---|
 | `core` | 3 | Always on: `auth_status`, `refresh_session`, `obs_auth_status` |
-| `ninova` | 17 | Ninova courses: dashboard, announcements, files, assignments, grades, upload |
-| `tracking` | 3 | `sync_all_courses`, `get_updates`, `get_upcoming_deadlines` |
+| `ninova` | 20 | Ninova courses: dashboard, announcements, files, assignments, grades, upload, change tracking and deadlines |
 | `files` | 6 | Read, crawl and download Ninova pages and files, text extraction, snapshots |
 | `obs` | 14 | OBS student record: profile, grades, schedule, attendance, transcript |
 | `registration` | 5 | OBS registration status, draft, elective groups, plan check |
 | `portal` | 5 | Campus card, notifications, help tickets, cloud and mail quota |
 | `planning` | 9 | GPA, relative grade, conflicts, degree plan, eligibility |
-| `public` | 8 | Public OBS catalog: course search, schedules, prerequisites, exams, calendar |
+| `public` | 14 | Public OBS catalog: course search, schedules, prerequisites, exams, calendar, seat watch, calendar export |
 | `campus` | 6 | Cafeteria, shuttle, directory, buildings, sports hours, announcements |
 | `library` | 7 | Catalog search, availability, account, loans |
 | `archive` | 15 | Course archive: history, instructors, fill rates, grade distribution |
