@@ -40,9 +40,16 @@ def register_tools(mcp: Any, app: NinovaMcpApp, tool_names: list[str]) -> None:
     # One runner per server keeps tool calls one at a time, as they were when
     # every tool blocked the event loop.
     runner = ToolRunner(mcp)
+    # A tool without an entry in TOOLS would be published with no title and no
+    # description. Refuse it here, before anything is registered.
+    unknown = [name for name in tool_names if name not in metadata]
+    if unknown:
+        raise ValueError(
+            "Cannot register tools that have no metadata in TOOLS: " + ", ".join(unknown)
+        )
     for name in tool_names:
         fn = getattr(app, name)
-        meta = metadata.get(name, {})
+        meta = metadata[name]
 
         # Async so the write tools can wait for the user's answer and the slow
         # tools can report progress. The request context is bound by the
