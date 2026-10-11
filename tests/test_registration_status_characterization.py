@@ -349,6 +349,13 @@ def scenarios() -> dict[str, dict[str, Any]]:
     cases["window_in_another_utc_offset"] = with_windows(
         window("2026-09-17T07:00:00+00:00", "2026-09-17T10:00:00+00:00", 3))
 
+    # Rows with no fields at all: an empty row is still a row.
+    cases["university_overall_with_empty_lesson_row"] = case(status_payload(overall_program()), lesson_payload({}))
+    cases["university_overall_active_with_empty_lesson_row"] = case(
+        status_payload(overall_program(durum="Aktif")), lesson_payload({}))
+    cases["empty_status_row"] = case(status_payload({}), lesson_payload(lesson_program()))
+    cases["empty_rows_on_both_endpoints"] = case(status_payload({}, {}), lesson_payload({}))
+
     cases["now_without_timezone"] = case(now=datetime(2026, 9, 16, 12, 0))
     return cases
 
