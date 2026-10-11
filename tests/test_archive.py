@@ -530,16 +530,16 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
 
     def test_compare_terms_reports_instructor_turnover(self) -> None:
         def by_term(slug, branch):
-            return SECTIONS_TERM_A_RAW if slug == "term-a" else SECTIONS_TERM_B_RAW
+            return SECTIONS_TERM_A_RAW if slug == "2024-2025-bahar" else SECTIONS_TERM_B_RAW
 
         index = dict(self.INDEX)
         index["terms"] = [
-            {"slug": "term-a", "label": "Term A", "sections": 2},
-            {"slug": "term-b", "label": "Term B", "sections": 2},
+            {"slug": "2024-2025-bahar", "label": "Term A", "sections": 2},
+            {"slug": "2025-2026-bahar", "label": "Term B", "sections": 2},
         ]
         meta = {"sections": 2, "branches": [{"code": "BLG", "sections": 2}]}
         with self._patch(get_index=lambda: index, get_term_meta=lambda slug: meta, get_term_branch=by_term):
-            result = self.app.archive_compare_terms("BLG 102E", "term-a", "term-b")
+            result = self.app.archive_compare_terms("BLG 102E", "2024-2025-bahar", "2025-2026-bahar")
         self.assertTrue(result["comparable"])
         self.assertEqual(result["diff"]["instructors_added"], ["Yaşar Erenler"])
         self.assertEqual(result["diff"]["instructors_removed"], ["Ayşe Tosun"])

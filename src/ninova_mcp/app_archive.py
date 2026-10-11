@@ -234,23 +234,18 @@ class ArchiveHistoryToolsMixin:
         return result
 
     def _resolve_archive_term_branch(
-        self, term: str, branch: str
+        self, term: str | int, branch: str
     ) -> tuple[str, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
         """Resolve coverage + sections for one (term, branch) pair.
 
         Shared by every tool that reads a term's section list, so
         "term never captured" vs "branch absent from this term's dump" is
         computed and worded consistently everywhere, not just in one tool.
+        ``term`` may be any spelling ``known_archive_term`` accepts.
         """
-        index_terms = {
-            str(entry.get("slug")): entry
-            for entry in (self.archive.get_index().get("terms") or [])
-        }
-        if term not in index_terms:
-            raise ItuArchiveError(
-                f"Dönem arşivde yok: {term!r}. archive_list_terms ile geçerli dönemleri görün."
-            )
-        term_entry = index_terms[term]
+        from .archive_tools import known_archive_term
+
+        term, term_entry = known_archive_term(self.archive, term)
 
         # An empty result has three very different meanings — the term was never
         # captured, this branch is absent from that term's dump, or the filters
@@ -290,7 +285,7 @@ class ArchiveHistoryToolsMixin:
 
     def archive_term_sections(
         self,
-        term: str,
+        term: str | int,
         branch: str | None = None,
         course_code: str | None = None,
         instructor: str | None = None,
@@ -303,8 +298,10 @@ class ArchiveHistoryToolsMixin:
         courses actually open in Güz" is checkable instead of guessable.
         """
         from .archive import split_course_code, summarize_section
+        from .archive_tools import known_archive_term
         from .parsing import normalize_lookup_text as _norm
 
+        term, _ = known_archive_term(self.archive, term)
         target_code: str | None = None
         if course_code:
             try:
@@ -367,23 +364,30 @@ class ArchiveHistoryToolsMixin:
 
     def archive_fill_rate(
         self,
-        crn: str | None = None,
+        crn: str | int | None = None,
         course_code: str | None = None,
-        term: str | None = None,
+        term: str | int | None = None,
     ) -> dict[str, Any]:
         """Report how full a section was, by CRN or across a course's history.
 
         With a CRN, reads the quota time series for that term. With a course
         code, reports the historical capacity/enrolment of every past section,
-        which is the practical way to judge whether a course fills up.
+        which is the practical way to judge whether a course fills up; a term
+        given next to a course code narrows the answer to that term.
         """
         from .archive import course_history, fill_summary
+        from .archive_tools import known_archive_term, term_given
 
-        resolved_term = term or self.archive.get_index().get("currentSlug")
+        term_slug = known_archive_term(self.archive, term)[0] if term_given(term) else None
+        crn = str(crn).strip() if crn is not None and not isinstance(crn, bool) else ""
 
         if crn:
-            if not resolved_term:
-                raise ItuArchiveError("term çözümlenemedi; term parametresi verin.")
+            resolved_term = term_slug
+            if resolved_term is None:
+                current = self.archive.get_index().get("currentSlug")
+                if not current:
+                    raise ItuArchiveError("term çözümlenemedi; term parametresi verin.")
+                resolved_term = known_archive_term(self.archive, current)[0]
             quota = self.archive.get_quota(resolved_term)
             entry = fill_summary(quota, crn)
             if entry is None:
@@ -407,6 +411,14 @@ class ArchiveHistoryToolsMixin:
 
         canonical, entry = self._archive_course_entry(course_code)
         history = course_history(entry, limit_terms=None)
+        offered_terms = [offering["term"] for offering in history["offerings"]]
+        if term_slug is not None:
+            # A term next to a course code is a filter. It used to be read
+            # only on the CRN path and silently dropped here.
+            history["offerings"] = [o for o in history["offerings"] if o["term"] == term_slug]
+            history["enrolment_not_captured_terms"] = [
+                t for t in history["enrolment_not_captured_terms"] if t == term_slug
+            ]
         ratios = [
             section["fill_ratio"]
             for offering in history["offerings"]
@@ -423,8 +435,22 @@ class ArchiveHistoryToolsMixin:
             "max_fill_ratio": max(ratios) if ratios else None,
             "always_fills": bool(ratios) and all(ratio >= 1.0 for ratio in ratios),
             "enrolment_not_captured_terms": history["enrolment_not_captured_terms"],
+            "term_filter": term_slug,
             "offerings": history["offerings"],
         }
+        if term_slug is not None:
+            result["term_filter_note"] = (
+                f"Yalnızca {term_slug} dönemi gösteriliyor; doluluk sayıları bu dönemin "
+                "şubelerinden. terms_offered ve seasonality dersin tüm geçmişini anlatır."
+            )
+            if not history["offerings"]:
+                result["coverage"] = "term_absent_for_course"
+                result["available_terms"] = offered_terms
+                result["coverage_note"] = (
+                    f"{canonical} için {term_slug} döneminde arşivde şube kaydı yok. Kayıtlı "
+                    "dönemler available_terms alanında. Bu, dersin o dönem açılmadığını tek "
+                    "başına göstermez; archive_term_sections coverage alanına bakın."
+                )
         self._attach_enrolment_note(result)
         self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
@@ -452,22 +478,16 @@ class ArchiveHistoryToolsMixin:
         result["untrusted_external_content"] = True
         return result
 
-    def archive_list_branches(self, term: str) -> dict[str, Any]:
+    def archive_list_branches(self, term: str | int) -> dict[str, Any]:
         """List every branch present in one term's archive dump, with section counts.
 
         Answers "does this branch even have a döküm for this term?" directly,
         instead of probing with ``archive_term_sections`` and reading its
         ``coverage`` field branch by branch.
         """
-        index_terms = {
-            str(entry.get("slug")): entry
-            for entry in (self.archive.get_index().get("terms") or [])
-        }
-        if term not in index_terms:
-            raise ItuArchiveError(
-                f"Dönem arşivde yok: {term!r}. archive_list_terms ile geçerli dönemleri görün."
-            )
-        term_entry = index_terms[term]
+        from .archive_tools import known_archive_term
+
+        term, term_entry = known_archive_term(self.archive, term)
         if term_entry.get("missing"):
             return {
                 "term": term,
@@ -496,8 +516,8 @@ class ArchiveHistoryToolsMixin:
     def archive_compare_terms(
         self,
         course_code: str,
-        term_a: str,
-        term_b: str,
+        term_a: str | int,
+        term_b: str | int,
     ) -> dict[str, Any]:
         """Diff one course's sections between two archived terms.
 
@@ -506,6 +526,7 @@ class ArchiveHistoryToolsMixin:
         calls to be compared by eye.
         """
         from .archive import diff_term_offerings, split_course_code, summarize_section
+        from .archive_tools import known_archive_term
         from .parsing import normalize_lookup_text as _norm
 
         try:
@@ -513,6 +534,8 @@ class ArchiveHistoryToolsMixin:
         except ValueError as exc:
             raise ItuArchiveError(str(exc)) from exc
         canonical = f"{branch} {number}"
+        term_a = known_archive_term(self.archive, term_a)[0]
+        term_b = known_archive_term(self.archive, term_b)[0]
 
         def _sections_for(term: str) -> tuple[str, list[dict[str, Any]], bool]:
             coverage, _, meta, sections = self._resolve_archive_term_branch(term, branch)

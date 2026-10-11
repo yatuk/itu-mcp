@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from typing import Any
 
+# Same wording as ``archive_tools.TERM_ARGUMENT_HELP``; kept here so this
+# metadata module imports nothing from the tool modules.
+_TERM = (
+    "Term: archive slug '2025-2026-guz', OBS term id 202610 (string or integer), or label "
+    "'2025-2026 Güz Dönemi' / '2025-2026 Fall'."
+)
+
 ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
     {
         "name": "archive_list_terms",
         "title": "Archive: List Terms",
         "description": (
             "List every term held in the İTÜ ders arşivi (2016-2017 onward), including "
-            "terms OBS no longer publishes and terms not yet active. Use this to find "
-            "valid term slugs like '2025-2026-guz' for the other archive tools."
+            "terms OBS no longer publishes and terms not yet active. Every archive tool "
+            "that takes a term accepts the slug ('2025-2026-guz'), the OBS term id (202610) "
+            "or the label printed here ('2025-2026 Güz Dönemi')."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -102,7 +110,7 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "term": {"type": "string", "description": "Term slug, e.g. '2025-2026-guz'."},
+                "term": {"type": ["string", "integer"], "description": _TERM},
                 "branch": {"type": "string", "description": "Branch code, e.g. 'BLG'."},
                 "course_code": {"type": "string", "description": "Course code; implies its branch."},
                 "instructor": {"type": "string", "description": "Instructor name fragment."},
@@ -118,7 +126,8 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "How full a section got. With a CRN, reads that term's quota time series. "
             "With a course code, reports capacity vs enrolment across every past section "
-            "so you can judge whether the course reliably fills up."
+            "so you can judge whether the course reliably fills up; add a term to narrow "
+            "the course answer to that one term (term_filter says which). "
             "A course whose department code changed keeps its earlier terms under the old code "
             "(CEN 411E ran as BLG 411E): same_course_other_codes lists such codes, never merged; "
             "call again with that code for the earlier history."
@@ -126,9 +135,15 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "crn": {"type": "string", "description": "Section CRN."},
+                "crn": {"type": ["string", "integer"], "description": "Section CRN."},
                 "course_code": {"type": "string", "description": "Course code, for historical fill rates."},
-                "term": {"type": "string", "description": "Term slug (default: archive's current term)."},
+                "term": {
+                    "type": ["string", "integer"],
+                    "description": (
+                        "With a CRN: the term to read (default: archive's current term). With a "
+                        "course code: only this term (default: every term). " + _TERM
+                    ),
+                },
             },
             "additionalProperties": False,
         },
@@ -166,7 +181,7 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "term": {"type": "string", "description": "Term slug, e.g. '2025-2026-guz'."},
+                "term": {"type": ["string", "integer"], "description": _TERM},
             },
             "required": ["term"],
             "additionalProperties": False,
@@ -184,8 +199,8 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course_code": {"type": "string", "description": "Course code, e.g. 'BLG 322E'."},
-                "term_a": {"type": "string", "description": "First term slug."},
-                "term_b": {"type": "string", "description": "Second term slug."},
+                "term_a": {"type": ["string", "integer"], "description": "First term. " + _TERM},
+                "term_b": {"type": ["string", "integer"], "description": "Second term. " + _TERM},
             },
             "required": ["course_code", "term_a", "term_b"],
             "additionalProperties": False,

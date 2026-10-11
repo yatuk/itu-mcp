@@ -728,6 +728,114 @@ def term_slug_from_donem(donem: Any) -> str | None:
     return f"{year - 1}-{year}-{season}"
 
 
+# -- term arguments -----------------------------------------------------------
+
+TERM_FORMS_HELP = (
+    "Kabul edilen biçimler: '2025-2026-guz' (arşiv kodu), 202610 (OBS dönem kodu; son iki "
+    "hane 10 Güz, 20 Bahar, 30 Yaz ve yıl akademik yılın bitiş yılı), '2025-2026 Güz Dönemi' "
+    "ya da '2025-2026 Fall' (dönem adı; Güz/Bahar/Yaz, Fall/Spring/Summer)."
+)
+
+_SEASON_WORDS = {
+    "guz": "guz", "fall": "guz", "autumn": "guz",
+    "bahar": "bahar", "spring": "bahar",
+    "yaz": "yaz", "summer": "yaz",
+}
+_TERM_NOISE = re.compile(r"\b(?:donemi|donem|semester|term|yariyili|yariyil)\b")
+_TERM_YEARS_FIRST = re.compile(r"(\d{4})\s*[-/ ]\s*(\d{4}|\d{2})\s*[-_/ ]?\s*([a-z]+)")
+_TERM_SEASON_FIRST = re.compile(r"([a-z]+)\s*[-_/ ]?\s*(\d{4})\s*[-/ ]\s*(\d{4}|\d{2})")
+NEAREST_TERM_COUNT = 4
+
+
+def parse_term(value: Any) -> str:
+    """Turn any accepted spelling of a term into the archive slug.
+
+    Accepts the slug (``2025-2026-guz``), the OBS term id as text or integer
+    (``202610``), and the label in Turkish or English, with or without
+    diacritics, case, or the word "Dönemi"/"Semester" (``2025-2026 Güz``,
+    ``2025-2026 guz donemi``, ``2025-2026 Fall``). Raises ``ValueError`` with
+    the accepted forms for anything else. Whether the archive holds the term
+    is a separate question: see ``resolve_term``.
+    """
+    from .parsing import normalize_lookup_text
+
+    if value is None or isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError(f"Dönem çözümlenemedi: {value!r}. {TERM_FORMS_HELP}")
+    text = str(value).strip()
+    if re.fullmatch(r"\d{6}", text):
+        slug = term_slug_from_donem(text)
+        if slug is None:
+            raise ValueError(
+                f"Dönem çözümlenemedi: {value!r}. OBS dönem kodunun son iki hanesi 10, 20 ya da "
+                f"30 olmalı. {TERM_FORMS_HELP}"
+            )
+        return slug
+    folded = " ".join(_TERM_NOISE.sub(" ", normalize_lookup_text(text)).split())
+    match = _TERM_YEARS_FIRST.fullmatch(folded)
+    if match:
+        first, second, word = match.groups()
+    else:
+        match = _TERM_SEASON_FIRST.fullmatch(folded)
+        if not match:
+            raise ValueError(f"Dönem çözümlenemedi: {value!r}. {TERM_FORMS_HELP}")
+        word, first, second = match.groups()
+    season = _SEASON_WORDS.get(word)
+    start = int(first)
+    end = int(second) if len(second) == 4 else (start // 100) * 100 + int(second)
+    if len(second) == 2 and end < start:
+        end += 100
+    if season is None or end != start + 1:
+        raise ValueError(f"Dönem çözümlenemedi: {value!r}. {TERM_FORMS_HELP}")
+    return f"{start}-{end}-{season}"
+
+
+def _term_ordinal(term_slug: str) -> int:
+    year, season = _term_sort_key(term_slug)
+    return year * 3 + min(season, 2)
+
+
+def nearest_terms(slugs: Any, target: str | None, *, limit: int = NEAREST_TERM_COUNT) -> list[str]:
+    """The archive terms closest in time to ``target``, or the newest ones."""
+    known = sorted({str(slug) for slug in slugs or () if slug}, key=_term_sort_key, reverse=True)
+    if target is None:
+        return known[:limit]
+    wanted = _term_ordinal(target)
+    closest = sorted(known, key=lambda slug: (abs(_term_ordinal(slug) - wanted), -_term_ordinal(slug)))
+    return sorted(closest[:limit], key=_term_sort_key, reverse=True)
+
+
+def resolve_term(value: Any, index_terms: Any) -> tuple[str, dict[str, Any]]:
+    """Parse a term argument and find it in the archive index.
+
+    ``index_terms`` is the ``terms`` list of ``index.json``. Raises
+    ``ValueError`` naming the accepted forms and the nearest terms the
+    archive does hold, both for text that is not a term and for a term the
+    archive does not list.
+    """
+    by_slug = {
+        str(entry.get("slug")): entry
+        for entry in index_terms or []
+        if isinstance(entry, dict) and entry.get("slug")
+    }
+    try:
+        slug = parse_term(value)
+    except ValueError as exc:
+        year = re.search(r"(?<!\d)(\d{4})(?!\d)", str(value))
+        target = f"{year.group(1)}-{int(year.group(1)) + 1}-guz" if year else None
+        listed = ", ".join(nearest_terms(by_slug, target)) or "yok"
+        raise ValueError(
+            f"{exc} Arşivdeki {'en yakın' if target else 'en yeni'} dönemler: {listed}."
+        ) from exc
+    entry = by_slug.get(slug)
+    if entry is None:
+        listed = ", ".join(nearest_terms(by_slug, slug)) or "yok"
+        raise ValueError(
+            f"Dönem arşivde yok: {value!r} ({slug} olarak okundu). Arşivdeki en yakın dönemler: "
+            f"{listed}. Tüm liste için archive_list_terms. {TERM_FORMS_HELP}"
+        )
+    return slug, entry
+
+
 def related_course_codes(course_code: str, known_codes: Any) -> list[str]:
     """Other codes with the same branch and number but a different suffix.
 
