@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from .obs_errors import ObsError
 from .obs_session import ObsSessionCore
 
 
@@ -38,19 +37,24 @@ class ObsRegistrationApi(ObsSessionCore):
         # OBS retains a short transaction lock after a check completes. Space
         # independent section checks and serialize calls sharing this client.
         with self._registration_check_lock:
-            for attempt in range(2):
-                if self._last_registration_check is not None:
-                    delay = 2.0 - (time.monotonic() - self._last_registration_check)
-                    if delay > 0:
-                        time.sleep(delay)
-                try:
-                    payload = self._api_request("POST", VALIDATION_PATH, json_body={"ecrn": selected})
-                finally:
-                    self._last_registration_check = time.monotonic()
-                if (attempt == 0 and isinstance(payload, dict)
-                        and payload.get("resultCode") in ("VAL16", "ERRMaxIstekTaslakKontrol")):
-                    continue
-                return normalize_validation(payload, selected)
-        # Not reached: the second attempt always returns or raises. Kept so the
-        # function visibly ends in a return or a raise on every path.
-        raise ObsError("OBS CRN validation remained busy.")
+            payload = self._spaced_crn_check(VALIDATION_PATH, selected)
+            if _check_was_busy(payload):
+                # One retry only; whatever the second answer is, it is reported.
+                payload = self._spaced_crn_check(VALIDATION_PATH, selected)
+            return normalize_validation(payload, selected)
+
+    def _spaced_crn_check(self, path: str, selected: list[str]) -> Any:
+        """Send one CRN check, at least two seconds after the previous one ended."""
+        if self._last_registration_check is not None:
+            delay = 2.0 - (time.monotonic() - self._last_registration_check)
+            if delay > 0:
+                time.sleep(delay)
+        try:
+            return self._api_request("POST", path, json_body={"ecrn": selected})
+        finally:
+            self._last_registration_check = time.monotonic()
+
+
+def _check_was_busy(payload: Any) -> bool:
+    """True when OBS refused the check because its transaction lock was still held."""
+    return isinstance(payload, dict) and payload.get("resultCode") in ("VAL16", "ERRMaxIstekTaslakKontrol")
