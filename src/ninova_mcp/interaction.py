@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
+
+from .operator_settings import env_flag
 
 # (done, total or None, short message)
 ProgressCallback = Callable[[float, "float | None", "str | None"], None]
@@ -63,8 +64,13 @@ def bind(interaction: ToolInteraction | None) -> Iterator[None]:
 
 
 def elicitation_required() -> bool:
-    """The operator's exact opt-in to refuse writes without a user prompt."""
-    return os.getenv(REQUIRE_ELICITATION_ENV) == "1"
+    """The operator's opt-in to refuse writes without a user prompt.
+
+    Accepts the same spellings as the other switches (1/true/yes/on and
+    0/false/no/off). Any other non-empty value raises ``OperatorSettingError``
+    instead of quietly leaving the weaker fallback on.
+    """
+    return env_flag(REQUIRE_ELICITATION_ENV)
 
 
 # -- confirmation -----------------------------------------------------------
@@ -83,7 +89,7 @@ _REFUSAL_NOTES = {
         "Tell the user the confirmation could not be shown; do not retry on your own."
     ),
     "elicitation_required": (
-        f"The operator set {REQUIRE_ELICITATION_ENV}=1 and the connected client cannot show a "
+        f"The operator enabled {REQUIRE_ELICITATION_ENV} and the connected client cannot show a "
         "confirmation dialog (no MCP elicitation support). Nothing was sent. The confirm argument "
         "alone is not accepted here; the user needs a client that supports elicitation."
     ),
@@ -97,6 +103,9 @@ def confirm_write(message: str) -> dict[str, Any] | None:
     send nothing unless it is exactly True. A model-supplied ``confirm`` never
     reaches this function, so it cannot stand in for the user's answer.
     """
+    # Read first, so a mistyped setting stops every write instead of only the
+    # ones that reach the fallback below.
+    required = elicitation_required()
     interaction = current()
     if interaction is not None and interaction.elicitation_supported and interaction.ask is not None:
         try:
@@ -115,7 +124,7 @@ def confirm_write(message: str) -> dict[str, Any] | None:
             "user_action": action if action in ("decline", "cancel") else None,
             "note": _REFUSAL_NOTES[status],
         }
-    if elicitation_required():
+    if required:
         return {
             "proceed": False, "status": "elicitation_required", "method": "none",
             "elicitation_supported": False, "user_action": None,
@@ -192,7 +201,10 @@ def _size_text(size_bytes: int) -> str:
 def upload_confirmation_message(
     course: dict[str, Any] | None, assignment: dict[str, Any] | None, upload_url: str,
     slot: dict[str, Any], file_name: str, file_path: str, size_bytes: int,
+    *, post_url: str | None = None, sha256_hex: str | None = None,
 ) -> str:
+    """``post_url`` is where the file is really posted (the page's form target);
+    ``sha256_hex`` identifies the exact bytes that were read and will be sent."""
     course = course or {}
     assignment = assignment or {}
     course_text = " - ".join(
@@ -205,10 +217,16 @@ def upload_confirmation_message(
         f"Ders: {course_text}",
         f"Ödev: {assignment_text}",
         f"Yükleme adresi: {_clean(upload_url, 200)}",
+        f"Dosyanın gönderileceği adres (POST): {_clean(post_url or upload_url, 200)}",
         f"Yükleme alanı: {_clean(slot.get('index'))} ({_clean(slot.get('description') or 'açıklama yok')})",
         f"Dosya: {_clean(file_name)}, {_size_text(size_bytes)}",
         f"Dosyanın bilgisayarınızdaki yolu: {_clean(file_path, 260)}",
     ]
+    if sha256_hex:
+        lines.append(
+            f"Dosya içeriğinin SHA-256 özeti (ilk 16 hane): {_clean(sha256_hex[:16])}. "
+            "Dosya şimdi okundu; onaydan sonra diskte değişse bile bu içerik gönderilir."
+        )
     if slot.get("uploaded"):
         lines.append("DİKKAT: Bu alanda daha önce yüklenmiş bir teslim var. Yeni dosya onun YERİNE geçecek.")
     else:
@@ -254,8 +272,7 @@ class ProgressSteps:
             return
         try:
             self._callback(self.done, self.total, _clean(message, 160))
-        except Exception:
-            # Progress is advisory; it must never change a tool's outcome.
+        except Exception:  # nosec B110 - progress is advisory and must never change a tool's outcome
             pass
 
 
