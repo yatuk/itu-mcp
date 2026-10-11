@@ -2,10 +2,6 @@
 
 <div align="center">
 
-  <p>
-    <img src="https://raw.githubusercontent.com/yatuk/itu-mcp/main/docs/banner.png" alt="İTÜ MCP" width="100%" />
-  </p>
-
   <h1>İTÜ MCP</h1>
 
   <p><em>Ninova, OBS, Portal, kütüphane ve ders arşivini yapay zeka asistanına bağla. Sonra sadece sor.</em></p>
