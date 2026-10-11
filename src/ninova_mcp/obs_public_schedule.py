@@ -165,8 +165,14 @@ class ObsPublicSchedule(ObsPublicTransport):
 
     def _resolve_department(self, program_type: str, department: str) -> int:
         """Resolve a department code or name to its numeric ``bransKoduId``."""
-        depts = self.list_departments(program_type)
         target = normalize_lookup_text(department)
+        if not target:
+            # Empty text would equal a missing code and be part of every code.
+            raise ObsError(
+                "Bölüm kodu boş olamaz. 'BLG' veya 'MAT' gibi bir bölüm kodu verin; bölüm kodu "
+                "ders kodunun harf kısmıdır (BLG 223E için BLG)."
+            )
+        depts = self.list_departments(program_type)
 
         self._dept_cache: dict[int, dict[str, Any]] = getattr(self, "_dept_cache", {})
 
