@@ -112,6 +112,12 @@ def _available_courses_hint(courses: list[dict[str, Any]]) -> str:
     return f" Available courses: {available}." if available else " Course list is empty."
 
 
+def _file_inventory_status(errors: list[dict[str, str]], pages: list[dict[str, Any]]) -> str:
+    if not errors:
+        return "complete"
+    return "partial" if pages else "failed"
+
+
 class NinovaCourseToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and the course cache."""
 
@@ -772,11 +778,7 @@ class NinovaCourseToolsMixin:
             visited.add(normalized)
 
             try:
-                html, response = self.client.get_html(current_url)
-                listing = extract_file_directory(
-                    html, response.url, base_url=self.client.base_url, current_path=current_path,
-                )
-                observation = scope_coverage(html, response.url, current_url, "class_files", listing)
+                response_url, listing, observation = self._read_directory_page(current_url, current_path)
             except Exception as exc:
                 errors.append({"path": current_url, "error": str(exc)})
                 continue
@@ -784,24 +786,25 @@ class NinovaCourseToolsMixin:
                 errors.append({"path": current_url, "error": observation.get("reason") or observation["status"]})
             pages.append(
                 {
-                    "url": response.url,
+                    "url": response_url,
                     "current_path": current_path,
                     "entry_count": len(listing["entries"]),
                     "coverage": observation,
                 }
             )
 
-            for entry in listing["entries"]:
-                entries.append(entry)
-                if recursive and entry["entry_type"] == "folder" and depth < max_depth:
-                    queue.append((entry["url"], depth + 1, entry["path"]))
-                elif entry["entry_type"] == "folder" and self._strip_fragment(entry["url"]) not in visited:
-                    unvisited_folders.append(entry["url"])
+            entries.extend(listing["entries"])
+            follow = recursive and depth < max_depth
+            for folder in (entry for entry in listing["entries"] if entry["entry_type"] == "folder"):
+                if follow:
+                    queue.append((folder["url"], depth + 1, folder["path"]))
+                elif self._strip_fragment(folder["url"]) not in visited:
+                    unvisited_folders.append(folder["url"])
 
         if unvisited_folders:
             errors.append({"path": start_url, "error": "file_depth_or_recursion_limit"})
         observation = coverage(
-            "partial" if errors and pages else "failed" if errors else "complete",
+            _file_inventory_status(errors, pages),
             "incomplete_file_inventory" if errors else None,
             max_depth=max_depth, recursive=recursive, unvisited_folder_count=len(unvisited_folders),
         )
@@ -817,6 +820,15 @@ class NinovaCourseToolsMixin:
             "coverage": observation,
             "errors": errors,
         }
+
+    def _read_directory_page(self, url: str, current_path: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Read one directory page: where it ended up, its listing and how completely it was read."""
+        html, response = self.client.get_html(url)
+        listing = extract_file_directory(
+            html, response.url, base_url=self.client.base_url, current_path=current_path,
+        )
+        observation = scope_coverage(html, response.url, url, "class_files", listing)
+        return response.url, listing, observation
 
     def _extract_course_root_path(self, url: str) -> str:
         parsed = urlparse(url)
