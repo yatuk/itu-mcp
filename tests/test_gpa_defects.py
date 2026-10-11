@@ -411,6 +411,41 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ZeroCreditCourseTests(unittest.TestCase):
+    """A plan credit of 0 is a real zero-credit course, not a missing credit."""
+
+    REGISTERED = [reg("ZZT", "100", "40030"), reg("ZZT", "301E", "40031")]
+
+    def test_pass_fail_course_keeps_its_zero_credit_and_stays_out_of_the_average(self) -> None:
+        rows = [met("ZZT 100", "BL", 0), met("ZZT 301E", "BB", 3)]
+        result = make_app(self.REGISTERED, met_rows=rows).obs_calculate_gpa(TERM, include_official=False)
+        self.assertEqual((result["gpa"], result["total_credits"]), (3.0, 3.0))
+        self.assertEqual(result["excluded_courses"], [
+            {"code": "ZZT 100", "grade": "BL", "credit": 0.0, "reason": "grade_excluded_from_gpa"}])
+        self.assertNotIn("credits_unresolved", result)
+
+    def test_ungraded_zero_credit_course_is_not_reported_as_lacking_a_credit(self) -> None:
+        rows = [met("ZZT 100", "", 0), met("ZZT 301E", "BB", 3)]
+        result = make_app(self.REGISTERED, met_rows=rows).obs_calculate_gpa(TERM, include_official=False)
+        course = by_code(result, "ZZT 100")
+        self.assertEqual((course["credit"], course["credit_status"]), (0.0, "valid"))
+        self.assertNotIn("credits_unresolved", result)
+        self.assertIsNone(result["gpa"])  # the course has no grade yet
+
+    def test_zero_credit_course_with_a_letter_grade_weighs_nothing(self) -> None:
+        rows = [met("ZZT 100", "FF", 0), met("ZZT 301E", "BB", 3)]
+        result = make_app(self.REGISTERED, met_rows=rows).obs_calculate_gpa(TERM, include_official=False)
+        self.assertEqual((result["gpa"], result["total_credits"], result["calculation_complete"]), (3.0, 3.0, True))
+        self.assertEqual(result["invalid_credits"], [])
+        self.assertNotIn("credits_unresolved", result)
+
+    def test_course_without_any_plan_credit_is_still_unresolved(self) -> None:
+        rows = [met("ZZT 100", "AA", None, kredisi=None, sayilanKredi=None), met("ZZT 301E", "BB", 3)]
+        result = make_app(self.REGISTERED, met_rows=rows).obs_calculate_gpa(TERM, include_official=False)
+        self.assertIsNone(result["gpa"])
+        self.assertEqual(result["credits_unresolved"], ["ZZT 100"])
+
+
 class OtherSemesterToolsTests(unittest.TestCase):
     """The term code arrives as a JSON number from some clients."""
 

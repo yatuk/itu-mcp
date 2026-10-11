@@ -1,13 +1,13 @@
 """Match calculated term averages to explicit official OBS records."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from .gpa import finite_number as _number
+from .gpa_common import finite_number as _number
+from .gpa_common import reproduces_official
 
 _SOURCE = 'obs.itu.edu.tr/api/ogrenci/KayitDurumu'
-# Two-decimal averages closer than this are the same average.
-_MATCH_TOLERANCE = 0.005
 
 
 def _no_reference(status: str, **details: Any) -> dict[str, Any]:
@@ -102,6 +102,26 @@ def _preferred_average(
     return preferred, 'calculated' if use_calculated else 'official_obs'
 
 
+def _unrounded_average(result: dict[str, Any]) -> float | None:
+    """The calculated average before rounding, rebuilt from the counted courses of the result.
+
+    The official value is compared with this one by the tolerance both GPA
+    tools share, so an exact half matches whichever way OBS rounded it. A
+    result that does not list its courses is compared by its rounded average.
+    """
+    rounded = result.get('gpa')
+    if rounded is None:
+        return None
+    try:
+        weights = [(float(course['credit']), float(course['coefficient'])) for course in result.get('courses') or []]
+    except (KeyError, TypeError, ValueError):
+        return rounded
+    credits = math.fsum(credit for credit, _ in weights)
+    if not credits > 0:
+        return rounded
+    return math.fsum(credit * coefficient for credit, coefficient in weights) / credits
+
+
 def _comparison_status(
     calculated: float | None, official: float | None, *, projection: bool, projection_complete: Any,
 ) -> str:
@@ -109,7 +129,7 @@ def _comparison_status(
         return 'projection' if projection_complete and calculated is not None else 'projection_incomplete'
     if calculated is None or official is None:
         return 'unavailable'
-    return 'match' if abs(calculated - official) < _MATCH_TOLERANCE else 'mismatch'
+    return 'match' if reproduces_official(calculated, official) else 'mismatch'
 
 
 def _mismatch_warning(ambiguous: list[dict[str, Any]]) -> str:
@@ -147,7 +167,7 @@ def attach_official_reference(
     result['preferred_term_gpa'], result['preferred_term_gpa_source'] = _preferred_average(
         calculated, official, projection=projection, projection_complete=projection_complete)
     result['comparison_status'] = _comparison_status(
-        calculated, official, projection=projection, projection_complete=projection_complete)
+        _unrounded_average(result), official, projection=projection, projection_complete=projection_complete)
     result['gpa_difference'] = round(calculated - official, 4) if (
         not projection and calculated is not None and official is not None
     ) else None
