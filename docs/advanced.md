@@ -73,6 +73,52 @@ NINOVA_LIBRARY_PIN=separate-library-pin
 
 Username is usually your **İTÜ email** (e.g. `name@itu.edu.tr`), the same value you type on the central login page.
 
+### Toolsets (choosing which tool groups are published)
+
+The server has more than 100 tools, and an MCP client loads every tool's name, description and
+schema at the start of each conversation. If you only use part of the server, publish
+only the groups you need. Each tool belongs to exactly one group:
+
+| Toolset | Tools | What it covers |
+|---|---|---|
+| `core` | 3 | Always on: `auth_status`, `refresh_session`, `obs_auth_status` |
+| `ninova` | 17 | Ninova courses: dashboard, announcements, files, assignments, grades, upload |
+| `tracking` | 3 | `sync_all_courses`, `get_updates`, `get_upcoming_deadlines` |
+| `files` | 6 | Read, crawl and download Ninova pages and files, text extraction, snapshots |
+| `obs` | 14 | OBS student record: profile, grades, schedule, attendance, transcript |
+| `registration` | 5 | OBS registration status, draft, elective groups, plan check |
+| `portal` | 5 | Campus card, notifications, help tickets, cloud and mail quota |
+| `planning` | 9 | GPA, relative grade, conflicts, degree plan, eligibility |
+| `public` | 8 | Public OBS catalog: course search, schedules, prerequisites, exams, calendar |
+| `campus` | 6 | Cafeteria, shuttle, directory, buildings, sports hours, announcements |
+| `library` | 7 | Catalog search, availability, account, loans |
+| `archive` | 15 | Course archive: history, instructors, fill rates, grade distribution |
+| `mail` | 4 | Read-only ITU Mail |
+
+```bash
+export NINOVA_TOOLSETS="ninova,obs,archive"      # publish only these groups
+export NINOVA_DISABLED_TOOLSETS="library,mail"   # or: publish everything except these
+```
+
+- With neither variable set, every group is on. That is the default and matches earlier
+  versions.
+- Both can be set together: `NINOVA_DISABLED_TOOLSETS` is applied after `NINOVA_TOOLSETS`.
+- `core` is always on, so `auth_status` is available whatever you select.
+  `NINOVA_DISABLED_TOOLSETS=core` is refused.
+- Names are comma-separated and case-insensitive. An unknown name stops the server at
+  startup with a message that lists the valid names; it is never ignored.
+- The variables are read once at startup, from the environment or the `.env` file.
+  Restart the server (or the MCP client) after changing them.
+- Prompts and resources are not affected. A prompt can mention a tool from a group you
+  switched off.
+
+Check the result before starting a client:
+
+```bash
+itu-mcp --list-toolsets   # every group with its tool count and on/off state
+itu-mcp --list-tools      # the tool names that will be registered
+```
+
 ## Run
 
 After installing the package, start the local stdio server:
@@ -124,6 +170,12 @@ Rate limiting (default 60 req / 60s per client IP) applies to the MCP path. Disa
 `NINOVA_REMOTE_TRUST_PROXY_HEADERS=1` is set — only turn that on if a real reverse proxy sits
 in front of the server, since `X-Forwarded-For` is otherwise a client-supplied header anyone
 can rotate to dodge the limit.
+
+The toolset variables above (`NINOVA_TOOLSETS`, `NINOVA_DISABLED_TOOLSETS`) also apply to
+the remote server, and they can only narrow its tool list. Tools that are never served
+remotely stay excluded, mail tools still need `NINOVA_REMOTE_ENABLE_MAIL=1`, and
+`NINOVA_REMOTE_ALLOWED_TOOLS` is applied last: naming a tool from a switched-off toolset
+there is a startup error, and if you set it, list `auth_status` yourself to keep it.
 
 > **Privacy warning:** a hosted remote server means whoever uses it sends their İTÜ
 > credentials to *your* server. Prefer the local stdio setup for anyone but yourself.
