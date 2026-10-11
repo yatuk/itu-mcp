@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +12,12 @@ from urllib.parse import urlparse
 import requests
 
 from .env import load_ninova_env
-from .http_security import request_with_safe_redirects
+from .http_security import (
+    RequestTarget,
+    request_with_safe_redirects,
+    require_https_host,
+)
+from .operator_settings import EXTRA_SSO_HOSTS_ENV, extra_sso_hosts
 from .parsing import clean_text, make_soup, normalize_lookup_text, normalize_url
 from .session_store import (
     clear_session,
@@ -32,6 +38,19 @@ DEFAULT_HEADERS = {
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 LOGIN_URL_RE = re.compile(r"girisv3\.itu\.edu\.tr/Login\.aspx", re.IGNORECASE)
+
+# Exact hosts, never a suffix match. Evidence for each one is in the code that
+# uses it: NINOVA_HOST is the only value NINOVA_BASE_URL may have, the single
+# sign-on form lives on SSO_LOGIN_HOST (LOGIN_URL_RE above), PORTAL_HOST is
+# PORTAL_BASE_URL below, OBS_HOST is the only value NINOVA_OBS_BASE_URL may
+# have (ObsClient sends its requests through this client's session), and
+# HELP_DESK_HOST is HELP_BASE in help_tickets.
+NINOVA_HOST = "ninova.itu.edu.tr"
+SSO_LOGIN_HOST = "girisv3.itu.edu.tr"
+SSO_LOGIN_PATH = "/login.aspx"
+PORTAL_HOST = "portal.itu.edu.tr"
+OBS_HOST = "obs.itu.edu.tr"
+HELP_DESK_HOST = "yardim.itu.edu.tr"
 
 
 def _request_delay_seconds() -> float:
@@ -72,9 +91,12 @@ class NinovaCredentials:
 class NinovaClient:
     def __init__(self, base_url: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("NINOVA_BASE_URL") or "https://ninova.itu.edu.tr").rstrip("/")
-        parsed_base = urlparse(self.base_url)
-        if parsed_base.scheme != "https" or (parsed_base.hostname or "").lower() != "ninova.itu.edu.tr":
-            raise NinovaError("NINOVA_BASE_URL must be https://ninova.itu.edu.tr")
+        try:
+            base_target = require_https_host(self.base_url, {NINOVA_HOST})
+        except ValueError as exc:
+            raise NinovaError("NINOVA_BASE_URL must be https://ninova.itu.edu.tr") from exc
+        # The one host that a URL or path coming from a tool argument may name.
+        self.ninova_host = base_target.host
         self.credentials = NinovaCredentials.from_env()
         self._replace_session()
         self.last_login_at: str | None = None
@@ -223,12 +245,17 @@ class NinovaClient:
             self._persist_session()
             return self.session_info()
 
+        ninova_flow = self._ninova_flow_hosts()
         self._throttle()
-        response = self._safe_request("GET", self._entry_login_url(), timeout=DEFAULT_TIMEOUT)
+        response = self._safe_request(
+            "GET", self._entry_login_url(), allowed_hosts=ninova_flow, timeout=DEFAULT_TIMEOUT
+        )
         html = self._decode_response(response)
         if not self._looks_like_login_page(response, html=html):
             self._throttle()
-            dashboard = self._safe_request("GET", self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
+            dashboard = self._safe_request(
+                "GET", self._dashboard_url(), allowed_hosts=ninova_flow, timeout=DEFAULT_TIMEOUT
+            )
             dashboard_html = self._decode_response(dashboard)
             if self._looks_like_login_page(dashboard, html=dashboard_html):
                 raise NinovaAuthError(
@@ -246,12 +273,18 @@ class NinovaClient:
                 "ITU may have changed the login markup; try enabling Playwright "
                 "fallback (do not set NINOVA_DISABLE_PLAYWRIGHT_FALLBACK=1)."
             )
+        # The payload carries the password. It goes to the sign-on host only:
+        # a page that merely looks like the login form on any other host gets
+        # nothing, and a redirect cannot replay the form elsewhere.
+        login_url = self._require_sso_login_url(response.url)
         self._throttle()
         login_response = self._safe_request(
             "POST",
-            response.url,
+            login_url,
             data=payload,
-            headers={"Referer": response.url},
+            headers={"Referer": login_url},
+            allowed_hosts=ninova_flow,
+            body_hosts={SSO_LOGIN_HOST},
             timeout=DEFAULT_TIMEOUT,
         )
         login_html = self._decode_response(login_response)
@@ -274,7 +307,9 @@ class NinovaClient:
             )
 
         self._throttle()
-        dashboard = self._safe_request("GET", self._dashboard_url(), timeout=DEFAULT_TIMEOUT)
+        dashboard = self._safe_request(
+            "GET", self._dashboard_url(), allowed_hosts=ninova_flow, timeout=DEFAULT_TIMEOUT
+        )
         dashboard_html = self._decode_response(dashboard)
         if self._looks_like_login_page(dashboard, html=dashboard_html):
             raise NinovaAuthError(
@@ -310,6 +345,8 @@ class NinovaClient:
                 )
                 page = context.new_page()
                 page.goto(self._entry_login_url(), wait_until="domcontentloaded", timeout=60000)
+                # Never type the password into a page on any other host.
+                self._require_sso_login_url(page.url)
                 page.locator("#ContentPlaceHolder1_tbUserName").fill(self.credentials.username)
                 page.locator("#ContentPlaceHolder1_tbPassword").fill(self.credentials.password)
                 page.locator("#ContentPlaceHolder1_btnLogin").click()
@@ -353,9 +390,9 @@ class NinovaClient:
         response = self._safe_request(
             "GET",
             self._dashboard_url(),
+            allowed_hosts=self._ninova_flow_hosts(),
             timeout=DEFAULT_TIMEOUT,
         )
-        self._check_domain(response.url)
         html = self._decode_response(response)
         return not self._looks_like_login_page(response, html=html)
 
@@ -371,57 +408,123 @@ class NinovaClient:
             "session_path": str(self.session_path) if session_persist_enabled() else None,
         }
 
-    # ITU domain suffixes allowed for outbound requests
-    _ALLOWED_DOMAINS = (
-        "ninova.itu.edu.tr",
-        "obs.itu.edu.tr",
-        "portal.itu.edu.tr",
-        "girisv3.itu.edu.tr",
-        "sis.itu.edu.tr",
-        "takvim.sis.itu.edu.tr",
-        "uicc.itu.edu.tr",
-        "itu.edu.tr",
-    )
+    def _internal_hosts(self) -> frozenset[str]:
+        """Every host this client may contact from its own fixed code paths.
+
+        Tool arguments never reach these: a URL or path coming from a tool is
+        limited to the Ninova host by ``ninova_url``.
+        """
+        return (
+            frozenset({self.ninova_host, SSO_LOGIN_HOST, PORTAL_HOST, OBS_HOST, HELP_DESK_HOST})
+            | extra_sso_hosts()
+        )
+
+    def _ninova_flow_hosts(self) -> frozenset[str]:
+        """Hosts a Ninova request may pass through: Ninova and the sign-on page."""
+        return frozenset({self.ninova_host, SSO_LOGIN_HOST}) | extra_sso_hosts()
+
+    def _check_host(self, url: str, allowed_hosts: Collection[str]) -> RequestTarget:
+        """Raise NinovaError unless ``url`` is HTTPS on exactly one of ``allowed_hosts``.
+
+        The host is read from the URL the HTTP library will send, so a URL
+        that ``urlparse`` and the HTTP library read differently cannot pass.
+        """
+        try:
+            return require_https_host(url, allowed_hosts)
+        except ValueError as exc:
+            raise NinovaError(
+                f"URL is not allowed: {exc} Only these hosts are permitted here: "
+                f"{', '.join(sorted(allowed_hosts))}. If the İTÜ sign-on flow now passes through "
+                f"another itu.edu.tr host, the operator can add it with {EXTRA_SSO_HOSTS_ENV}."
+            ) from exc
 
     def _check_domain(self, url: str) -> None:
-        """Raise NinovaError if the URL is not an allowed ITU domain."""
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").lower()
-        if not hostname:
-            return  # relative path, OK
-        if parsed.scheme != "https":
-            raise NinovaError("Only HTTPS İTÜ URLs are permitted.")
-        if not any(
-            hostname == allowed or hostname.endswith("." + allowed)
-            for allowed in self._ALLOWED_DOMAINS
-        ):
-            raise NinovaError(
-                f"Domain not allowed: {hostname}. "
-                "Only ITU domains (*.itu.edu.tr) are permitted."
-            )
+        """Raise NinovaError if the URL is not one of the exact internal İTÜ hosts."""
+        self._check_host(url, self._internal_hosts())
 
-    def _safe_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        """Request an allowlisted URL and validate each redirect before use."""
+    def _require_sso_login_url(self, url: str) -> str:
+        """Return the sign-on URL that may receive the password, or raise."""
+        try:
+            target = require_https_host(url, {SSO_LOGIN_HOST})
+        except ValueError as exc:
+            raise NinovaAuthError(
+                "The login form was not served by the İTÜ sign-on host "
+                f"({SSO_LOGIN_HOST}). The password was not sent."
+            ) from exc
+        if not urlparse(target.url).path.lower().endswith(SSO_LOGIN_PATH):
+            raise NinovaAuthError(
+                "The login form was not served from the İTÜ sign-on page. The password was not sent."
+            )
+        return target.url
+
+    def ninova_url(self, url_or_path: str) -> str:
+        """Turn a tool-supplied URL or path into a Ninova URL, or raise.
+
+        This is the only way a tool argument becomes a request URL. The host
+        must be the configured Ninova host exactly: no other İTÜ host, no
+        port, no user information.
+        """
+        try:
+            if isinstance(url_or_path, str) and url_or_path.startswith("//"):
+                # A scheme-relative reference names a host of its own.
+                raise ValueError("a path must not start with '//'.")
+            url = normalize_url(url_or_path, self.base_url)
+            require_https_host(url, {self.ninova_host})
+        except ValueError as exc:
+            raise NinovaError(
+                f"Only https://{self.ninova_host} URLs and Ninova paths are accepted here: {exc}"
+            ) from exc
+        return url
+
+    def _require_final_host(self, response: requests.Response, host: str) -> None:
+        try:
+            require_https_host(response.url, {host})
+        except ValueError as exc:
+            response.close()
+            raise NinovaError(
+                f"The request ended on another host than {host}; the response was discarded."
+            ) from exc
+
+    def _safe_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        allowed_hosts: Collection[str] | None = None,
+        body_hosts: Collection[str] | None = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Request an allowlisted URL and validate each redirect before use.
+
+        ``allowed_hosts`` defaults to the internal host set. ``body_hosts``
+        limits which hosts may receive a request body (see http_security).
+        """
+        hosts = frozenset(allowed_hosts) if allowed_hosts is not None else self._internal_hosts()
+
+        def validate(candidate: str) -> None:
+            self._check_host(candidate, hosts)
+
         try:
             return request_with_safe_redirects(
                 self.session,
                 method,
                 url,
-                validate_url=self._check_domain,
+                validate_url=validate,
+                body_hosts=body_hosts,
                 **kwargs,
             )
         except requests.RequestException as exc:
             raise NinovaError(f"ITU request failed safely: {exc}") from exc
 
     def get(self, url_or_path: str, *, stream: bool = False) -> requests.Response:
+        # Validated before anything is sent, including the login request.
+        url = self.ninova_url(url_or_path)
+        hosts = self._ninova_flow_hosts()
         self.ensure_logged_in()
-        url = normalize_url(url_or_path, self.base_url)
-        self._check_domain(url)
         self._throttle()
         response = self._safe_request(
-            "GET", url, timeout=DEFAULT_TIMEOUT, stream=stream
+            "GET", url, allowed_hosts=hosts, timeout=DEFAULT_TIMEOUT, stream=stream
         )
-        self._check_domain(response.url)
         is_login_page = (
             self._looks_like_login_page(response, html="")
             if stream
@@ -431,9 +534,17 @@ class NinovaClient:
             self.login(force=True)
             self._throttle()
             response = self._safe_request(
-                "GET", url, timeout=DEFAULT_TIMEOUT, stream=stream
+                "GET", url, allowed_hosts=hosts, timeout=DEFAULT_TIMEOUT, stream=stream
             )
-            self._check_domain(response.url)
+            if self._looks_like_login_page(response, html="" if stream else None):
+                response.close()
+                raise NinovaAuthError(
+                    "Ninova kept returning the login page after a fresh login. "
+                    "Call refresh_session and try again."
+                )
+        # A Ninova page must not be able to bounce an authenticated read to
+        # another host and have that host's answer returned as the result.
+        self._require_final_host(response, self.ninova_host)
         response.raise_for_status()
         return response
 
@@ -446,14 +557,31 @@ class NinovaClient:
 
     PORTAL_BASE_URL = "https://portal.itu.edu.tr"
 
+    def get_help_desk_html(self, url: str) -> tuple[str, requests.Response]:
+        """Fetch a help desk page with the SSO session.
+
+        Internal use only: callers build ``url`` from a validated ticket ID.
+        The first request must go to the help desk host itself.
+        """
+        self._check_host(url, {HELP_DESK_HOST})
+        self.ensure_logged_in()
+        self._throttle()
+        response = self._safe_request("GET", url, timeout=DEFAULT_TIMEOUT)
+        if self._looks_like_login_page(response):
+            self.login(force=True)
+            self._throttle()
+            response = self._safe_request("GET", url, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        return self._decode_response(response), response
+
     def get_portal_html(self, path: str = "/apps/default/") -> tuple[str, str]:
         """Fetch an İTÜ Portal page (uses the same SSO session as Ninova).
 
         Returns ``(html, final_url)``.
         """
-        self.ensure_logged_in()
         url = f"{self.PORTAL_BASE_URL}{path}" if path.startswith("/") else path
-        self._check_domain(url)
+        self._check_host(url, {PORTAL_HOST})
+        self.ensure_logged_in()
         self._throttle()
         response = self._safe_request("GET", url, timeout=DEFAULT_TIMEOUT)
         self._check_domain(response.url)
@@ -475,32 +603,30 @@ class NinovaClient:
         referer: str | None = None,
         timeout: int = 120,
     ) -> requests.Response:
-        """POST a multipart ASP.NET WebForms submission (assignment upload)."""
+        """POST a multipart ASP.NET WebForms submission (assignment upload).
+
+        The target must be on the Ninova host, and the body is never sent to
+        any other host, not even through a redirect.
+        """
+        url = self.ninova_url(url_or_path)
+        hosts = self._ninova_flow_hosts()
         self.ensure_logged_in()
-        url = normalize_url(url_or_path, self.base_url)
-        self._check_domain(url)
         headers = {"Referer": referer or url}
+        request_options: dict[str, Any] = {
+            "data": data,
+            "files": files or None,
+            "headers": headers,
+            "allowed_hosts": hosts,
+            "body_hosts": {self.ninova_host},
+            "timeout": timeout,
+        }
         self._throttle()
-        response = self._safe_request(
-            "POST",
-            url,
-            data=data,
-            files=files or None,
-            headers=headers,
-            timeout=timeout,
-        )
-        self._check_domain(response.url)
+        response = self._safe_request("POST", url, **request_options)
         if self._looks_like_login_page(response):
             self.login(force=True)
             self._throttle()
-            response = self._safe_request(
-                "POST",
-                url,
-                data=data,
-                files=files or None,
-                headers=headers,
-                timeout=timeout,
-            )
-            self._check_domain(response.url)
+            response = self._safe_request("POST", url, **request_options)
+        if not self._looks_like_login_page(response):
+            self._require_final_host(response, self.ninova_host)
         response.raise_for_status()
         return response

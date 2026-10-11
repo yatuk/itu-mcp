@@ -156,7 +156,7 @@ class HelpToolTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.app = NinovaMcpApp()
         self.app._client = Mock()
-        self.app._client.get_html.return_value = (detail_html(), SimpleNamespace(url=URL))
+        self.app._client.get_help_desk_html.return_value = (detail_html(), SimpleNamespace(url=URL))
         self.rows = [{'URL': URL, 'Title': 'Example document request', 'TicketStateName': 'Yeni'}]
         # The detail tool only reads IDs from the user's own Portal list.
         self.portal = patch.object(self.app, '_get_portal_json', return_value={'YardimInformationList': self.rows})
@@ -168,20 +168,20 @@ class HelpToolTests(unittest.TestCase):
         self.assertEqual(result['ticket']['id'], ID)
         self.assertTrue(result['untrusted_external_content'])
         self.assertEqual(self.app.get_help_ticket(ID), result)
-        self.app._client.get_html.assert_called_once_with(URL)
+        self.app._client.get_help_desk_html.assert_called_once_with(URL)
         self.assertFalse(self.app._client.post.called)
 
     def test_list_does_not_open_ticket_pages_by_default(self):
         result = self.app.obs_get_help_tickets()
         self.assertEqual(result['tickets'][0]['id'], ID)
         self.assertNotIn('detail_available', result['tickets'][0])
-        self.app._client.get_html.assert_not_called()
+        self.app._client.get_help_desk_html.assert_not_called()
 
     def test_ticket_outside_own_list_is_refused_without_reading_it(self):
         with self.assertRaises(NinovaError) as caught:
             self.app.get_help_ticket('7654321')
         self.assertIn('own ticket list', str(caught.exception))
-        self.app._client.get_html.assert_not_called()
+        self.app._client.get_help_desk_html.assert_not_called()
 
     def test_names_are_replaced_with_role_labels_unless_requested(self):
         messages = [
@@ -192,7 +192,7 @@ class HelpToolTests(unittest.TestCase):
         event = ('<tr><td><strong><i class="archive"></i></strong><td>Bilet <strong>Example Archivist</strong> '
                  'tarafından @07/27/2026 10:17:42 arşive alındı.</td></tr>')
         html = html.replace('<tbody><tr><td><strong>Example Officer', '<tbody>' + event + '<tr><td><strong>Example Officer')
-        self.app._client.get_html.return_value = (html, SimpleNamespace(url=URL))
+        self.app._client.get_help_desk_html.return_value = (html, SimpleNamespace(url=URL))
 
         masked = self.app.get_help_ticket(ID)['ticket']
         self.assertTrue(masked['names_redacted'])
@@ -206,7 +206,19 @@ class HelpToolTests(unittest.TestCase):
         self.assertIn('[requester]', masked['description'])
         self.assertIn('[staff]', masked['institution_reply'])
 
-        full = self.app.get_help_ticket(ID, include_sensitive=True)['ticket']
+        # The argument alone is written by the model and is not enough.
+        with patch.dict('os.environ', {'NINOVA_ALLOW_SENSITIVE_OUTPUT': ''}):
+            refused = self.app.get_help_ticket(ID, include_sensitive=True)
+        self.assertTrue(refused['ticket']['names_redacted'])
+        self.assertNotIn('example student', repr(refused['ticket']).casefold())
+        self.assertEqual(refused['sensitive_output'], 'disabled_by_operator')
+        self.assertIn('NINOVA_ALLOW_SENSITIVE_OUTPUT', refused['sensitive_output_note'])
+
+        with patch.dict('os.environ', {'NINOVA_ALLOW_SENSITIVE_OUTPUT': '1'}):
+            answer = self.app.get_help_ticket(ID, include_sensitive=True)
+            self.assertTrue(self.app.get_help_ticket(ID)['ticket']['names_redacted'])
+        self.assertNotIn('sensitive_output', answer)
+        full = answer['ticket']
         self.assertFalse(full['names_redacted'])
         self.assertEqual(full['messages'][0]['author'], 'Example Student')
         self.assertIn('Example Archivist', repr(full))
@@ -216,13 +228,13 @@ class HelpToolTests(unittest.TestCase):
         for identifier in ['../x', '1&foo=2', '', '-1', '１２３', '1' * 21, 'https://example.org']:
             with self.subTest(identifier=identifier), self.assertRaises(NinovaError):
                 self.app.get_help_ticket(identifier)
-        self.app._client.get_html.assert_not_called()
+        self.app._client.get_help_desk_html.assert_not_called()
 
     def test_login_redirect_and_wrong_ticket_are_errors(self):
-        self.app._client.get_html.return_value = (detail_html(), SimpleNamespace(url='https://girisv3.itu.edu.tr/Login.aspx'))
+        self.app._client.get_help_desk_html.return_value = (detail_html(), SimpleNamespace(url='https://girisv3.itu.edu.tr/Login.aspx'))
         with self.assertRaises(NinovaError):
             self.app.get_help_ticket(ID)
-        self.app._client.get_html.return_value = (detail_html(identifier='9'), SimpleNamespace(url=URL))
+        self.app._client.get_help_desk_html.return_value = (detail_html(identifier='9'), SimpleNamespace(url=URL))
         with self.assertRaises(NinovaError):
             self.app.get_help_ticket(ID)
 
@@ -235,7 +247,7 @@ class HelpToolTests(unittest.TestCase):
         self.assertEqual(result['tickets'][0]['unit'], 'Example Office')
         self.assertFalse(result['tickets'][0]['has_reply'])
         self.assertTrue(result['metadata_complete'])
-        self.app._client.get_html.assert_called_once_with(URL)
+        self.app._client.get_help_desk_html.assert_called_once_with(URL)
 
     def test_portal_only_mode_has_stable_null_fields_and_does_not_read_detail(self):
         with patch.object(self.app, '_get_portal_json', return_value={'YardimInformationList': self.rows}):
@@ -244,12 +256,12 @@ class HelpToolTests(unittest.TestCase):
         self.assertIsNone(item['unit'])
         self.assertIn('unit', item['missing_fields'])
         self.assertFalse(result['metadata_complete'])
-        self.app._client.get_html.assert_not_called()
+        self.app._client.get_help_desk_html.assert_not_called()
 
     def test_http_failure_is_reported_and_list_retains_metadata(self):
         from requests import HTTPError
 
-        self.app._client.get_html.side_effect = HTTPError('404')
+        self.app._client.get_help_desk_html.side_effect = HTTPError('404')
         with self.assertRaises(NinovaError):
             self.app.get_help_ticket(ID)
         with patch.object(self.app, '_get_portal_json', return_value={'YardimInformationList': self.rows}):
@@ -258,7 +270,7 @@ class HelpToolTests(unittest.TestCase):
         self.assertFalse(result['tickets'][0]['detail_available'])
 
     def test_detail_failure_retains_portal_fields(self):
-        self.app._client.get_html.side_effect = NinovaError('Unavailable')
+        self.app._client.get_help_desk_html.side_effect = NinovaError('Unavailable')
         with patch.object(self.app, '_get_portal_json', return_value={'YardimInformationList': self.rows}):
             result = self.app.obs_get_help_tickets(include_details=True)
         self.assertEqual(result['tickets'][0]['id'], ID)

@@ -13,6 +13,8 @@ from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
+from .http_security import reject_unsafe_url_text
+
 
 def make_soup(html: str) -> BeautifulSoup:
     """Parse HTML with lxml, falling back to the stdlib parser.
@@ -90,14 +92,26 @@ def normalize_lookup_text(value: str | None) -> str:
 
 
 def normalize_url(url_or_path: str, base_url: str) -> str:
+    """Turn a URL or a Ninova path into an absolute URL.
+
+    Raises ``UnsafeUrlError`` (a ``ValueError``) for text that URL parsers read
+    differently: a backslash, whitespace, a control character or user
+    information. ``urlparse`` and the HTTP library disagree about the host of
+    such a URL, so it is refused here instead of being passed on. This only
+    builds the URL; which host may be contacted is decided by the client.
+    """
     if not url_or_path:
         raise ValueError("url_or_path is required")
+    reject_unsafe_url_text(url_or_path, check_userinfo=False)
     parsed = urlparse(url_or_path)
     if parsed.scheme and parsed.netloc:
-        return url_or_path
-    if url_or_path.startswith("/"):
-        return f"{base_url.rstrip('/')}{url_or_path}"
-    return urljoin(f"{base_url.rstrip('/')}/", url_or_path)
+        absolute = url_or_path
+    elif url_or_path.startswith("/"):
+        absolute = f"{base_url.rstrip('/')}{url_or_path}"
+    else:
+        absolute = urljoin(f"{base_url.rstrip('/')}/", url_or_path)
+    reject_unsafe_url_text(absolute)
+    return absolute
 
 
 def is_internal_ninova_url(url: str, base_url: str) -> bool:
