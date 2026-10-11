@@ -132,23 +132,96 @@ def course_history(entry: dict[str, Any], *, limit_terms: int | None = None) -> 
     }
 
 
+# Fewer term records than this say nothing about when a course opens: the
+# archive misses whole branches in older terms, so one record is often just
+# the current term.
+MIN_SEASONALITY_TERMS = 3
+_REGULAR_SEASONS = ("Güz", "Bahar")
+_SUMMER = "Yaz"
+
+
 def seasonality(term_slugs: list[str]) -> dict[str, Any]:
     """Summarise which seasons a course actually opens in.
 
-    "Only ever offered in Güz, 6 out of 6 terms" is the answer to "can I take
-    this in the spring?", which OBS cannot give at all.
+    Güz and Bahar are the regular terms; Yaz (summer school) is counted apart
+    and never decides the pattern of the other two. ``pattern`` is one of:
+
+    - ``no_data``: no term record.
+    - ``insufficient_data``: fewer than ``MIN_SEASONALITY_TERMS`` records.
+    - ``every_regular_term``: both regular terms, neither with two thirds of
+      the regular-term records.
+    - ``mostly_one_season``: both regular terms, one with at least two thirds
+      of the regular-term records (``dominant_season``).
+    - ``single_season``: only one regular term (``only_regular_season``).
+    - ``summer_only``: only summer records.
+
+    ``only_season`` is set only when every record is in one season and there
+    are enough records to say so.
     """
     counts: dict[str, int] = {}
     for slug in term_slugs:
         counts[season_of(slug)] = counts.get(season_of(slug), 0) + 1
     total = sum(counts.values())
-    dominant = max(counts, key=lambda k: counts[k]) if counts else None
+    regular = {season: counts.get(season, 0) for season in _REGULAR_SEASONS}
+    regular_total = sum(regular.values())
+    summer = counts.get(_SUMMER, 0)
+    larger = max(regular, key=lambda season: regular[season])
+
+    pattern = "no_data"
+    dominant: str | None = None
+    only_regular: str | None = None
+    if 0 < total < MIN_SEASONALITY_TERMS:
+        pattern = "insufficient_data"
+    elif total and regular_total == 0:
+        pattern, dominant = ("summer_only", _SUMMER) if summer == total else ("insufficient_data", None)
+    elif total and min(regular.values()) == 0:
+        pattern, dominant, only_regular = "single_season", larger, larger
+    elif total and 3 * regular[larger] >= 2 * regular_total:
+        pattern, dominant = "mostly_one_season", larger
+    elif total:
+        pattern = "every_regular_term"
     return {
         "counts": counts,
         "total_terms": total,
+        "pattern": pattern,
         "dominant_season": dominant,
-        "only_season": dominant if dominant and counts.get(dominant) == total and total > 0 else None,
+        "only_season": dominant if dominant and counts.get(dominant) == total else None,
+        "only_regular_season": only_regular,
+        "regular_terms": regular_total,
+        "summer_terms": summer,
+        "minimum_terms_for_a_pattern": MIN_SEASONALITY_TERMS,
     }
+
+
+def seasonality_sentence(course_code: str, summary: dict[str, Any]) -> str:
+    """One Turkish sentence for a ``seasonality`` summary, no stronger than the data."""
+    counts = summary.get("counts") or {}
+    total = summary.get("total_terms") or 0
+    summer = summary.get("summer_terms") or 0
+    pattern = summary.get("pattern")
+    dominant = summary.get("dominant_season")
+    by_season = ", ".join(
+        f"{season} {counts[season]}" for season in (*_REGULAR_SEASONS, _SUMMER) if counts.get(season)
+    )
+    if pattern == "insufficient_data":
+        return (
+            f"{course_code} için arşivde yalnızca {total} dönem kaydı var ({by_season}); hangi dönemlerde "
+            "açıldığını söylemek için yetersiz veri. Bu, dersin yalnızca o dönemde açıldığı anlamına gelmez."
+        )
+    if pattern == "every_regular_term":
+        return f"{course_code} her iki normal dönemde de açılıyor (dönem kaydı: {by_season})."
+    if pattern == "mostly_one_season":
+        return f"{course_code} çoğunlukla {dominant} döneminde açılıyor (dönem kaydı: {by_season})."
+    if pattern == "single_season" and summer:
+        return (
+            f"{course_code} normal dönemlerden yalnızca {dominant} döneminde açılıyor "
+            f"({counts.get(dominant, 0)} dönem kaydı); ayrıca {summer} yaz döneminde açılmış."
+        )
+    if pattern == "single_season":
+        return f"{course_code} yalnızca {dominant} döneminde açılıyor ({total} dönem kaydı)."
+    if pattern == "summer_only":
+        return f"{course_code} arşivde yalnızca Yaz döneminde açılmış ({total} dönem kaydı)."
+    return f"{course_code} için arşivde dönem kaydı yok."
 
 
 def who_taught(entry: dict[str, Any], *, limit_terms: int | None = None) -> dict[str, Any]:
@@ -284,35 +357,48 @@ def fill_summary(quota: dict[str, Any], crn: str) -> dict[str, Any] | None:
     return None
 
 
+def _name_key(name: Any) -> str:
+    """Course name without case, accents, punctuation or spacing differences."""
+    from .parsing import normalize_lookup_text
+
+    folded = normalize_lookup_text(str(name or "")).replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", " ", folded).strip()
+
+
 def search_courses(codes: list[list[Any]], query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     """Search the archive's flat course index by code or name fragment.
 
     ``codes`` is ``history/codes.json``: ``[code, name, branch, term_count]``
     rows. Exact and prefix code matches rank above substring code matches,
     which rank above name matches, so a code lookup like "BLG 102" still wins
-    over an unrelated course whose name happens to contain "102".
+    over an unrelated course whose name happens to contain "102". Codes are
+    compared without spacing or case (``cen411e``), names without case,
+    accents or punctuation (``yazilim`` finds ``Yazılım``); a name also
+    matches when it holds every word of the query in another order.
     """
-    from .parsing import normalize_lookup_text
-
-    target = normalize_lookup_text(query)
-    if not target:
+    target_name = _name_key(query)
+    target_code = target_name.replace(" ", "")
+    if not target_code:
         return []
+    words = target_name.split()
 
     ranked: list[tuple[int, dict[str, Any]]] = []
     for row in codes:
-        if len(row) < 4:
+        if not isinstance(row, list) or len(row) < 4:
             continue
         code, name, branch, term_count = row[0], row[1], row[2], row[3]
-        norm_code = normalize_lookup_text(str(code))
-        norm_name = normalize_lookup_text(str(name))
-        if target == norm_code:
+        norm_code = _name_key(code).replace(" ", "")
+        norm_name = _name_key(name)
+        if target_code == norm_code:
             rank = 0
-        elif norm_code.startswith(target):
+        elif norm_code.startswith(target_code):
             rank = 1
-        elif target in norm_code:
+        elif target_code in norm_code:
             rank = 2
-        elif target in norm_name:
+        elif target_name in norm_name:
             rank = 3
+        elif len(words) > 1 and set(words) <= set(norm_name.split()):
+            rank = 4
         else:
             continue
         ranked.append((rank, {
@@ -324,6 +410,85 @@ def search_courses(codes: list[list[Any]], query: str, *, limit: int = 20) -> li
 
     ranked.sort(key=lambda item: (item[0], -(item[1]["term_count"] or 0)))
     return [item[1] for item in ranked[:limit]]
+
+
+_TURKISH_LETTERS = frozenset("çğıöşüÇĞİÖŞÜ")
+
+
+def course_search_hint(codes: Any, query: str, matches: list[Any]) -> dict[str, Any] | None:
+    """Why a name search found nothing, for a caller to attach to an empty result.
+
+    The index holds one name per course, in the language the course is taught
+    in: a code ending in ``E`` carries an English name only. Nothing is
+    translated here. Whether the query looks Turkish is read from the index
+    itself: a word that occurs in the names of Turkish-taught courses and in
+    no English-taught one.
+    """
+    words = _name_key(query).split()
+    if matches or not words:
+        return None
+    turkish_words: set[str] = set()
+    english_words: set[str] = set()
+    for row in codes if isinstance(codes, list) else []:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        match = COURSE_CODE_PATTERN.fullmatch(str(row[0]))
+        english = bool(match and match.group(3).upper().startswith("E"))
+        (english_words if english else turkish_words).update(_name_key(row[1]).split())
+    looks_turkish = bool(_TURKISH_LETTERS & set(str(query))) or any(
+        word in turkish_words and word not in english_words for word in words
+    )
+    hint = (
+        "Eşleşme yok. Arşiv dizini her ders için tek bir ad tutuyor: dersin öğretim dilindeki adı. "
+        "Kodu E ile biten (İngilizce verilen) dersler yalnızca İngilizce adıyla kayıtlı"
+        + ("; sorgu Türkçe görünüyor. Dersin İngilizce adıyla" if looks_turkish
+           else ", diğerleri Türkçe adıyla. Adın diğer dildeki karşılığıyla")
+        + " (örn. 'Software Engineering') ya da ders koduyla (örn. 'BLG 411E') yeniden arayın."
+    )
+    return {"hint": hint, "query_looks_turkish": looks_turkish}
+
+
+MAX_OTHER_BRANCH_CODES = 5
+
+
+def same_course_other_branches(
+    course_code: str, course_name: Any, codes: Any, *, limit: int = MAX_OTHER_BRANCH_CODES,
+) -> list[dict[str, Any]]:
+    """Index rows that may be the same course under another department code.
+
+    A candidate has the same course number and suffix, another branch code and
+    the same normalized name (``CEN 411E`` and ``BLG 411E``, both "Software
+    Engineering"). ``codes`` is ``history/codes.json``. The index holds a term
+    count per code but no term list, so a candidate carries no term range.
+    Candidates are ranked by term count and capped; nothing is merged.
+    """
+    own = COURSE_CODE_PATTERN.fullmatch(course_code or "")
+    name = _name_key(course_name)
+    if not own or not name:
+        return []
+    branch = own.group(1).upper()
+    number = (own.group(2) + own.group(3)).upper()
+    found: dict[str, dict[str, Any]] = {}
+    for row in codes if isinstance(codes, list) else []:
+        if not isinstance(row, list) or len(row) < 4:
+            continue
+        other = COURSE_CODE_PATTERN.fullmatch(str(row[0]))
+        if not other or other.group(1).upper() == branch:
+            continue
+        if (other.group(2) + other.group(3)).upper() != number or _name_key(row[1]) != name:
+            continue
+        found.setdefault(str(row[0]), {
+            "course_code": str(row[0]),
+            "course_name": row[1],
+            "branch": row[2],
+            "term_count": row[3],
+            "evidence": {"same_number": True, "same_name": True},
+        })
+    ranked = sorted(
+        found.values(),
+        key=lambda item: (-(item["term_count"] if _is_count(item["term_count"]) else 0), item["course_code"]),
+    )
+    return ranked[:max(0, limit)]
 
 
 def diff_term_offerings(
@@ -377,21 +542,7 @@ def recommend_course_timing(
     separately into the sentence a student actually wants: which term to plan
     around, and who is likely to teach it.
     """
-    parts: list[str] = []
-    total = seasonality_summary.get("total_terms") or 0
-    only = seasonality_summary.get("only_season")
-    dominant = seasonality_summary.get("dominant_season")
-    counts = seasonality_summary.get("counts") or {}
-
-    if only and total > 0:
-        parts.append(f"{course_code} yalnızca {only} döneminde açılıyor ({total} dönem kaydı).")
-    elif dominant and total > 0:
-        parts.append(
-            f"{course_code} çoğunlukla {dominant} döneminde açılıyor "
-            f"({counts.get(dominant, 0)}/{total} dönem)."
-        )
-    else:
-        parts.append(f"{course_code} için arşivde mevsim eğilimi görülmüyor.")
+    parts: list[str] = [seasonality_sentence(course_code, seasonality_summary)]
 
     if top_instructors:
         top = top_instructors[0]

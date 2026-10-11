@@ -134,7 +134,7 @@ class GradeSemanticsTests(unittest.TestCase):
     def test_conflicting_or_unrecognized_projection_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Conflicting"):
             calculate_gpa([], projected_grades={"BLG101E": "AA", "BLG 101E": "BB"})
-        with self.assertRaisesRegex(ValueError, "recognized"):
+        with self.assertRaisesRegex(ValueError, "Unknown letter grade 'AA.' for projected_grades.'BLG101E'"):
             calculate_gpa([], projected_grades={"BLG101E": "AA+"})
 
 

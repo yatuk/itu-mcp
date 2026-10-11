@@ -130,12 +130,23 @@ def _grade_argument(value: Any, where: str) -> str:
     return grade
 
 
+def _target_argument(value: Any) -> float | None:
+    if value is None:
+        return None
+    target = None if isinstance(value, (bool, str)) or not isinstance(value, (int, float)) else float(value)
+    if target is None or not math.isfinite(target) or not 0.0 <= target <= 4.0:
+        raise ValueError("target_gpa must be a number between 0.00 and 4.00, e.g. 2.5.")
+    return target
+
+
 def normalize_arguments(
     projected_grades: Any = None,
     default_grade: Any = None,
     extra_courses: Any = None,
+    target_gpa: Any = None,
 ) -> dict[str, Any]:
     """Validate the what-if arguments. Raises ``ValueError`` with the valid values."""
+    target = _target_argument(target_gpa)
     if projected_grades is None:
         projected_grades = {}
     if not isinstance(projected_grades, dict):
@@ -183,7 +194,7 @@ def normalize_arguments(
             "credit": credit,
             "replaces": course_key(replaces) if replaces else None,
         })
-    return {"grades": grades, "default": default, "extras": extras}
+    return {"grades": grades, "default": default, "extras": extras, "target": target}
 
 
 # ------------------------------------------------------------------ parsing
@@ -676,6 +687,68 @@ def _assign_grades(
     return grades, extras, report
 
 
+# One grade per coefficient, lowest first: FF and VF weigh the same.
+_UNIFORM_SCALE = tuple(sorted(
+    {LETTER_TO_GRADE[grade]: grade for grade in reversed(GRADED)}.values(),
+    key=lambda grade: LETTER_TO_GRADE[grade] or 0.0,
+))
+
+
+def uniform_grade_for_target(
+    target: float,
+    attempts: list[_Attempt], groups: dict[str, str], courses: list[dict[str, Any]],
+    fixed: dict[str, str], extras: list[dict[str, Any]],
+    plan_credits: dict[str, set[float]], term: str | None,
+) -> dict[str, Any]:
+    """The lowest single grade that reaches ``target`` in the registered courses.
+
+    ``fixed`` holds the courses whose grade the caller named; every other
+    registered course gets the same grade. Each step is a full projection, so
+    retakes and equivalences count exactly as they do in the projection.
+    """
+    varied = [course for course in courses if course["key"] not in fixed]
+    result: dict[str, Any] = {
+        "target_gpa": target, "status": "no_courses_to_vary", "minimum_uniform_grade": None,
+        "gpa_with_minimum_grade": None, "maximum_reachable_gpa": None,
+        "varied_courses": [course["code"] for course in varied],
+    }
+    if fixed:
+        by_key = {course["key"]: course["code"] for course in courses}
+        result["fixed_grades"] = {by_key[key]: grade for key, grade in fixed.items() if key in by_key}
+
+    def project(grade: str | None) -> dict[str, Any]:
+        grades = dict(fixed)
+        if grade is not None:
+            grades.update({course["key"]: grade for course in varied})
+        return _project(attempts, groups, courses, grades, extras, plan_credits, term)
+
+    if not varied:
+        result["maximum_reachable_gpa"] = _round2(_gpa(*project(None)["projected"]))
+        result["note"] = "Every registered course already has a named grade, so no grade is left to choose."
+        return result
+
+    best = project(_UNIFORM_SCALE[-1])
+    varied_keys = {course["code"] for course in varied}
+    result["maximum_reachable_gpa"] = _round2(_gpa(*best["projected"]))
+    result["retakes_among_varied"] = sum(
+        1 for row in best["rows"] if row["code"] in varied_keys and str(row.get("effect", "")).startswith("replaces")
+    )
+    result["status"] = "unreachable"
+    for grade in _UNIFORM_SCALE:
+        gpa = _gpa(*(best if grade == _UNIFORM_SCALE[-1] else project(grade))["projected"])
+        if gpa is not None and gpa >= target - 1e-9:
+            result.update(status="reachable", minimum_uniform_grade=grade, gpa_with_minimum_grade=_round2(gpa))
+            break
+    if best["unresolved"]:
+        result["incomplete"] = True
+    top = _UNIFORM_SCALE[-1]
+    result["note"] = (
+        f"Even {top} in every varied course stays below the target." if result["status"] == "unreachable"
+        else "The same grade in every varied course; a mix of higher and lower grades can reach the target too."
+    )
+    return result
+
+
 def simulate_cumulative_gpa(
     graduation: Any,
     registration_status: Any,
@@ -685,14 +758,17 @@ def simulate_cumulative_gpa(
     projected_grades: Any = None,
     default_grade: Any = None,
     extra_courses: Any = None,
+    target_gpa: Any = None,
 ) -> dict[str, Any]:
     """Project the cumulative GPA after ``term_code`` from the student's own record.
 
     ``graduation`` is the MezuniyetimeNeKaldi payload, ``registration_status``
     the KayitDurumu payload and ``registered`` the registered courses of the
-    projected term. Raises ``ValueError`` for an unusable argument.
+    projected term. With ``target_gpa`` the result also carries ``target``:
+    the uniform grade the registered courses need to reach it. Raises
+    ``ValueError`` for an unusable argument.
     """
-    arguments = normalize_arguments(projected_grades, default_grade, extra_courses)
+    arguments = normalize_arguments(projected_grades, default_grade, extra_courses, target_gpa)
     term = str(term_code).strip() if term_code is not None and not isinstance(term_code, bool) else None
     info = _graduation_info(graduation)
     plan = info.get("dersPlaniVM")
@@ -749,6 +825,13 @@ def simulate_cumulative_gpa(
     courses = _read_registered(registered)
     grades, extras, unmatched = _assign_grades(courses, arguments)
     outcome = _project(attempts, groups, courses, grades, extras, plan_credits, term)
+    target = None
+    if arguments["target"] is not None:
+        # default_grade fills the projection; the target search chooses that grade itself.
+        fixed = _assign_grades(courses, {**arguments, "default": None})[0]
+        target = uniform_grade_for_target(
+            arguments["target"], attempts, groups, courses, fixed, extras, plan_credits, term,
+        )
     equivalences.extend(outcome["equivalences"])
     warnings.extend(outcome["warnings"])
 
@@ -804,7 +887,7 @@ def simulate_cumulative_gpa(
         )
     if not courses:
         warnings.append("no_registered_courses: the projected term has no registered courses.")
-    elif outcome["not_projected"] and not outcome["rows"] and not outcome["unresolved"]:
+    elif outcome["not_projected"] and not outcome["rows"] and not outcome["unresolved"] and target is None:
         warnings.append(
             "no_grades_given: no registered course was given a grade; pass default_grade or projected_grades."
         )
@@ -850,6 +933,8 @@ def simulate_cumulative_gpa(
         "warnings": warnings,
         "note": NOTE,
     }
+    if target is not None:
+        result["target"] = target
     if outcome["extra_rows"]:
         result["extra_courses"] = outcome["extra_rows"]
     if rejected:

@@ -16,8 +16,14 @@ class ArchiveHistoryToolsMixin:
 
     archive: ItuArchiveClient
 
-    def _archive_course_entry(self, course_code: str) -> tuple[str, dict[str, Any]]:
-        """Resolve a course code to its archive history entry."""
+    def _archive_course_entry(
+        self, course_code: str, course_name: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve a course code to its archive history entry.
+
+        ``course_name``, when the caller knows it, lets a missing code be
+        matched to the same course under another department code.
+        """
         from .archive import split_course_code
 
         try:
@@ -28,11 +34,74 @@ class ArchiveHistoryToolsMixin:
         history = self.archive.get_course_history(branch)
         entry = history.get(canonical)
         if entry is None:
-            raise ItuArchiveError(
-                f"{canonical} arşivde bulunamadı. Arşiv 2016-2017 Yaz'dan itibaren "
-                "açılmış şubeleri kapsıyor; hiç açılmamış dersler yer almaz."
-            )
+            raise ItuArchiveError(self._archive_missing_course_message(canonical, history, course_name))
         return canonical, entry
+
+    def _archive_missing_course_message(
+        self, canonical: str, history: dict[str, Any], course_name: str | None = None,
+    ) -> str:
+        """Say that a code is absent without implying the course never ran.
+
+        A course whose department code changed, or that is recorded under its
+        Turkish or English sibling, exists in the archive under another code.
+        Those codes are named when the index or the branch file shows them.
+        """
+        from .archive import related_course_codes, same_course_other_branches
+
+        message = (
+            f"{canonical} bu kodla arşivde bulunamadı. Arşiv 2016-2017 Yaz'dan itibaren "
+            "açılmış şubeleri kapsıyor."
+        )
+        siblings = related_course_codes(canonical, history.keys())
+        try:
+            codes = self.archive.get_course_codes()
+        except ItuArchiveError:
+            codes = []
+        # Without a name nothing ties another branch's code to this course:
+        # the same number alone matches unrelated courses.
+        own_name = course_name or next(
+            (row[1] for row in codes
+             if isinstance(row, list) and len(row) >= 2 and str(row[0]).strip().upper() == canonical),
+            None,
+        )
+        others = same_course_other_branches(canonical, own_name, codes) if own_name else []
+        if not siblings and not others:
+            return message + (
+                " Hiç açılmamış ya da yalnızca başka bir kodla açılmış dersler bu kod altında "
+                "yer almaz; archive_search_courses ile dersin adından arayın."
+            )
+        message += " Bu, dersin hiç açılmadığı anlamına gelmez; ders başka bir kodla kayıtlı olabilir."
+        if others:
+            listed = ", ".join(
+                f"{item['course_code']} ({item['course_name']}, {item['term_count']} dönem)" for item in others
+            )
+            message += f" Başka bölüm kodunda aynı numara ve aynı ad: {listed}."
+        if siblings:
+            message += f" Aynı branşta aynı numara: {', '.join(siblings)}."
+        return message + " Aracı bu kodlardan biriyle yeniden çağırın."
+
+    def _attach_other_branch_codes(self, result: dict[str, Any], canonical: str, name: Any) -> None:
+        """Add the codes that may be the same course under another department code.
+
+        One read of the course index, cached by the client; no request per
+        candidate. A failed read leaves the result as it is.
+        """
+        from .archive import same_course_other_branches
+
+        try:
+            candidates = same_course_other_branches(canonical, name, self.archive.get_course_codes())
+        except ItuArchiveError:
+            return
+        if not candidates:
+            return
+        result["same_course_other_codes"] = candidates
+        result["same_course_other_codes_note"] = (
+            f"{', '.join(item['course_code'] for item in candidates)}: başka bölüm kodunda aynı numara ve "
+            "aynı adla kayıtlı. Bölüm kodu değişmiş aynı ders olabilir (term_count değeri büyük olan "
+            "çoğunlukla eski koddur) ya da başka bölümün paralel dersi olabilir. Bu sonuca katılmadı; "
+            "o kodun geçmişi için aracı o kodla yeniden çağırın. Dizin dönem aralığını tutmuyor, "
+            "yalnızca dönem sayısını veriyor."
+        )
 
     def archive_list_terms(self) -> dict[str, Any]:
         """List every term the archive holds, with coverage and gaps."""
@@ -63,6 +132,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = course_history(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
+        self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
 
@@ -77,6 +147,7 @@ class ArchiveHistoryToolsMixin:
         canonical, entry = self._archive_course_entry(course_code)
         result = who_taught(entry, limit_terms=limit_terms)
         result["course_code"] = canonical
+        self._attach_other_branch_codes(result, canonical, entry.get("name"))
         result["untrusted_external_content"] = True
         return result
 
@@ -281,7 +352,7 @@ class ArchiveHistoryToolsMixin:
             for section in offering["sections"]
             if section["fill_ratio"] is not None
         ]
-        return {
+        result = {
             "course_code": canonical,
             "course_name": history["course_name"],
             "terms_offered": history["terms_offered"],
@@ -291,8 +362,10 @@ class ArchiveHistoryToolsMixin:
             "max_fill_ratio": max(ratios) if ratios else None,
             "always_fills": bool(ratios) and all(ratio >= 1.0 for ratio in ratios),
             "offerings": history["offerings"],
-            "untrusted_external_content": True,
         }
+        self._attach_other_branch_codes(result, canonical, entry.get("name"))
+        result["untrusted_external_content"] = True
+        return result
 
     def archive_search_courses(self, query: str, limit: int = 20) -> dict[str, Any]:
         """Search the archive's full course index by code or name fragment.
@@ -302,16 +375,19 @@ class ArchiveHistoryToolsMixin:
         yöntemler" resolves to a code even when the course isn't offered right
         now — ``archive_course_history`` needs the exact code this returns.
         """
-        from .archive import search_courses
+        from .archive import course_search_hint, search_courses
 
         codes = self.archive.get_course_codes()
         matches = search_courses(codes, query, limit=limit)
-        return {
+        result: dict[str, Any] = {
             "query": query,
             "match_count": len(matches),
             "matches": matches,
-            "untrusted_external_content": True,
         }
+        # A bare zero reads as "no such course"; say what the index can match.
+        result.update(course_search_hint(codes, query, matches) or {})
+        result["untrusted_external_content"] = True
+        return result
 
     def archive_list_branches(self, term: str) -> dict[str, Any]:
         """List every branch present in one term's archive dump, with section counts.
