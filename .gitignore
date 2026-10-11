@@ -19,3 +19,4 @@ tmp_*.json
 *.zip
 *.mcpb
 .claude/worktrees/
+videos/

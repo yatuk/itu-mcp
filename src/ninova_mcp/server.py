@@ -74,7 +74,7 @@ from .tracking import (
 from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "0.7.2"
+SERVER_VERSION = "1.0.0"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
