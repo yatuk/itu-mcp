@@ -113,9 +113,10 @@ def research_course(course: str) -> str:
     return (
         f"\"{query}\" dersini arşivden araştır.\n\n"
         f"1. Elinde tam ders kodu yoksa önce `archive_search_courses(query="
-        f"\"{query}\")` ile kodu bul. Arşiv araması tüm dönemleri tarar; "
-        "`obs_search_courses` yalnızca aktif dönemi görür, bu iş için onu "
-        "kullanma.\n"
+        f"\"{query}\")` ile kodu bul. Arşiv araması tüm dönemleri tarar ve "
+        "dersin kaç dönemde görüldüğünü verir. `obs_search_courses` tam ders "
+        "kodunu OBS kataloğunda doğrular, ad ya da kısmi kod aramasında aynı "
+        "arşive düşer; iki araç da dersin bu dönem açıldığını göstermez.\n"
         "2. Kod netleşince sırayla: `archive_course_history` (hangi dönemlerde "
         "açılmış, kaç şube), `archive_who_taught` (kim, kaç dönem, ortalama "
         "doluluk), `archive_fill_rate` (kontenjan dolma eğilimi).\n"

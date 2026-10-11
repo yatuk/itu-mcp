@@ -66,7 +66,8 @@ class PublicParserTests(unittest.TestCase):
         self.assertEqual(plans["plans"][0]["plan_id"], 2340)
         detail = extract_degree_plan_detail(html, "https://obs.itu.edu.tr/public/DersPlan/DersPlanDetay/2340")
         self.assertEqual(detail["course_count"], 1)
-        self.assertEqual(detail["courses"][0]["credit"], 1.5)
+        self.assertEqual(detail["semesters"][0]["courses"][0]["credit"], 1.5)
+        self.assertNotIn("courses", detail)
 
     def test_library_parsers(self) -> None:
         html = fixture("library_pages.html")

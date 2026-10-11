@@ -102,12 +102,14 @@ class SportsFacilityHoursTests(unittest.TestCase):
         self.assertNotIn("parse_warning", result)
         pool = client.get_sports_facility_hours("yüzme")["facilities"]
         self.assertEqual(pool, [{
-            "facility": "Olimpik Yüzme Havuzu (Pazartesi Kapalı)",
-            "weekday": {"opens": "08:00", "closes": "20:00"},
-            "weekend": {"opens": "08:00", "closes": "20:00"},
+            "facility": "Olimpik Yüzme Havuzu",
+            "weekday": {"opens": "08:00", "closes": "20:00", "closed": False},
+            "weekend": {"opens": "08:00", "closes": "20:00", "closed": False},
+            "closed_days": ["Pazartesi"],
+            "note": "Pazartesi Kapalı",
         }])
         closed = client.get_sports_facility_hours("gümüşsuyu")["facilities"][0]
-        self.assertEqual(closed["weekend"], {"opens": "Kapalı", "closes": "Kapalı"})
+        self.assertEqual(closed["weekend"], {"opens": None, "closes": None, "closed": True})
 
 
 if __name__ == "__main__":

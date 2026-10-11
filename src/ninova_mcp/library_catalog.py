@@ -37,6 +37,51 @@ def _first(node: Any, field: str) -> str | None:
     return next(iter(_values(node, field)), None)
 
 
+_ISBN_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])[0-9][0-9-]{8,15}[0-9Xx](?![0-9A-Za-z])")
+
+
+def _isbns(node: Any) -> list[str]:
+    """ISBN values, one per entry.
+
+    The catalog prints several ISBNs of one record in a single field
+    ("9780070131439 9780262031417") and may add a qualifier such as
+    "(pbk.)". Each 10 or 13 digit number becomes its own entry; a field with
+    no recognizable ISBN is passed on unchanged.
+    """
+    found: list[str] = []
+    for value in _values(node, "ISBN"):
+        tokens = [
+            token for token in _ISBN_TOKEN_RE.findall(value)
+            if len(token.replace("-", "")) in (10, 13)
+        ]
+        found.extend(tokens or [value])
+    return list(dict.fromkeys(found))
+
+
+# Author fields of a Sirsi record, in the order they are trusted as "the
+# author". ADDED_AUTHOR (editors, co-authors) is only a fallback: a record
+# catalogued under its title or under a corporate body has no personal author.
+_PRIMARY_AUTHOR_FIELDS = ("PERSONAL_AUTHOR", "INITIAL_AUTHOR_SRCH", "AUTHOR")
+
+
+def _authors(node: Any) -> tuple[list[str], str | None, list[str]]:
+    """Return ``(authors, source field, added authors)`` for a record page."""
+    added = _values(node, "ADDED_AUTHOR")
+    other_fields = sorted({
+        token
+        for element in node.select(".displayElementText")
+        for token in element.get("class") or []
+        if "AUTHOR" in token and token not in (*_PRIMARY_AUTHOR_FIELDS, "ADDED_AUTHOR")
+    })
+    for field in (*_PRIMARY_AUTHOR_FIELDS, *other_fields):
+        values = _values(node, field)
+        if values:
+            return values, field.lower(), added
+    if added:
+        return added, "added_author", added
+    return [], None, added
+
+
 def _identity(node: Any) -> str | None:
     ids = set()
     for value in node.select(".DOC_ID_value, input.results_chkbox"):
@@ -53,10 +98,13 @@ def parse_record(html: str, page_url: str) -> dict[str, Any]:
     record_id = _identity(soup)
     if not title or not record_id:
         raise ValueError("Sirsi catalog record identity/title was not found; the response is not a verified item.")
+    authors, author_source, added_authors = _authors(soup)
     fields = {
         "title": title,
-        "author": _values(soup, "PERSONAL_AUTHOR"),
-        "isbn": _values(soup, "ISBN"),
+        "author": authors,
+        "author_source": author_source,
+        "added_authors": added_authors,
+        "isbn": _isbns(soup),
         "edition": _first(soup, "EDITION"),
         "publication": _first(soup, "PUBLICATION_INFO"),
         "physical_description": _first(soup, "PHYSICAL_DESC"),
@@ -122,7 +170,7 @@ def parse_search(html: str, page_url: str) -> dict[str, Any]:
         seen.add(record_id)
         records.append({
             "record_id": record_id, "title": title, "url": record_url(record_id),
-            "author": _values(cell, "INITIAL_AUTHOR_SRCH"), "isbn": _values(cell, "ISBN"),
+            "author": _values(cell, "INITIAL_AUTHOR_SRCH"), "isbn": _isbns(cell),
             "call_number": _first(cell, "PREFERRED_CALLNUMBER"),
         })
     total_node = soup.select_one(".resultsToolbar_num_results")

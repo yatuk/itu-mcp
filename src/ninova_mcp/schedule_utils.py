@@ -1,7 +1,9 @@
-"""Ders programı zaman çakışma kontrolü yardımcıları."""
+"""Ders programı gün/saat çözümleme ve zaman çakışma kontrolü yardımcıları."""
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Any
 
 # Gün adı → haftalık indeks (Pazartesi=0)
@@ -17,6 +19,88 @@ DAY_ORDER: dict[str, int] = {
     "cumartesi": 5,
     "pazar": 6,
 }
+
+# Folded Turkish key (what ``normalize_day`` returns) → name as OBS writes it.
+DAY_DISPLAY_NAMES: dict[str, str] = {
+    "pazartesi": "Pazartesi",
+    "sali": "Salı",
+    "carsamba": "Çarşamba",
+    "persembe": "Perşembe",
+    "cuma": "Cuma",
+    "cumartesi": "Cumartesi",
+    "pazar": "Pazar",
+}
+
+_DAY_ALIASES: dict[str, str] = {
+    "pazartesi": "pazartesi", "pzt": "pazartesi", "pts": "pazartesi", "pzts": "pazartesi",
+    "monday": "pazartesi", "mon": "pazartesi",
+    "sali": "sali", "sal": "sali", "tuesday": "sali", "tue": "sali", "tues": "sali",
+    "carsamba": "carsamba", "car": "carsamba", "cars": "carsamba", "crs": "carsamba",
+    "wednesday": "carsamba", "wed": "carsamba",
+    "persembe": "persembe", "per": "persembe", "pers": "persembe", "prs": "persembe",
+    "thursday": "persembe", "thu": "persembe", "thur": "persembe", "thurs": "persembe",
+    "cuma": "cuma", "cum": "cuma", "friday": "cuma", "fri": "cuma",
+    "cumartesi": "cumartesi", "cmt": "cumartesi", "cts": "cumartesi",
+    "saturday": "cumartesi", "sat": "cumartesi",
+    "pazar": "pazar", "paz": "pazar", "sunday": "pazar", "sun": "pazar",
+}
+
+DAY_INPUT_HELP = (
+    "Pazartesi, Salı, Çarşamba, Perşembe, Cuma, Cumartesi, Pazar; "
+    "kısaltmalar Pzt, Sal, Çar, Per, Cum, Cmt, Paz; "
+    "İngilizce Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday (Mon, Tue, ...)"
+)
+TIME_INPUT_HELP = "HH:MM, örneğin 10:00, 9:45, 10.00, 0945 veya yalnızca saat olarak 10"
+
+_TIME_POINT_PATTERN = re.compile(r"(\d{1,2})(?:[:.](\d{2}))?|(\d{1,2})(\d{2})")
+
+
+def _fold(value: Any) -> str:
+    """Case and accent insensitive key; kept local so this module imports nothing."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+    text = text.translate(str.maketrans({"ı": "i", "İ": "i"}))
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
+def normalize_day(day: Any) -> str:
+    """Resolve a Turkish or English weekday name or abbreviation.
+
+    Returns the folded Turkish name (``"sali"``, ``"carsamba"``), which is a
+    key of ``DAY_ORDER`` and ``DAY_DISPLAY_NAMES``. Case, Turkish accents and
+    a trailing dot are ignored.
+    """
+    key = _DAY_ALIASES.get(_fold(day).strip(". "))
+    if key is None:
+        raise ValueError(f"Gün çözümlenemedi: {day!r}. Geçerli değerler: {DAY_INPUT_HELP}.")
+    return key
+
+
+def day_key(day: Any) -> str | None:
+    """``normalize_day`` for data read from a page: unknown values give None."""
+    try:
+        return normalize_day(day)
+    except ValueError:
+        return None
+
+
+def parse_time_point(value: Any) -> int:
+    """Parse a time of day such as ``10``, ``10.00``, ``9:45`` or ``0945`` into minutes."""
+    raw = str(value if value is not None else "").strip()
+    match = _TIME_POINT_PATTERN.fullmatch(raw)
+    if match is None:
+        raise ValueError(f"Saat çözümlenemedi: {value!r}. Kabul edilen biçim: {TIME_INPUT_HELP}.")
+    hour = int(match.group(1) or match.group(3))
+    minute = int(match.group(2) or match.group(4) or 0)
+    if hour > 23 or minute > 59:
+        raise ValueError(
+            f"Geçersiz saat: {value!r}. Saat 0-23, dakika 0-59 olmalı. Kabul edilen biçim: {TIME_INPUT_HELP}."
+        )
+    return hour * 60 + minute
+
+
+def format_time_point(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def parse_time_range(time_str: str) -> tuple[int, int] | None:
@@ -34,7 +118,10 @@ def parse_time_range(time_str: str) -> tuple[int, int] | None:
             return int(h) * 60 + int(m)
         return 0
 
-    return (_to_min(parts[0]), _to_min(parts[1]))
+    try:
+        return (_to_min(parts[0]), _to_min(parts[1]))
+    except ValueError:
+        return None
 
 
 def check_conflicts(
@@ -47,23 +134,29 @@ def check_conflicts(
     - ``code`` (str)
     - ``sessions``: list of ``{day, time}`` dicts
 
-    Returns conflicts as pairs with overlapping session details.
+    Returns conflicts as pairs with overlapping session details. A course
+    with no usable day and time cannot conflict; it is listed in
+    ``unscheduled_crns`` so that "no conflict" is not read as "checked".
     """
     conflicts: list[dict[str, Any]] = []
     # Build flat list of (day_index, start_min, end_min, crn, code, session)
     slots: list[tuple[int, int, int, str, str, dict[str, Any]]] = []
+    unscheduled: list[str] = []
     for course in courses:
         crn = str(course.get("crn", ""))
         code = course.get("code", "?")
+        usable = 0
         for session in course.get("sessions") or []:
-            day_name = (session.get("day") or "").strip().lower()
-            day_idx = DAY_ORDER.get(day_name)
-            if day_idx is None:
+            key = day_key(session.get("day"))
+            if key is None:
                 continue
             time_range = parse_time_range(session.get("time") or "")
             if time_range is None:
                 continue
-            slots.append((day_idx, time_range[0], time_range[1], crn, code, session))
+            slots.append((DAY_ORDER[key], time_range[0], time_range[1], crn, code, session))
+            usable += 1
+        if not usable:
+            unscheduled.append(crn)
 
     # Compare all pairs
     for i in range(len(slots)):
@@ -72,9 +165,9 @@ def check_conflicts(
             d2, s2, e2, crn2, code2, sess2 = slots[j]
 
             if crn1 == crn2:
-                continue  # Same course, different sessions — not a conflict
+                continue  # Same course, different sessions: not a conflict
             if d1 != d2:
-                continue  # Different days — no conflict
+                continue  # Different days: no conflict
 
             # Overlap check
             if s1 < e2 and s2 < e1:
@@ -83,7 +176,7 @@ def check_conflicts(
                     "course_b": {"crn": crn2, "code": code2, "day": sess2.get("day"), "time": sess2.get("time"), "room": sess2.get("room")},
                 })
 
-    return {
+    result: dict[str, Any] = {
         "course_count": len(courses),
         "conflict_count": len(conflicts),
         "conflicts": conflicts,
@@ -92,4 +185,10 @@ def check_conflicts(
             "Çakışma bulunamadı." if not conflicts
             else f"{len(conflicts)} çakışma tespit edildi."
         ),
+        "unscheduled_crns": unscheduled,
     }
+    if unscheduled:
+        result["message"] += (
+            f" {len(unscheduled)} dersin gün/saat bilgisi programda yok; bu dersler karşılaştırılamadı."
+        )
+    return result

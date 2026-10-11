@@ -151,30 +151,87 @@ def estimate_method2(score: float, mean: float, std: float) -> dict[str, Any]:
     return {"harf_notu": grade, "sinir_degerleri": bounds}
 
 
-def estimate_relative_grade(class_scores: list[float], my_score: float) -> dict[str, Any]:
+# Bu sayının altındaki bir sınıfta ortalama ve standart sapma birkaç puana
+# bağlıdır; T-skoru ve ortalama ± k·STD sınırları anlamlı bir harf vermez.
+# Yönetmelik metni bu modülde yer almadığı için eşik yönetmelikten alıntı
+# değildir: aracın kendi alt sınırıdır ve sonuçta böyle belirtilir.
+MIN_CLASS_SIZE = 10
+
+
+def _validated_score(value: Any, label: str) -> float:
+    """Puanın sonlu ve 0-100 aralığında bir sayı olduğunu doğrular."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} bir sayı olmalı; gelen değer: {value!r}.")
+    if not math.isfinite(value):
+        raise ValueError(f"{label} sonlu bir sayı olmalı; gelen değer: {value!r}.")
+    if not 0 <= value <= 100:
+        raise ValueError(f"{label} 0-100 aralığında olmalı; gelen değer: {value!r}.")
+    return float(value)
+
+
+def estimate_relative_grade(
+    class_scores: list[float],
+    my_score: float,
+    my_score_included: bool | None = None,
+) -> dict[str, Any]:
     """Sınıf puanlarından ve kendi puanından iki yönteme göre harf notu tahmini.
 
-    ``my_score`` ``class_scores`` içinde yoksa otomatik eklenir (x̄/STD hesabına
-    dahil olması gerekir) ve bu ``note``'ta belirtilir. VF alan öğrenciler bu
-    hesaba hiç girmemeli — çağıran, ``class_scores``'a yalnızca bağıl
-    değerlendirmeye katılan öğrencilerin puanlarını koymalıdır; bu, yalnızca
-    puanlardan tespit edilemeyen bir girdi kısıtıdır.
+    Bütün puanlar sonlu ve 0-100 aralığında olmalıdır; aksi hâlde hangi değerin
+    hatalı olduğunu söyleyen bir ``ValueError`` yükselir.
+
+    ``my_score_included`` kendi puanının ``class_scores`` içinde olup olmadığını
+    söyler:
+
+    - ``True``: listede zaten var, tekrar eklenmez (listede yoksa hata).
+    - ``False``: listede yok, eklenir. Aynı puanı alan bir sınıf arkadaşı
+      listede olsa bile eklenir.
+    - ``None`` (varsayılan): puan listede geçiyorsa dahil sayılır, geçmiyorsa
+      eklenir. Aynı puanı alan başka biri varsa N bir eksik kalır; sonuç bu
+      varsayımı ``my_score_included_assumed`` ile bildirir.
+
+    Harf tahmini yalnızca dağılım bunu taşıyorsa verilir: öğrenci sayısı
+    ``MIN_CLASS_SIZE`` altındaysa ya da standart sapma 0 ise ``yontem_1`` ve
+    ``yontem_2`` ``None`` olur, ``estimate_available`` ``False`` olur ve neden
+    ``no_estimate_reason`` ile açıklanır. Betimsel istatistikler her durumda
+    döner.
+
+    VF alan öğrenciler bu hesaba hiç girmemeli: çağıran, ``class_scores``'a
+    yalnızca bağıl değerlendirmeye katılan öğrencilerin puanlarını koymalıdır;
+    bu, yalnızca puanlardan tespit edilemeyen bir girdi kısıtıdır.
     """
-    scores = list(class_scores)
-    auto_added = my_score not in scores
-    if auto_added:
-        scores.append(my_score)
+    if not isinstance(class_scores, (list, tuple)):
+        raise ValueError("class_scores bir puan listesi olmalı.")
+    scores = [
+        _validated_score(value, f"class_scores[{index}]")
+        for index, value in enumerate(class_scores)
+    ]
+    mine = _validated_score(my_score, "my_score")
+    if my_score_included is not None and not isinstance(my_score_included, bool):
+        raise ValueError("my_score_included true, false ya da boş olmalı.")
+
+    present = mine in scores
+    if my_score_included is True and not present:
+        raise ValueError(
+            f"my_score_included=true verildi ama {my_score!r} puanı class_scores içinde yok. "
+            "Puanı listeye ekleyin ya da my_score_included=false verin."
+        )
+    included = present if my_score_included is None else my_score_included
+    if not included:
+        scores.append(mine)
 
     mean = class_average(scores)
     std = standard_deviation(scores)
-    method2 = estimate_method2(my_score, mean, std)
 
     result: dict[str, Any] = {
         "n": len(scores),
         "class_average": mean,
         "std_dev": std,
+        "class_min": min(scores),
+        "class_max": max(scores),
         "my_score": my_score,
-        "yontem_2": method2,
+        "my_score_included": included,
+        "estimate_available": True,
+        "min_class_size": MIN_CLASS_SIZE,
         "note": (
             "Bu tamamen bilgi amaçlı bir tahmindir. Resmi harf notunu öğretim üyesi "
             "belirler; ek sınav, sınırsız sınav hakkı gibi yönetmelik istisnaları burada "
@@ -182,29 +239,56 @@ def estimate_relative_grade(class_scores: list[float], my_score: float) -> dict[
         ),
     }
 
-    if std > 0:
-        t = t_score(my_score, mean, std)
-        method1 = estimate_method1(t, mean)
+    reason: str | None = None
+    if len(scores) < MIN_CLASS_SIZE:
+        reason = "class_too_small"
+        message = (
+            f"Hesaba giren öğrenci sayısı {len(scores)}; istatistiksel bir harf tahmini için en az "
+            f"{MIN_CLASS_SIZE} puan gerekir. Bu eşik aracın kendi alt sınırıdır, yönetmelikten "
+            "alıntı değildir. Küçük sınıflarda harf notunu öğretim üyesi doğrudan belirler."
+        )
+    elif std == 0:
+        reason = "zero_std_dev"
+        message = (
+            "Standart sapma 0 (bütün puanlar eşit). T-skoru tanımsızdır ve ortalama ± k·STD "
+            "sınırlarının hepsi ortalamaya eşit olur; bu dağılımdan harf notu çıkarılamaz."
+        )
+
+    if reason is None:
+        t = t_score(mine, mean, std)
         result["my_t_score"] = t
         result["yontem_1"] = {
-            **method1,
+            **estimate_method1(t, mean),
             "kaynak_tablo": (
-                "Tablo 1 (Değişik: ÜS-28.12.2023-852) — yönetmelikte örnek olarak "
+                "Tablo 1 (Değişik: ÜS-28.12.2023-852): yönetmelikte örnek olarak "
                 "verilmiştir; dersin öğretim üyesi farklı T-skor sınırları belirleyebilir."
             ),
         }
+        result["yontem_2"] = estimate_method2(mine, mean, std)
     else:
+        result["estimate_available"] = False
+        result["no_estimate_reason"] = reason
+        result["no_estimate_message"] = message
         result["yontem_1"] = None
-        result["yontem_1_uyari"] = (
-            "Standart sapma 0 (tüm puanlar eşit); T-skoru tanımsız olduğu için "
-            "Yöntem 1 hesaplanamadı."
-        )
+        result["yontem_2"] = None
+        if reason == "zero_std_dev":
+            result["yontem_1_uyari"] = message
 
-    if auto_added:
+    if not included:
         result["auto_added_my_score"] = True
         result["note"] += (
+            " my_score, class_scores listesine eklendi (sınıf ortalaması/standart sapma "
+            "hesabına dahil edilmesi gerekir)."
+            if my_score_included is False else
             " my_score, class_scores listesinde bulunamadığı için listeye otomatik "
             "eklendi (sınıf ortalaması/standart sapma hesabına dahil edilmesi gerekir)."
+        )
+    elif my_score_included is None:
+        result["my_score_included_assumed"] = True
+        result["note"] += (
+            " my_score değeri class_scores içinde geçtiği için listede sayıldı. Bu puan aynı "
+            "notu alan başka bir öğrenciye aitse my_score_included=false verin; aksi hâlde N "
+            "bir eksik kalır."
         )
 
     return result
