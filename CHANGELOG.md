@@ -19,7 +19,51 @@
     anahtarı ya da geçersiz harf notu sessizce yok sayılmaz
   - Salt okunur bir tahmindir, resmi sonuç değildir
 
+- **`export_table`:** dönem notları, tüm notlar, haftalık program ve ödev teslim tarihleri CSV
+  olarak alınabiliyor (`dataset`: `term_grades`, `all_grades`, `weekly_schedule`, `deadlines`)
+  - Dosya Türkçe Excel'de doğru açılacak biçimde yazılır: UTF-8 BOM, `;` ayraç, ondalık virgül
+  - `all_grades` her denemenin ortalamaya sayılıp sayılmadığını da yazar (`Sayılıyor`,
+    `Tekrar edildi`, `Ortalamaya girmez`)
+  - Ders ve ödev başlıkları üniversite sayfalarından geldiği için formül gibi başlayan hücrelerin
+    önüne `'` konur
+  - Varsayılan olarak metni döndürür. `save=true` dosyayı indirme klasöründeki `exports` altına,
+    var olanın üzerine yazmadan kaydeder. 200 KB'ı aşan metin satır sınırında kesilir
+  - Dosya yazabildiği için uzak HTTP sunucusunda yayınlanmaz. Excel (xlsx) ve PDF çıktısı yoktur
+- **`search_content`:** daha önce çekilmiş duyuru, ödev, mesaj panosu başlığı, dosya adı ve
+  okunmuş ya da indirilmiş dosya metinlerinde yerel arama yapar
+  - Türkçe harfler ve büyük küçük harf fark etmez (`sinav`, `SINAV`, `sınavda` aynı sonucu bulur)
+  - Ninova'ya istek atmaz, giriş gerektirmez. Dizin yalnızca bu bilgisayarda, durum klasöründeki
+    `search.sqlite3` dosyasında durur. Temizlemek için dosyayı silmek yeterli
+  - Hiç okunmamış bir dosya yalnızca adıyla bulunur
+- **Değişiklik özeti:** `sync_all_courses` sonucunda artık `change_summary` var: derse göre
+  gruplanmış kısa satırlar ("Yeni duyuru: ...", "Teslim tarihi değişti: ...", "Not girildi: ...").
+  Aynı özet geçmiş için `get_updates(summary=true, since="2026-10-05")` ile alınır
+
+### Kurulum komutları
+
+- **`itu-mcp setup`:** İTÜ kullanıcı adını ve şifresini sorar, işletim sisteminin anahtar zincirine
+  kaydeder. İstenirse girişi hemen dener
+- **`itu-mcp connect [claude-desktop|claude-code|cursor|all] [--dry-run]`:** sunucuyu asistan
+  ayarına şifresiz ekler. Yalnızca `mcpServers.itu` değişir, zaman damgalı yedek alınır, geçerli
+  JSON olmayan dosyaya dokunulmaz. Kayıtta düz metin şifre varsa çıkarmadan önce sorar
+- **`itu-mcp doctor [--online]`:** Python ve paket sürümü, giriş bilgilerinin kaynağı, anahtar
+  zinciri, durum klasörü, ayar dosyalarındaki düz metin şifre ve kayıtlı asistanlar için satır
+  satır OK / UYARI / HATA ve çözüm adımı verir. Ağa yalnızca `--online` ile çıkar
+- **`itu-mcp logout [--forget-password]`:** kayıtlı oturumu, istenirse anahtar zincirindeki
+  bilgileri siler
+- Giriş bilgileri tek yerden çözülüyor: önce ortam değişkenleri, sonra `.env` dosyası, sonra
+  anahtar zinciri. `keyring` kurulu değilse davranış eskisiyle aynı. Düz metin ve dosya tabanlı
+  `keyring` arka uçları kabul edilmez. `NINOVA_KEYRING=0` anahtar zinciri aramasını kapatır
+- `itu-mcp[keyring]` isteğe bağlı eki eklendi
+
 ### Düzeltmeler
+- "Önlisans" ve "Lisansüstü 2. Öğretim" ders programı HTTP 500 veriyordu. OBS bu iki program
+  tipini Türkçe harfsiz anahtarla (`OL`, `LUI`) bekliyor, artık öyle gönderiliyor
+- Program tipi adlarında büyük küçük harf ve Türkçe karakter farkı önemsiz (`lisansustu 2`,
+  `ONLISANS`). Tanınmayan değer için hata kabul edilen adları sayıyor
+- Arşivde Türkçe harfli ders kodları (`işl 101`, `ISL 101`, `İŞL101`) aynı derse çıkıyor
+- `obs_simulate_cumulative_gpa`: kredisi kesinleşmeyen dersler için verilen `gpa_range`, yalnızca
+  resmi dönem ortalamasıyla çelişmeyen seçeneklerden hesaplanıyor, aralık gereksiz geniş çıkmıyor
 
 - `obs_calculate_gpa` ve diğer OBS araçlarında `semester` artık sayı olarak gönderilen dönem
   kodunu kabul ediyor (`202410`). Tırnaklı ve ondalıklı yazımlar da tanınıyor, tam kod ya da

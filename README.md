@@ -73,23 +73,37 @@ Python 3.11 veya üstü gerekir. Yüklü değilse [python.org](https://www.pytho
 **1. Programı kur**
 
 ```bash
-pipx install itu-mcp
+pipx install "itu-mcp[keyring]"
 ```
 
-`pipx` yoksa `pip install --user itu-mcp` da olur.
+`pipx` yoksa `pip install --user "itu-mcp[keyring]"` da olur.
 
-**2. Asistanına bağla**
+**2. Giriş bilgilerini kaydet ve asistanına bağla**
 
-Claude Code kullanıyorsan tek komut yeter. Kendi İTÜ e-postanı ve şifreni yaz:
+```bash
+itu-mcp setup
+```
+
+```bash
+itu-mcp connect
+```
+
+`itu-mcp setup` İTÜ e-postanı ve şifreni sorar. Şifre yazarken ekranda görünmez ve hiçbir dosyaya yazılmaz, işletim sisteminin anahtar zincirine kaydedilir (Windows Kimlik Bilgileri Yöneticisi, macOS Anahtar Zinciri, Linux'ta GNOME Keyring ya da KWallet).
+
+`itu-mcp connect` sunucuyu Claude Desktop, Claude Code ve Cursor ayarlarına şifresiz olarak ekler. Diğer ayarlarına dokunmaz, dosyanın yedeğini alır. Ne yapacağını önce görmek istersen `itu-mcp connect --dry-run` yaz. Tek bir asistan için: `itu-mcp connect claude-desktop` (ya da `claude-code`, `cursor`).
+
+<details>
+<summary><strong>Anahtar zinciri istemiyorum ya da Codex kullanıyorum</strong></summary>
+
+<br />
+
+Şifreyi asistanın ayarına elle de yazabilirsin.
+
+**Claude Code**
 
 ```bash
 claude mcp add itu itu-mcp -e NINOVA_USERNAME=ad.soyad@itu.edu.tr -e NINOVA_PASSWORD=sifren
 ```
-
-<details>
-<summary><strong>Codex, Claude Desktop veya Cursor kullanıyorum</strong></summary>
-
-<br />
 
 **Codex CLI**
 
@@ -116,21 +130,22 @@ Bir liste geldiyse kurulum tamam.
 
 <br />
 
-Önce programın kendisini dene:
+Önce şunu çalıştır:
 
 ```bash
-itu-mcp --version
-itu-mcp --check-auth
+itu-mcp doctor
 ```
 
-- `--check-auth` hata veriyorsa kullanıcı adını tam e-posta olarak yazdığından emin ol (`ad.soyad@itu.edu.tr`, yalnızca `ad.soyad` değil).
+Her satır OK, UYARI ya da HATA ile başlar ve OK olmayan satırın altında çözümü yazar. Girişi de denemesi için `itu-mcp doctor --online` yaz.
+
+- Giriş hata veriyorsa kullanıcı adını tam e-posta olarak yazdığından emin ol (`ad.soyad@itu.edu.tr`, yalnızca `ad.soyad` değil).
 - Komut bulunamıyorsa terminali kapatıp yeniden aç. `pipx` kurulumdan sonra yeni bir terminal ister.
 - Asistan aracı görmüyorsa asistanı tamamen kapatıp açmayı dene.
 - Hâlâ olmuyorsa [bir sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues), ekran çıktısını ekle. Şifreni yazma.
 
 </details>
 
-> **Şifre vermek istemiyor musun?** Ders programı, final tarihleri, not dağılımları, ders arşivi, mekik saatleri ve kütüphane kataloğu gibi herkese açık bilgiler şifresiz de çalışır. İkinci adımdaki `-e` kısımlarını silmen yeterli.
+> **Şifre vermek istemiyor musun?** Ders programı, final tarihleri, not dağılımları, ders arşivi, mekik saatleri ve kütüphane kataloğu gibi herkese açık bilgiler şifresiz de çalışır. `itu-mcp setup` adımını atlayıp yalnızca `itu-mcp connect` çalıştırman yeterli.
 
 ---
 
@@ -407,8 +422,8 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
     <td valign="top">
       <code>auth_status</code> · <code>list_courses</code><br/>
       <code>get_course_*</code> · <code>sync_all_courses</code><br/>
-      <code>get_upcoming_deadlines</code><br/>
-      <code>read_resource_text</code> · <code>submit_assignment</code>
+      <code>get_upcoming_deadlines</code> · <code>search_content</code><br/>
+      <code>export_table</code> · <code>read_resource_text</code> · <code>submit_assignment</code>
     </td>
     <td valign="top">
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
