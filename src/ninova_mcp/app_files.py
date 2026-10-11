@@ -189,9 +189,20 @@ class PageFileToolsMixin:
         response = self.client.get(url, stream=True)
         try:
             try:
-                resolved_name, neutralised = requested_name or safe_download_name(
-                    self._filename_from_response(response)
-                )
+                served_name = self._filename_from_response(response)
+                if requested_name is not None and not Path(requested_name[0]).suffix:
+                    # A name given without an extension would save a file
+                    # nothing can open by type. The extension the server names
+                    # (file name, then content type) is added, and the result
+                    # goes through the same safe-name rules as any other name.
+                    extension = guess_extension(
+                        url=response.url,
+                        content_type=response.headers.get("Content-Type"),
+                        filename=served_name,
+                    )
+                    if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", extension or ""):
+                        requested_name = safe_download_name(requested_name[0] + extension)
+                resolved_name, neutralised = requested_name or safe_download_name(served_name)
             except LocalFileError as exc:
                 raise NinovaError(str(exc)) from exc
             self._refuse_oversized(response.headers.get("Content-Length"), max_bytes)

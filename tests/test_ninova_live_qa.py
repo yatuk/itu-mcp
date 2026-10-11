@@ -290,5 +290,22 @@ class DateFieldTests(unittest.TestCase):
         self.assertIsInstance(datetime.fromisoformat(message["date_iso"]), datetime)
 
 
+class EmptyGradebookTests(unittest.TestCase):
+    PAGE = "<html><body><table><tr><th>Değerlendirme</th><th>Not</th></tr>{rows}</table></body></html>"
+
+    def test_average_without_any_grade_is_flagged_as_a_placeholder(self) -> None:
+        app = app_with({COURSE_URL + "/Notlar": self.PAGE.format(rows="")})
+        result = app.get_course_grades("ZZT 322E")
+        self.assertEqual(result["grades"], [])
+        self.assertIn("placeholder", result["weighted_average_note"])
+
+    def test_average_with_grades_is_not_flagged(self) -> None:
+        rows = "<tr><td>Sentetik Vize</td><td>70</td></tr>"
+        app = app_with({COURSE_URL + "/Notlar": self.PAGE.format(rows=rows)})
+        result = app.get_course_grades("ZZT 322E")
+        self.assertEqual(len(result["grades"]), 1)
+        self.assertNotIn("weighted_average_note", result)
+
+
 if __name__ == "__main__":
     unittest.main()

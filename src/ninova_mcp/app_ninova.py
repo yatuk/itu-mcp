@@ -242,6 +242,12 @@ class NinovaCourseToolsMixin:
         html, response = self.client.get_html(resolved["url"] + "/Notlar")
         payload = extract_gradebook(html, response.url, base_url=self.client.base_url)
         payload["course"] = resolved
+        if not payload.get("grades"):
+            # Ninova prints an average of "0,00" on a page without any grade.
+            payload["weighted_average_note"] = (
+                "No grade has been entered for this course yet; the weighted average shown by "
+                "Ninova is a placeholder, not a result."
+            )
         return payload
 
     def get_course_message_board(
