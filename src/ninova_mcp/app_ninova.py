@@ -10,6 +10,7 @@ import hashlib
 import mimetypes
 import os
 import re
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -36,6 +37,9 @@ from .parsing import (
     normalize_url,
     parse_html_page,
     summarize_dashboard,
+    apply_attendance_calendar,
+    parse_ninova_datetime,
+    TURKIYE_TZ,
 )
 from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 from .app_base import COURSES_CACHE_KEY, server_namespace
@@ -129,6 +133,8 @@ class NinovaCourseToolsMixin:
         announcements = announcements[: max(1, min(limit, 200))]
         if include_full_text:
             announcements = [self._merge_announcement_detail(item) for item in announcements]
+        for item in announcements:
+            item["published_at_iso"] = ninova_datetime_iso(item.get("published_at"))
         result: dict[str, Any] = {
             "course": resolved,
             "count": len(announcements),
@@ -150,6 +156,8 @@ class NinovaCourseToolsMixin:
         announcements = announcements[: max(1, min(limit, 200))]
         if include_full_text:
             announcements = [self._merge_announcement_detail(item) for item in announcements]
+        for item in announcements:
+            item["published_at_iso"] = ninova_datetime_iso(item.get("published_at"))
         result: dict[str, Any] = {
             "count": len(announcements),
             "announcements": announcements,
@@ -258,8 +266,22 @@ class NinovaCourseToolsMixin:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"] + "/Yoklama")
         payload = extract_attendance(html, response.url, base_url=self.client.base_url)
+        # The term start dates the weeks, so weeks that have not happened yet
+        # are not counted. Without it the grid is reported undated.
+        term_start = None
+        try:
+            info_html, info_response = self.client.get_html(resolved["url"] + "/SinifBilgileri")
+            info = extract_course_info(info_html, info_response.url, base_url=self.client.base_url)
+            parsed = parse_ninova_datetime(str((info.get("class_meta") or {}).get("Başlangıç Tarihi") or ""))
+            term_start = parsed.date() if parsed else None
+        except Exception:
+            term_start = None
+        apply_attendance_calendar(payload, term_start=term_start, today=self._today())
         payload["course"] = resolved
         return payload
+
+    def _today(self) -> date:
+        return datetime.now(tz=TURKIYE_TZ).date()
 
     def get_course_remote_learning(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
@@ -703,29 +725,31 @@ class NinovaCourseToolsMixin:
         return {**found[0], "matched_by": tier, "requested": course}
 
     def _empty_list_warning(self, html: str, page_url: str, *, scope: str) -> str | None:
-        """Return a diagnostic when a list page parsed to zero items but looks non-empty."""
+        """Return a diagnostic when a list page parsed to zero items but holds items.
+
+        Every Ninova page carries menus and layout tables, so the amount of
+        text or the number of tables says nothing about the list. The signal
+        is a link to an item of this kind (``/Duyuru/<id>``, ``/Odev/<id>``)
+        that the parser did not turn into an item.
+        """
         page = parse_html_page(page_url, html, base_url=self.client.base_url)
         text = normalize_lookup_text(page.get("text_excerpt") or page.get("text") or "")
-        empty_markers = (
-            "herhangi bir",
-            "kayit bulunamadi",
-            "kayıt bulunamadı",
-            "bulunmamaktadir",
-            "bulunmamaktadır",
-            "no records",
-            "no data",
-        )
-        if any(marker in text for marker in empty_markers):
-            return None
         if len(text) < 80 and not page.get("tables") and not page.get("links"):
             return (
                 f"Empty {scope} list and the page body looks nearly empty "
                 f"(url={page_url}). Session or access rights may be wrong."
             )
-        if page.get("tables") or len(text) > 200:
+        segment = {"announcements": "Duyuru", "assignments": "Odev"}.get(scope)
+        if segment is None:
+            return None
+        item_links = [
+            link["url"] for link in page.get("links") or []
+            if re.search(rf"/{segment}/\d+", urlparse(link["url"]).path, re.I)
+        ]
+        if item_links:
             return (
-                f"Parsed zero {scope} from {page_url} even though the page has content "
-                f"(title={page.get('title')!r}, tables={len(page.get('tables') or [])}). "
+                f"Parsed zero {scope} from {page_url} even though the page links to "
+                f"{len(item_links)} item(s) (title={page.get('title')!r}). "
                 "Ninova HTML layout may have changed."
             )
         return None

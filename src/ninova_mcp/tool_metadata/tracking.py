@@ -18,7 +18,7 @@ TRACKING_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
+                    "type": ["string", "integer"],
                     "description": "Course code, title, course path, or full course URL.",
                 },
                 "refresh": {
@@ -110,7 +110,7 @@ TRACKING_TOOLS: list[dict[str, Any]] = [
                     "default": 100,
                 },
                 "course": {
-                    "type": "string",
+                    "type": ["string", "integer"],
                     "description": "Optional course code, title, path, or full course URL filter.",
                 },
                 "entity_type": {

@@ -6,7 +6,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
@@ -240,6 +240,56 @@ def split_date_range(value: str | None) -> dict[str, Any] | None:
     return result
 
 
+_YEARLESS_DATE_RE = re.compile(rf"(\d{{1,2}})\s+([A-Za-zÇĞİÖŞÜçğıöşü]+)(?:\s+({_CLOCK}))?")
+
+
+def infer_yearless_datetime(value: str | None, *, today: date | None = None) -> str | None:
+    """ISO form of a ``07 Ekim 15:20`` date, taking the year that puts it nearest to today.
+
+    Returns ``None`` when the text is not exactly such a date (one that names
+    its year is parsed by ``ninova_datetime_iso``). The year is a guess, so
+    callers mark the result as inferred.
+    """
+    match = _YEARLESS_DATE_RE.fullmatch(clean_text(value))
+    if not match:
+        return None
+    month = MONTH_NAMES.get(normalize_lookup_text(match.group(2)))
+    if month is None:
+        return None
+    hour, minute = (int(piece) for piece in match.group(3).split(":")) if match.group(3) else (0, 0)
+    reference = today or datetime.now(tz=TURKIYE_TZ).date()
+    candidates: list[datetime] = []
+    for year in (reference.year - 1, reference.year, reference.year + 1):
+        try:
+            candidates.append(datetime(year, month, int(match.group(1)), hour, minute, tzinfo=TURKIYE_TZ))
+        except ValueError:
+            continue
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: abs((item.date() - reference).days)).isoformat()
+
+
+def _with_inferred_dates(rows: list[Any], today: date | None) -> list[Any]:
+    """Add ``date_iso`` to dashboard rows whose date has no year.
+
+    A header-less two-cell row (text, date) becomes a small record so the date
+    is a field of its own. Start/end ranges are left alone: the nearest-year
+    rule is not safe for a window that can span most of a year.
+    """
+    result: list[Any] = []
+    for row in rows:
+        if isinstance(row, list) and len(row) == 2 and infer_yearless_datetime(row[1], today=today):
+            row = {"text": row[0], "date": row[1]}
+        if isinstance(row, dict) and "date_iso" not in row:
+            for value in list(row.values()):
+                iso = infer_yearless_datetime(value, today=today) if isinstance(value, str) else None
+                if iso:
+                    row = {**row, "date_iso": iso, "date_year_inferred": True}
+                    break
+        result.append(row)
+    return result
+
+
 def _iter_headings(soup: BeautifulSoup) -> list[dict[str, Any]]:
     headings: list[dict[str, Any]] = []
     for tag_name in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -272,7 +322,9 @@ def _unique_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _extract_links(soup: BeautifulSoup, base_url: str, page_url: str) -> list[dict[str, Any]]:
     links: list[dict[str, Any]] = []
     for anchor in soup.find_all("a", href=True):
-        href = clean_text(anchor.get("href"))
+        # Surrounding whitespace is dropped and inner whitespace encoded, so a
+        # sloppy href is still a usable link instead of a refused URL.
+        href = re.sub(r"\s", "%20", str(anchor.get("href") or "").strip())
         if not href or href.startswith("javascript:"):
             continue
         absolute = urljoin(page_url, href)
@@ -518,7 +570,12 @@ def extract_named_table(html: str, heading_text: str) -> list[dict[str, Any] | l
     return _table_to_rows(table)["rows"]
 
 
-def summarize_dashboard(page_data: dict[str, Any], html: str, base_url: str) -> dict[str, Any]:
+def summarize_dashboard(
+    page_data: dict[str, Any], html: str, base_url: str, *, today: date | None = None,
+) -> dict[str, Any]:
+    def table(heading: str) -> list[Any]:
+        return _with_inferred_dates(extract_named_table(html, heading), today)
+
     return {
         "page": {
             "url": page_data["url"],
@@ -526,9 +583,9 @@ def summarize_dashboard(page_data: dict[str, Any], html: str, base_url: str) -> 
             "headings": page_data["headings"],
         },
         "courses": extract_courses(html, page_data["url"], base_url=base_url),
-        "recent_announcements": extract_named_table(html, "Son Duyurular"),
-        "recent_assignments": extract_named_table(html, "Son Odevler"),
-        "recent_messages": extract_named_table(html, "Son Mesajlar"),
+        "recent_announcements": table("Son Duyurular"),
+        "recent_assignments": table("Son Odevler"),
+        "recent_messages": table("Son Mesajlar"),
         "links": page_data["links"],
     }
 
@@ -667,22 +724,50 @@ def extract_announcements_list(html: str, page_url: str, base_url: str) -> list[
     return items
 
 
+_HELP_BOX_RE = re.compile(r"\bYardım\s+Diğer sınıflarınıza\b")
+
+
 def extract_announcement_detail(html: str, page_url: str, base_url: str) -> dict[str, Any]:
     page = parse_html_page(page_url, html, base_url=base_url)
     title = page["headings"][0]["text"] if page["headings"] else page["title"]
-    body_text = page["text"]
-    if title in body_text:
-        body_text = body_text.split(title, 1)[1]
-    published_at_match = DATE_RE.search(body_text)
-    published_at = published_at_match.group(0) if published_at_match else None
-    if published_at:
-        body_text = body_text.split(published_at, 1)[1]
-    if "Yardım" in body_text:
-        body_text = body_text.rsplit("Yardım", 1)[0]
+    published_at: str | None = None
+    body_text: str | None = None
+
+    # The announcement has its own card; reading it keeps the page's help box
+    # and footer, which also say "Yardım", out of the body.
+    soup = make_soup(html)
+    card = soup.select_one("div.duyuruGoruntule")
+    content = card.select_one("div.icerik") if card else None
+    if card is not None and content is not None:
+        heading = card.find(["h1", "h2", "h3"])
+        if heading is not None and clean_text(heading.get_text(" ", strip=True)):
+            title = clean_text(heading.get_text(" ", strip=True))
+        for span in card.select("span.tarih"):
+            candidate = clean_text(span.get_text(" ", strip=True))
+            if published_at is None and _looks_like_date(candidate):
+                published_at = candidate
+                if content in span.parents:
+                    span.decompose()
+        body_text = clean_text(content.get_text(" ", strip=True))
+
+    if body_text is None:
+        body_text = page["text"]
+        if title in body_text:
+            body_text = body_text.split(title, 1)[1]
+        published_at_match = DATE_RE.search(body_text)
+        published_at = published_at_match.group(0) if published_at_match else None
+        if published_at:
+            body_text = body_text.split(published_at, 1)[1]
+        help_box = _HELP_BOX_RE.search(body_text)
+        if help_box:
+            body_text = body_text[: help_box.start()]
+        elif "Yardım" in body_text:
+            body_text = body_text.rsplit("Yardım", 1)[0]
     return {
         "title": title,
         "url": page["url"],
         "published_at": published_at,
+        "published_at_iso": ninova_datetime_iso(published_at),
         "body_text": clean_text(body_text),
     }
 
@@ -753,7 +838,9 @@ def extract_assignment_detail(html: str, page_url: str, base_url: str) -> dict[s
     title = page["headings"][0]["text"] if page["headings"] else page["title"]
     submission_start = _extract_labeled_value(text, "Teslim Başlangıcı", ["Teslim Bitişi", "Ödevi Yükle"])
     submission_end = _extract_labeled_value(text, "Teslim Bitişi", ["Ödevi Yükle", "Ödev Açıklaması"])
-    description = _extract_labeled_value(text, "Ödev Açıklaması", ["Kaynak Dosyalar", "İstenen Dosyalar", "Yardım"])
+    description = _extract_labeled_value(text, "Ödev Açıklaması", [
+        "Yüklediğiniz ödev dosyalarını indirin", "Kaynak Dosyalar", "İstenen Dosyalar", "Yardım",
+    ])
 
     source_files: list[dict[str, Any]] = []
     source_table = _find_table_by_headers(soup, ["Dosyalar", "Boyut", "Tarih"])
@@ -1334,37 +1421,53 @@ def extract_attendance(html: str, page_url: str, base_url: str) -> dict[str, Any
     disclaimer_tag = soup.find(class_="uyari")
     disclaimer = clean_text(disclaimer_tag.get_text(" ", strip=True)) if disclaimer_tag else None
 
+    # The grid prints 0 both for "absent" and for a session nobody has entered
+    # yet (a whole term of future weeks shows as zeros). A zero is therefore
+    # counted as an absence only in a week that also holds a 1, which shows
+    # attendance was taken that week. Every other zero is "unmarked or absent".
     headers: list[str] = []
     weeks: list[dict[str, Any]] = []
-    total_present = 0
-    total_absent = 0
     if attendance_table is not None:
         headers = [clean_text(cell.get_text(" ", strip=True)) for cell in attendance_table.find_all("th")]
         for row in attendance_table.find_all("tr")[1:]:
-            cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
+            nodes = row.find_all("td")
+            cells = [clean_text(cell.get_text(" ", strip=True)) for cell in nodes]
             if not cells:
                 continue
             sessions = []
-            for column_name, value in zip(headers[1:], cells[1:], strict=False):
+            for column_name, value, node in zip(headers[1:], cells[1:], nodes[1:], strict=False):
                 marks = re.findall(r"[01]", value)
-                total_present += marks.count("1")
-                total_absent += marks.count("0")
-                sessions.append(
-                    {
-                        "name": column_name,
-                        "value": value,
-                        "present_count": marks.count("1"),
-                        "absent_count": marks.count("0"),
-                    }
-                )
+                session: dict[str, Any] = {
+                    "name": column_name,
+                    "value": value,
+                    "present_count": marks.count("1"),
+                    "zero_count": marks.count("0"),
+                }
+                # Tooltips or image labels, when the page has them, are passed
+                # on untouched: they may say what a zero means.
+                hints = [
+                    clean_text(str(tag.get(attribute)))
+                    for tag in [node, *node.find_all(True)]
+                    for attribute in ("title", "alt")
+                    if tag.get(attribute)
+                ]
+                if hints:
+                    session["hints"] = list(dict.fromkeys(hints))
+                sessions.append(session)
+            recorded = any(session["present_count"] for session in sessions)
+            for session in sessions:
+                zeros = session.pop("zero_count")
+                session["absent_count"] = zeros if recorded else 0
+                session["unmarked_or_absent_count"] = 0 if recorded else zeros
             weeks.append(
                 {
                     "week": cells[0],
+                    "status": "recorded" if recorded else "unmarked_or_absent",
                     "sessions": sessions,
                 }
             )
 
-    return {
+    result: dict[str, Any] = {
         "url": page["url"],
         "student_name": student_name,
         "source_system": source_system,
@@ -1372,9 +1475,64 @@ def extract_attendance(html: str, page_url: str, base_url: str) -> dict[str, Any
         "headers": headers,
         "count": len(weeks),
         "weeks": weeks,
-        "total_present_marks": total_present,
-        "total_absent_marks": total_absent,
     }
+    _total_attendance(result)
+    return result
+
+
+_WEEK_NUMBER_RE = re.compile(r"(\d{1,2})")
+
+
+def _total_attendance(result: dict[str, Any]) -> None:
+    sessions = [session for week in result["weeks"] for session in week["sessions"]]
+    result["total_present_marks"] = sum(session["present_count"] for session in sessions)
+    result["total_absent_marks"] = sum(session["absent_count"] for session in sessions)
+    result["total_unmarked_or_absent_marks"] = sum(session["unmarked_or_absent_count"] for session in sessions)
+    future = sum(session.get("future_count", 0) for session in sessions)
+    if future or "total_future_marks" in result:
+        result["total_future_marks"] = future
+    result["absence_counts_reliable"] = result["total_unmarked_or_absent_marks"] == 0
+    result.pop("note", None)
+    if not result["absence_counts_reliable"]:
+        result["note"] = (
+            "The attendance grid shows 0 both for an absence and for a session that has not been "
+            "entered. Zeros in weeks without any recorded 1 are counted in "
+            "total_unmarked_or_absent_marks, not as absences; total_absent_marks covers only weeks "
+            "where attendance was demonstrably taken, so it can be too low. Do not report "
+            "unmarked_or_absent or future marks as absences."
+        )
+
+
+def apply_attendance_calendar(result: dict[str, Any], *, term_start: date | None, today: date | None = None) -> dict[str, Any]:
+    """Date the weeks from the term start and take future weeks out of the counts.
+
+    Week ``N`` is taken to start ``7 * (N - 1)`` days after ``term_start``. A
+    week that starts after ``today`` cannot hold an absence, whatever the grid
+    prints, so its marks move to ``future_count``.
+    """
+    result["term_start"] = term_start.isoformat() if term_start else None
+    if term_start is None:
+        return result
+    reference = today or datetime.now(tz=TURKIYE_TZ).date()
+    for week in result["weeks"]:
+        number = _WEEK_NUMBER_RE.search(str(week.get("week") or ""))
+        if not number or int(number.group(1)) < 1:
+            continue
+        week_start = term_start + timedelta(days=7 * (int(number.group(1)) - 1))
+        week["week_start"] = week_start.isoformat()
+        if week_start > reference:
+            week["status"] = "future"
+            for session in week["sessions"]:
+                session["future_count"] = (
+                    session["present_count"] + session["absent_count"] + session["unmarked_or_absent_count"]
+                )
+                session["present_count"] = session["absent_count"] = session["unmarked_or_absent_count"] = 0
+        else:
+            for session in week["sessions"]:
+                session.setdefault("future_count", 0)
+    result["total_future_marks"] = 0
+    _total_attendance(result)
+    return result
 
 
 def _table_after_heading(soup: BeautifulSoup, heading_text: str) -> Tag | None:

@@ -103,8 +103,8 @@ OBS_TOOLS: list[dict[str, Any]] = [
                 "class_id": {"type": "integer", "description": "OBS sinifId."},
                 "semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name; used when resolving by course name/code."},
                 "course": {
-                    "type": "string",
-                    "description": "Course code/title/CRN to resolve (e.g. 'EHB 222E').",
+                    "type": ["string", "integer"],
+                    "description": "Course code, CRN or name to resolve (e.g. 'EHB 222E', 'ehb222e', 'fizik 2'). Must fit exactly one registered course; the returned class carries matched_by.",
                 },
                 "include_midterms": {"type": "boolean", "default": True},
                 "include_letter": {"type": "boolean", "default": True},
@@ -134,8 +134,8 @@ OBS_TOOLS: list[dict[str, Any]] = [
                     "description": "Semester when resolving by course name/code.",
                 },
                 "course": {
-                    "type": "string",
-                    "description": "Course code/title/CRN to resolve (e.g. 'EHB 222E').",
+                    "type": ["string", "integer"],
+                    "description": "Course code, CRN or name to resolve (e.g. 'EHB 222E', 'ehb222e', 'fizik 2'). Must fit exactly one registered course; the returned class carries matched_by.",
                 },
                 "include_summary": {
                     "type": "boolean",
@@ -205,7 +205,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
         "description": "Read the signed-in student's official OBS final calendar and registered courses.",
         "inputSchema": {
             "type": "object",
-            "properties": {"semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."}, "course": {"type": "string"}},
+            "properties": {"semester": {"type": ["string", "integer"], "description": "Term code (202610), OBS term id, or term name (\"2025-2026 Güz\"). Default: latest term."}, "course": {"type": ["string", "integer"]}},
             "additionalProperties": False,
         },
     },

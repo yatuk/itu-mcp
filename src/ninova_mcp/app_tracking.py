@@ -20,8 +20,10 @@ from .parsing import (
     extract_course_info,
     extract_message_board,
     extract_remote_learning,
+    apply_attendance_calendar,
     ninova_datetime_iso,
     normalize_lookup_text,
+    parse_ninova_datetime,
     slugify,
 )
 from .tracking import (
@@ -94,6 +96,7 @@ class TrackingToolsMixin:
                     snapshot["course"] = {**snapshot.get("course", {}), **{
                         key: resolved[key] for key in ("matched_by", "requested") if key in resolved
                     }}
+                self._date_overview_attendance(snapshot)
                 return self._out(snapshot, compact=compact)
 
         snapshot = self._collect_course_snapshot(
@@ -103,7 +106,31 @@ class TrackingToolsMixin:
             include_assignment_details=include_assignment_details,
         )
         snapshot["source"] = "live"
+        self._date_overview_attendance(snapshot)
         return self._out(snapshot, compact=compact)
+
+    def _date_overview_attendance(self, snapshot: dict[str, Any]) -> None:
+        """Mark future attendance weeks in an overview that is about to be returned.
+
+        Done on the way out, never in the stored snapshot: a status that
+        depends on today's date would show up as a change at every sync.
+        """
+        overview = snapshot.get("overview") or {}
+        attendance = overview.get("attendance")
+        if not isinstance(attendance, dict) or not attendance.get("weeks"):
+            return
+        if any("unmarked_or_absent_count" not in session
+               for week in attendance["weeks"] for session in week.get("sessions", [])):
+            # Stored before zeros were told apart from absences; a sync rereads it.
+            attendance["note"] = (
+                "This stored attendance predates the unmarked/absent distinction: its absent counts "
+                "include sessions that were never entered. Call again with refresh=true."
+            )
+            attendance["absence_counts_reliable"] = False
+            return
+        class_meta = (overview.get("info") or {}).get("class_meta") or {}
+        parsed = parse_ninova_datetime(str(class_meta.get("Başlangıç Tarihi") or ""))
+        apply_attendance_calendar(attendance, term_start=parsed.date() if parsed else None)
 
     def sync_all_courses(
         self,

@@ -98,6 +98,7 @@ class PageFileToolsMixin:
         queue: list[tuple[str, int]] = [(start_url, 0)]
         pages: list[dict[str, Any]] = []
         downloads: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         seen_downloads: set[tuple[str, str]] = set()
 
         from .interaction import progress_steps
@@ -112,7 +113,16 @@ class PageFileToolsMixin:
             visited.add(normalized)
             steps.advance(f"Sayfa taranıyor ({len(pages) + 1}, en fazla {max_pages}): {normalized}")
 
-            html, response = self.client.get_html(normalized)
+            try:
+                html, response = self.client.get_html(normalized)
+            except Exception as exc:
+                # The start page is the caller's own input and still fails
+                # loudly. A link found on a page is not: one refused or broken
+                # link is noted and the rest of the course is still crawled.
+                if not pages:
+                    raise
+                skipped.append({"url": normalized, "depth": depth, "reason": str(exc) or type(exc).__name__})
+                continue
             page = parse_html_page(response.url, html, base_url=self.client.base_url)
             page_summary = {
                 "url": page["url"],
@@ -151,6 +161,8 @@ class PageFileToolsMixin:
             "pages_crawled": len(pages),
             "pages": pages,
             "downloads": downloads[:500],
+            "skipped_count": len(skipped),
+            "skipped": skipped[:100],
         }
 
     def download_resource(
