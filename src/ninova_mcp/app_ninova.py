@@ -118,7 +118,7 @@ class NinovaCourseToolsMixin:
 
     def get_course_announcements(
         self,
-        course: str,
+        course: str | int,
         include_full_text: bool = False,
         limit: int = 50,
         compact: bool = False,
@@ -162,7 +162,7 @@ class NinovaCourseToolsMixin:
 
     def get_course_assignments(
         self,
-        course: str,
+        course: str | int,
         limit: int = 100,
         include_details: bool = True,
         compact: bool = False,
@@ -212,14 +212,14 @@ class NinovaCourseToolsMixin:
                 result["parse_warning"] = warning
         return result
 
-    def get_course_info(self, course: str) -> dict[str, Any]:
+    def get_course_info(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"] + "/SinifBilgileri")
         payload = extract_course_info(html, response.url, base_url=self.client.base_url)
         payload["course"] = resolved
         return payload
 
-    def get_course_sections(self, course: str) -> dict[str, Any]:
+    def get_course_sections(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"])
         sections = extract_course_sections(html, response.url, base_url=self.client.base_url)
@@ -229,7 +229,7 @@ class NinovaCourseToolsMixin:
             "sections": sections,
         }
 
-    def get_course_grades(self, course: str) -> dict[str, Any]:
+    def get_course_grades(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"] + "/Notlar")
         payload = extract_gradebook(html, response.url, base_url=self.client.base_url)
@@ -238,7 +238,7 @@ class NinovaCourseToolsMixin:
 
     def get_course_message_board(
         self,
-        course: str,
+        course: str | int,
         include_thread_details: bool = False,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -254,14 +254,14 @@ class NinovaCourseToolsMixin:
             "topics": topics,
         }
 
-    def get_course_attendance(self, course: str) -> dict[str, Any]:
+    def get_course_attendance(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"] + "/Yoklama")
         payload = extract_attendance(html, response.url, base_url=self.client.base_url)
         payload["course"] = resolved
         return payload
 
-    def get_course_remote_learning(self, course: str) -> dict[str, Any]:
+    def get_course_remote_learning(self, course: str | int) -> dict[str, Any]:
         resolved = self._resolve_course(course)
         html, response = self.client.get_html(resolved["url"] + "/UzaktanEgitim")
         payload = extract_remote_learning(html, response.url, base_url=self.client.base_url)
@@ -270,7 +270,7 @@ class NinovaCourseToolsMixin:
 
     def get_course_class_files(
         self,
-        course: str,
+        course: str | int,
         recursive: bool = True,
         max_depth: int = 3,
         compact: bool = False,
@@ -287,7 +287,7 @@ class NinovaCourseToolsMixin:
 
     def get_course_lesson_files(
         self,
-        course: str,
+        course: str | int,
         recursive: bool = True,
         max_depth: int = 3,
         compact: bool = False,
@@ -304,7 +304,7 @@ class NinovaCourseToolsMixin:
 
     def get_assignment_upload_slots(
         self,
-        course: str | None = None,
+        course: str | int | None = None,
         assignment: str | None = None,
         upload_url: str | None = None,
     ) -> dict[str, Any]:
@@ -333,7 +333,7 @@ class NinovaCourseToolsMixin:
     def submit_assignment(
         self,
         file_path: str,
-        course: str | None = None,
+        course: str | int | None = None,
         assignment: str | None = None,
         upload_url: str | None = None,
         slot_index: int | None = None,
@@ -542,7 +542,7 @@ class NinovaCourseToolsMixin:
     def _resolve_assignment_upload_url(
         self,
         *,
-        course: str | None,
+        course: str | int | None,
         assignment: str | None,
         upload_url: str | None,
     ) -> dict[str, Any]:
@@ -565,8 +565,10 @@ class NinovaCourseToolsMixin:
             )
 
         resolved_course = self._resolve_course(course)
+        # By URL: two sections of one course share a code, so the code would
+        # make this second lookup ambiguous after the first one succeeded.
         payload = self.get_course_assignments(
-            resolved_course.get("code") or resolved_course["url"],
+            resolved_course["url"],
             limit=200,
             include_details=True,
         )
@@ -625,13 +627,26 @@ class NinovaCourseToolsMixin:
             )
         return match.group(1), match.group(2)
 
-    def _resolve_course(self, course: str) -> dict[str, Any]:
+    def _resolve_course(self, course: str | int) -> dict[str, Any]:
+        """Find one course by URL, code, CRN or name.
+
+        Order: course URL; code ignoring spacing and case; the same branch and
+        number where only one side has a letter suffix (``ING 201A`` for
+        ``ING 201``); CRN; full name; words of the name (accents, case and
+        Roman or Arabic numerals ignored); substring of code, name or section
+        label. The first step with a candidate decides. Two candidates are an
+        error listing both, never a choice, and any step after the exact code
+        or full name is reported in ``matched_by``.
+        """
+        if isinstance(course, bool) or not isinstance(course, (str, int)):
+            raise NinovaError("course must be a course code, name, CRN or URL.")
+        course = str(course)
         if not course.strip():
             raise NinovaError("course must be a non-empty string.")
 
         courses = self.list_courses()["courses"]
 
-        if "/Sinif/" in course or course.startswith("/") or urlparse(course).scheme:
+        if "/Sinif/" in course or course.startswith("/") or urlparse(course).scheme.lower() in {"http", "https"}:
             normalized = normalize_url(course, self.client.base_url)
             root_path = self._extract_course_root_path(normalized)
             root_url = f"{self.client.base_url}{root_path}"
@@ -640,57 +655,52 @@ class NinovaCourseToolsMixin:
                     return item
             return {"code": None, "title": None, "url": root_url, "context": course}
 
-        target = normalize_lookup_text(course)
-        from .archive import normalize_course_code
+        from .course_matching import EXACT_TIERS, match_courses
 
-        def normalized_code(value: str | None) -> str | None:
-            try:
-                return normalize_course_code(value or "")
-            except ValueError:
-                return None
+        def crn_of_course(item: dict[str, Any]) -> str | None:
+            if item.get("crn"):
+                return str(item["crn"])
+            # Course lists cached or stored before the crn field existed.
+            match = re.search(r"\bCRN\s*:?\s*(\d{3,6})\b", str(item.get("context") or ""), re.I)
+            return match.group(1) if match else None
 
-        target_code = normalized_code(course)
-        exact_matches = [
-            item
-            for item in courses
-            if (target_code is not None and target_code in {normalized_code(item.get("code")), normalized_code(item.get("title"))})
-            or (target and target in {
-                normalize_lookup_text(item.get("code")),
-                normalize_lookup_text(item.get("title")),
-            })
-        ]
-        if len(exact_matches) == 1:
-            return exact_matches[0]
-        if len(exact_matches) > 1:
-            options = ", ".join(
-                f"{item.get('code') or '?'} ({item.get('title') or item['url']})"
-                for item in exact_matches[:8]
-            )
-            raise NinovaError(f"Ambiguous course reference: {course}. Matches: {options}")
+        def describe(item: dict[str, Any]) -> str:
+            details = [str(item.get("title") or "?")]
+            section = item.get("section")
+            crn = crn_of_course(item)
+            if section and not (crn and crn in str(section)):
+                details.append(f"section {section}")
+            if crn:
+                details.append(f"CRN {crn}")
+            details.append(item["url"])
+            return f"{item.get('code') or '?'} ({'; '.join(details)})"
 
-        fuzzy_matches = [] if target_code is not None else [
-            item
-            for item in courses
-            if target in normalize_lookup_text(item.get("code"))
-            or target in normalize_lookup_text(item.get("title"))
-            or target in normalize_lookup_text(item.get("context"))
-        ]
-        if not fuzzy_matches:
+        tier, found = match_courses(
+            course,
+            courses,
+            codes=lambda item: (item.get("code"), item.get("title")),
+            names=lambda item: (item.get("title"),),
+            crn=crn_of_course,
+            partial_text=lambda item: (item.get("code"), item.get("title"), item.get("context"), item.get("section")),
+        )
+        if not found:
             available = ", ".join(
-                f"{item.get('code') or item.get('title') or item['url']}" for item in courses[:12]
+                f"{item.get('code')} ({item['title']})" if item.get("code") and item.get("title")
+                else str(item.get("code") or item.get("title") or item["url"])
+                for item in courses[:12]
             )
             hint = f" Available courses: {available}." if available else " Course list is empty."
             raise NinovaError(f"Course not found: {course}.{hint}")
-        if len(fuzzy_matches) > 1:
-            options = ", ".join(
-                f"{item.get('code') or '?'} ({item.get('title') or item['url']})"
-                for item in fuzzy_matches[:8]
-            )
+        if len(found) > 1:
+            options = "; ".join(describe(item) for item in found[:8])
             raise NinovaError(
-                f"Course reference is ambiguous: {course}. Matches: {options}. "
-                "Use an exact course code or course URL."
+                f"Ambiguous course reference: {course}. Matches: {options}. "
+                "Pass the URL of the one you mean."
             )
-        return fuzzy_matches[0]
+        if tier in EXACT_TIERS:
+            return found[0]
+        # A tolerant match is never silent: the caller sees what was matched and how.
+        return {**found[0], "matched_by": tier, "requested": course}
 
     def _empty_list_warning(self, html: str, page_url: str, *, scope: str) -> str | None:
         """Return a diagnostic when a list page parsed to zero items but looks non-empty."""
