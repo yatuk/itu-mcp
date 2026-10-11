@@ -4,6 +4,27 @@ from __future__ import annotations
 
 from typing import Any
 
+# Parameter descriptions are shared with the published signature in
+# ``app_planning`` so the schema a client sees and this entry say the same.
+TARGET_CURRENT_GPA_DESCRIPTION = "Current cumulative GPA (GANO) on the 4.00 scale, e.g. 2.35."
+TARGET_CURRENT_CREDITS_DESCRIPTION = (
+    "Credits that count in the current GPA, e.g. 101. Not ECTS and not the credits completed."
+)
+TARGET_TARGET_GPA_DESCRIPTION = "Cumulative GPA to reach, e.g. 2.5."
+TARGET_FUTURE_CREDITS_DESCRIPTION = (
+    "Total credits of the courses still to be taken, retakes included, e.g. 18."
+)
+TARGET_RETAKES_DESCRIPTION = (
+    "The part of future_credits that repeats a course already counted in the current GPA, "
+    'e.g. [{"credit": 3, "old_grade": "FF"}, {"credit": 4, "old_grade": "DD"}]. A retake '
+    "replaces its old grade and adds no credit. Omit it only when no course is a retake."
+)
+TARGET_RETAKE_CREDIT_DESCRIPTION = "Credit of the retaken course, e.g. 3 or 3.5."
+TARGET_RETAKE_OLD_GRADE_DESCRIPTION = (
+    'Grade of the course that counts in the GPA now, e.g. "FF". One of: AA, BA+, BA, BB+, BB, '
+    "CB+, CB, CC+, CC, DC+, DC, DD+, DD, FD, FF, VF."
+)
+
 PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_calculate_gpa",
@@ -50,14 +71,53 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "calculate_target_gpa",
         "title": "Calculate Target GPA",
-        "description": "Estimate the future average required to reach a target cumulative GPA without reading a transcript.",
+        "description": (
+            "Quick arithmetic without the student's record and without login: the average needed "
+            "over future credits to reach a target cumulative GPA, from four numbers the caller "
+            "supplies. It cannot see retakes; a retake replaces its old grade and adds no credit, "
+            "so state them in retakes or the result understates what is reachable (see the "
+            "assumption field). When the student is logged in, prefer "
+            "obs_simulate_cumulative_gpa(target_gpa=...), which works from the record and "
+            "handles retakes."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "current_gpa": {"type": "number", "minimum": 0, "maximum": 4},
-                "current_credits": {"type": "number", "minimum": 0},
-                "target_gpa": {"type": "number", "minimum": 0, "maximum": 4},
-                "future_credits": {"type": "number", "exclusiveMinimum": 0},
+                "current_gpa": {
+                    "type": "number", "minimum": 0, "maximum": 4,
+                    "description": TARGET_CURRENT_GPA_DESCRIPTION,
+                },
+                "current_credits": {
+                    "type": "number", "minimum": 0,
+                    "description": TARGET_CURRENT_CREDITS_DESCRIPTION,
+                },
+                "target_gpa": {
+                    "type": "number", "minimum": 0, "maximum": 4,
+                    "description": TARGET_TARGET_GPA_DESCRIPTION,
+                },
+                "future_credits": {
+                    "type": "number", "exclusiveMinimum": 0,
+                    "description": TARGET_FUTURE_CREDITS_DESCRIPTION,
+                },
+                "retakes": {
+                    "type": "array",
+                    "description": TARGET_RETAKES_DESCRIPTION,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "credit": {
+                                "type": "number", "exclusiveMinimum": 0,
+                                "description": TARGET_RETAKE_CREDIT_DESCRIPTION,
+                            },
+                            "old_grade": {
+                                "type": "string",
+                                "description": TARGET_RETAKE_OLD_GRADE_DESCRIPTION,
+                            },
+                        },
+                        "required": ["credit", "old_grade"],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": ["current_gpa", "current_credits", "target_gpa", "future_credits"],
             "additionalProperties": False,

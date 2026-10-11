@@ -406,17 +406,59 @@ def attempt_notes(
     return {bucket: entries for bucket, entries in grouped.items() if entries}
 
 
+_RETAKE_KEYS = frozenset({"credit", "old_grade"})
+_COUNTED_GRADES = tuple(grade for grade, value in LETTER_TO_GRADE.items() if value is not None)
+
+
+def _retake_totals(retakes: Any) -> tuple[float, float]:
+    """Total credit and old GPA points of the retaken courses."""
+    if retakes is None:
+        return 0.0, 0.0
+    example = '[{"credit": 3, "old_grade": "FF"}]'
+    if not isinstance(retakes, (list, tuple)):
+        raise ValueError(f"retakes must be a list such as {example}")
+    credits: list[float] = []
+    points: list[float] = []
+    for index, item in enumerate(retakes):
+        where = f"retakes[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{where} must be an object such as {example[1:-1]}")
+        unknown = sorted(str(key) for key in set(item) - _RETAKE_KEYS)
+        if unknown:
+            raise ValueError(f"{where} has unknown field(s): {', '.join(unknown)}. Allowed: credit, old_grade")
+        raw = item.get("credit")
+        credit = None if isinstance(raw, str) else parse_credit(raw)
+        if credit is None or credit <= 0:
+            raise ValueError(f"{where}.credit must be a number greater than zero, e.g. 3 or 3.5")
+        grade = normalize_grade(item.get("old_grade")) if isinstance(item.get("old_grade"), str) else ""
+        coefficient = LETTER_TO_GRADE.get(grade)
+        if coefficient is None:
+            raise ValueError(
+                f"{where}.old_grade must be the grade that counts in the GPA now, one of: "
+                f"{', '.join(_COUNTED_GRADES)}. A course whose earlier grade never counted "
+                "is a new course: leave it out of retakes."
+            )
+        credits.append(credit)
+        points.append(credit * coefficient)
+    return math.fsum(credits), math.fsum(points)
+
+
 def calculate_target_gpa(
     *,
     current_gpa: float,
     current_credits: float,
     target_gpa: float,
     future_credits: float,
+    retakes: Any = None,
 ) -> dict[str, Any]:
     """Calculate the average required over future credits to reach a target.
 
     This is a planning estimate.  It deliberately works from aggregate GPA
     points so it can be used without exposing a transcript.
+
+    ``retakes`` names the part of ``future_credits`` that repeats a course
+    already counted in ``current_gpa``. A retake replaces its old grade: its
+    credit does not grow the denominator and its old points leave the total.
     """
     values = {}
     for name, raw in {
@@ -441,21 +483,32 @@ def calculate_target_gpa(
     if values["future_credits"] <= 0:
         raise ValueError("future_credits must be greater than zero")
 
+    retake_credits, retake_points = _retake_totals(retakes)
+    considered = retake_credits > 0
     current_points = values["current_gpa"] * values["current_credits"]
-    target_points = values["target_gpa"] * (
-        values["current_credits"] + values["future_credits"]
-    )
-    required_points = target_points - current_points
+    if retake_credits > values["future_credits"] + 1e-9:
+        raise ValueError(
+            "retakes add up to more credits than future_credits; future_credits is the total "
+            "to be taken, retakes included"
+        )
+    if retake_credits > values["current_credits"] + 1e-9:
+        raise ValueError("retakes add up to more credits than current_credits, which already counts them")
+    # current_gpa is a two-decimal value, so the points it implies are off by
+    # up to 0.005 per credit.
+    if retake_points > current_points + 0.005 * values["current_credits"] + 1e-9:
+        raise ValueError("retakes carry more points than current_gpa and current_credits allow")
+
+    kept_points = current_points - retake_points
+    resulting_credits = values["current_credits"] + values["future_credits"] - retake_credits
+    target_points = values["target_gpa"] * resulting_credits
+    required_points = target_points - kept_points
     required_average = required_points / values["future_credits"]
-    maximum_possible_gpa = (
-        (current_points + 4.0 * values["future_credits"])
-        / (values["current_credits"] + values["future_credits"])
-    )
+    maximum_possible_gpa = (kept_points + 4.0 * values["future_credits"]) / resulting_credits
     if not all(math.isfinite(value) for value in (current_points, target_points, required_points, required_average, maximum_possible_gpa)):
         raise ValueError("Credit arithmetic exceeds the supported finite numeric range")
     feasible = required_average <= 4.0
 
-    return {
+    result: dict[str, Any] = {
         **values,
         "required_future_average": round(max(0.0, required_average), 2),
         "required_future_points": round(max(0.0, required_points), 2),
@@ -463,5 +516,28 @@ def calculate_target_gpa(
         "already_at_or_above_target": values["current_gpa"] >= values["target_gpa"],
         "target_reached_with_zero_future_points": required_average <= 0.0,
         "maximum_possible_gpa": round(maximum_possible_gpa, 2),
-        "note": "Bilgi amaçlı tahmindir; ders tekrarları ve özel OBS kuralları hesaba katılmaz.",
+        "retakes_considered": considered,
+        "resulting_credits": round(resulting_credits, 2),
     }
+    if considered:
+        result.update({
+            "retake_credits": round(retake_credits, 2),
+            "retake_old_points": round(retake_points, 2),
+            "new_credits": round(values["future_credits"] - retake_credits, 2),
+            "note": (
+                "Bilgi amaçlı tahmindir; ders tekrarları yalnızca retakes ile bildirildiği kadar "
+                "hesaba katıldı, özel OBS kuralları katılmadı."
+            ),
+        })
+    else:
+        result.update({
+            "assumption": (
+                "Bu sonuç, future_credits içindeki hiçbir dersin tekrar olmadığını varsayar. "
+                "Tekrar alınan ders eski notunun yerine geçer ve kredi eklemez; bu durumda "
+                "ulaşılabilir ortalama daha yüksektir. Tekrarları retakes ile bildirin ya da "
+                "öğrencinin kendi kaydından hesaplayan obs_simulate_cumulative_gpa(target_gpa=...) "
+                "aracını kullanın."
+            ),
+            "note": "Bilgi amaçlı tahmindir; ders tekrarları ve özel OBS kuralları hesaba katılmaz.",
+        })
+    return result

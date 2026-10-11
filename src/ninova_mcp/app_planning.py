@@ -265,8 +265,12 @@ class PlanningToolsMixin:
         current_credits: float,
         target_gpa: float,
         future_credits: float,
+        retakes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Estimate the future average needed to reach a target cumulative GPA."""
+        """Estimate the future average needed to reach a target cumulative GPA.
+
+        Pure arithmetic on the supplied numbers: no login and no request.
+        """
         from .gpa import calculate_target_gpa
 
         return calculate_target_gpa(
@@ -274,6 +278,7 @@ class PlanningToolsMixin:
             current_credits=current_credits,
             target_gpa=target_gpa,
             future_credits=future_credits,
+            retakes=retakes,
         )
 
     def estimate_relative_grade(
@@ -668,10 +673,38 @@ def _publish_parameter_schema(function: Any, **annotations: Any) -> None:
 
 
 try:
-    from pydantic import Field
+    from pydantic import ConfigDict, Field
+    from typing_extensions import TypedDict
 except ImportError:  # pragma: no cover - pydantic ships with the MCP SDK
     pass
 else:
+    from .tool_metadata import planning as _descriptions
+
+    # Functional form: the field types are real objects, not postponed text.
+    Retake = TypedDict("Retake", {
+        "credit": Annotated[float, Field(gt=0, description=_descriptions.TARGET_RETAKE_CREDIT_DESCRIPTION)],
+        "old_grade": Annotated[str, Field(description=_descriptions.TARGET_RETAKE_OLD_GRADE_DESCRIPTION)],
+    })
+    Retake.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
+
+    _publish_parameter_schema(
+        PlanningToolsMixin.calculate_target_gpa,
+        current_gpa=Annotated[float, Field(
+            ge=0, le=4, description=_descriptions.TARGET_CURRENT_GPA_DESCRIPTION,
+        )],
+        current_credits=Annotated[float, Field(
+            ge=0, description=_descriptions.TARGET_CURRENT_CREDITS_DESCRIPTION,
+        )],
+        target_gpa=Annotated[float, Field(
+            ge=0, le=4, description=_descriptions.TARGET_TARGET_GPA_DESCRIPTION,
+        )],
+        future_credits=Annotated[float, Field(
+            gt=0, description=_descriptions.TARGET_FUTURE_CREDITS_DESCRIPTION,
+        )],
+        retakes=Annotated[list[Retake] | None, Field(
+            description=_descriptions.TARGET_RETAKES_DESCRIPTION,
+        )],
+    )
     _publish_parameter_schema(
         PlanningToolsMixin.obs_calculate_gpa,
         semester=Annotated[str | int | float | None, Field(description=(

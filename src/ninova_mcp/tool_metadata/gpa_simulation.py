@@ -26,6 +26,11 @@ SEMESTER_DESCRIPTION = (
     "Term whose registered courses are projected: term code, OBS term id or name, "
     'e.g. "202610", 202610 or "2025-2026 Bahar". Default: the latest term.'
 )
+TARGET_GPA_DESCRIPTION = (
+    "Cumulative GPA to reach after this term, e.g. 2.5. Adds a target block: the lowest single "
+    "letter grade that reaches it when given to every registered course not named in "
+    "projected_grades, or that it is out of reach even with AA, with the maximum reachable."
+)
 EXTRA_CODE_DESCRIPTION = 'Course code, e.g. "MAT 271E".'
 EXTRA_GRADE_DESCRIPTION = f'Letter grade, e.g. "CC". One of: {_GRADES}.'
 EXTRA_CREDIT_DESCRIPTION = (
@@ -47,6 +52,8 @@ GPA_SIMULATION_TOOLS: list[dict[str, Any]] = [
             "A retaken course replaces its earlier grade instead of adding credit, including a "
             "retake under a different course code. The result shows the work: per-course effect, "
             "credit and point deltas, courses still failing, equivalences used and warnings. "
+            "For 'what do I need this term to reach X?' pass target_gpa: the answer comes from the "
+            "record and counts retakes, which calculate_target_gpa cannot see. "
             "Read-only estimate, not an official result. For a single term average use "
             "obs_calculate_gpa."
         ),
@@ -80,6 +87,12 @@ GPA_SIMULATION_TOOLS: list[dict[str, Any]] = [
                 "semester": {
                     "type": ["string", "integer"],
                     "description": SEMESTER_DESCRIPTION,
+                },
+                "target_gpa": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 4,
+                    "description": TARGET_GPA_DESCRIPTION,
                 },
             },
             "additionalProperties": False,

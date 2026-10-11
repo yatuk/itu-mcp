@@ -24,6 +24,7 @@ from .tool_metadata.gpa_simulation import (
     EXTRA_REPLACES_DESCRIPTION,
     PROJECTED_GRADES_DESCRIPTION,
     SEMESTER_DESCRIPTION,
+    TARGET_GPA_DESCRIPTION,
 )
 
 
@@ -53,6 +54,7 @@ class GpaSimulationToolsMixin:
             list[ExtraCourse] | None, Field(description=EXTRA_COURSES_DESCRIPTION),
         ] = None,
         semester: Annotated[str | int | None, Field(description=SEMESTER_DESCRIPTION)] = None,
+        target_gpa: Annotated[float | None, Field(ge=0, le=4, description=TARGET_GPA_DESCRIPTION)] = None,
     ) -> dict[str, Any]:
         """Project the cumulative GPA after a term from the student's own OBS record.
 
@@ -63,7 +65,7 @@ class GpaSimulationToolsMixin:
         from .gpa_simulation import normalize_arguments, simulate_cumulative_gpa
 
         # Reject a bad grade or a malformed argument before OBS is contacted.
-        normalize_arguments(projected_grades, default_grade, extra_courses)
+        normalize_arguments(projected_grades, default_grade, extra_courses, target_gpa)
         if isinstance(semester, bool) or not isinstance(semester, (str, int, type(None))):
             raise ValueError('semester must be a term code, id or name, e.g. "202610".')
         wanted = None if semester is None else str(semester).strip() or None
@@ -95,6 +97,7 @@ class GpaSimulationToolsMixin:
             projected_grades=projected_grades,
             default_grade=default_grade,
             extra_courses=extra_courses,
+            target_gpa=target_gpa,
         )
         if status_error:
             result["warnings"].append(
