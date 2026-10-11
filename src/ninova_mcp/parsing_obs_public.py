@@ -36,58 +36,68 @@ def extract_course_select_options(html: str, page_url: str) -> list[dict[str, An
     return options
 
 
-def extract_course_search_results(html: str, page_url: str) -> list[dict[str, Any]]:
-    """Parse the public course information results, including nested tables.
+_COURSE_SEARCH_HEADERS = {"ders kodu", "ders adı", "ders adi", "course code", "course name"}
 
-    Tries table-based extraction first (headers like "Ders Kodu", "Ders Adı"),
-    then falls back to link-list scanning.
-    """
-    soup = make_soup(html)
-    results: list[dict[str, Any]] = []
+
+def _canonical_course_codes(text: str) -> list[str]:
+    """Every course code written in a cell, normalized, in order and without repeats."""
     from .archive import COURSE_CODE_PATTERN, normalize_course_code
 
-    # Strategy 1: look for a table with "Ders Kodu" header
-    target_headers = {"ders kodu", "ders adı", "ders adi", "course code", "course name"}
-    for table in soup.find_all("table"):
-        own_headers = [th for th in table.find_all("th") if th.find_parent("table") is table]
-        th_texts = {normalize_lookup_text(th.get_text(" ", strip=True)) for th in own_headers}
-        if not th_texts & target_headers:
-            continue
-        headers = [clean_text(th.get_text(" ", strip=True)) for th in own_headers]
-        for row in table.find_all("tr"):
-            if row.find_parent("table") is not table:
-                continue
-            cells = row.find_all("td", recursive=False)
-            if len(cells) < 2:
-                continue
-            item: dict[str, Any] = {}
-            for idx, cell in enumerate(cells):
-                key = headers[idx] if idx < len(headers) else f"col_{idx}"
-                anchor = cell.find("a", href=True)
-                item[key] = clean_text(cell.get_text(" ", strip=True))
-                if anchor:
-                    item[f"{key}_url"] = urljoin(page_url, anchor["href"])
-            # Normalise common keys
-            code = (
-                item.get("Ders Kodu")
-                or item.get("Ders Kodu_EN")
-                or item.get("Course Code")
-                or ""
-            )
-            name = (
-                item.get("Ders Adı")
-                or item.get("Ders Adi")
-                or item.get("Course Name")
-                or ""
-            )
-            codes = list(dict.fromkeys(normalize_course_code(match.group(0))
-                                       for match in COURSE_CODE_PATTERN.finditer(code)))
-            for canonical in codes:
-                results.append({**item, "code": canonical, "name": name, "url": page_url})
-        if results:
-            return results
+    return list(dict.fromkeys(normalize_course_code(match.group(0)) for match in COURSE_CODE_PATTERN.finditer(text)))
 
-    # Strategy 2: look for links containing /public/DersBilgi/ or similar patterns
+
+def _course_search_item(headers: list[str], cells: list[Tag], page_url: str) -> dict[str, Any]:
+    """A result row keyed by the table's headers; a cell's link is kept under ``<header>_url``."""
+    item: dict[str, Any] = {}
+    for idx, cell in enumerate(cells):
+        key = headers[idx] if idx < len(headers) else f"col_{idx}"
+        anchor = cell.find("a", href=True)
+        item[key] = clean_text(cell.get_text(" ", strip=True))
+        if anchor:
+            item[f"{key}_url"] = urljoin(page_url, anchor["href"])
+    return item
+
+
+def _course_search_table_results(table: Tag, page_url: str) -> list[dict[str, Any]]:
+    """Results of one table; nothing when its own headers are not those of a course list.
+
+    Nested tables are left to their own turn: only the table's own headers
+    and rows are read. A row gives one result per course code in its code cell.
+    """
+    own_headers = [th for th in table.find_all("th") if th.find_parent("table") is table]
+    th_texts = {normalize_lookup_text(th.get_text(" ", strip=True)) for th in own_headers}
+    if not th_texts & _COURSE_SEARCH_HEADERS:
+        return []
+    headers = [clean_text(th.get_text(" ", strip=True)) for th in own_headers]
+    results: list[dict[str, Any]] = []
+    for row in table.find_all("tr"):
+        if row.find_parent("table") is not table:
+            continue
+        cells = row.find_all("td", recursive=False)
+        if len(cells) < 2:
+            continue
+        item = _course_search_item(headers, cells, page_url)
+        # Normalise common keys
+        code = (
+            item.get("Ders Kodu")
+            or item.get("Ders Kodu_EN")
+            or item.get("Course Code")
+            or ""
+        )
+        name = (
+            item.get("Ders Adı")
+            or item.get("Ders Adi")
+            or item.get("Course Name")
+            or ""
+        )
+        for canonical in _canonical_course_codes(code):
+            results.append({**item, "code": canonical, "name": name, "url": page_url})
+    return results
+
+
+def _course_search_link_results(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
+    """Results read from links to ``/DersBilgi/`` or ``/DersOnsart`` pages."""
+    results: list[dict[str, Any]] = []
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href", "")
         if "/DersBilgi/" not in href and "/DersOnsart" not in href:
@@ -97,13 +107,80 @@ def extract_course_search_results(html: str, page_url: str) -> list[dict[str, An
             continue
         context = clean_text(anchor.parent.get_text(" ", strip=True)) if anchor.parent else text
         code_match = COURSE_CODE_RE.search(context)
+        code = code_match.group(0) if code_match else None
         results.append({
-            "code": code_match.group(0) if code_match else None,
-            "name": text if text != (code_match.group(0) if code_match else "") else context,
+            "code": code,
+            "name": text if text != (code or "") else context,
             "url": urljoin(page_url, href),
         })
-
     return results
+
+
+def extract_course_search_results(html: str, page_url: str) -> list[dict[str, Any]]:
+    """Parse the public course information results, including nested tables.
+
+    Tries table-based extraction first (headers like "Ders Kodu", "Ders Adı"),
+    then falls back to link-list scanning.
+    """
+    soup = make_soup(html)
+
+    # Strategy 1: the first table with a "Ders Kodu" header that yields results
+    for table in soup.find_all("table"):
+        results = _course_search_table_results(table, page_url)
+        if results:
+            return results
+
+    # Strategy 2: look for links containing /public/DersBilgi/ or similar patterns
+    return _course_search_link_results(soup, page_url)
+
+
+_PREREQUISITE_HEADERS = {"on sart", "onsart", "ders kodu", "ders adi", "grup no", "grup", "tip", "tur"}
+
+
+def _prerequisite_entry(row: Any, headers: list[str]) -> dict[str, Any] | None:
+    """A table row as a dict; a row that is neither a list nor a dict is not an entry."""
+    if isinstance(row, list):
+        # Try to map to headers
+        if len(headers) == len(row) and headers:
+            return dict(zip(headers, row, strict=False))
+        return {"_cells": row}
+    if isinstance(row, dict):
+        return dict(row)
+    return None
+
+
+def _prerequisite_record(entry: dict[str, Any]) -> dict[str, Any]:
+    # Normalise common field names
+    code = (
+        entry.get("Ders Kodu")
+        or entry.get("On Sart Ders Kodu")
+        or entry.get("DersKodu")
+        or ""
+    )
+    name = (
+        entry.get("Ders Adı")
+        or entry.get("Ders Adi")
+        or entry.get("On Sart Ders Adı")
+        or ""
+    )
+    group = entry.get("Grup No") or entry.get("Grup") or None
+    prereq_type = entry.get("Tip") or entry.get("Tür") or entry.get("Tur") or None
+    return {
+        "code": clean_text(code) if code else None,
+        "name": clean_text(name) if name else None,
+        "group": clean_text(group) if group else None,
+        "type": clean_text(prereq_type) if prereq_type else None,
+        "_raw": entry,
+    }
+
+
+def _table_prerequisites(table_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Prerequisite rows of a table whose headers suggest prerequisite content."""
+    headers = table_data.get("headers") or []
+    if not {normalize_lookup_text(h) for h in headers} & _PREREQUISITE_HEADERS:
+        return []
+    entries = (_prerequisite_entry(row, headers) for row in table_data.get("rows") or [])
+    return [_prerequisite_record(entry) for entry in entries if entry is not None]
 
 
 def extract_prerequisite_list(
@@ -118,52 +195,8 @@ def extract_prerequisite_list(
     page = parse_html_page(page_url, html, base_url=base_url)
     tables_data = page.get("tables") or []
 
-    prerequisites: list[dict[str, Any]] = []
+    prerequisites = [record for table_data in tables_data for record in _table_prerequisites(table_data)]
     parse_warnings: list[str] = []
-
-    # Look for a table whose headers suggest prerequisite content.
-    prereq_headers = {"on sart", "onsart", "ders kodu", "ders adi", "grup no", "grup", "tip", "tur"}
-    for table_data in tables_data:
-        headers_lower = {normalize_lookup_text(h) for h in (table_data.get("headers") or [])}
-        if not headers_lower & prereq_headers:
-            continue
-
-        headers = table_data.get("headers") or []
-        rows = table_data.get("rows") or []
-        for row in rows:
-            if isinstance(row, list):
-                # Try to map to headers
-                if len(headers) == len(row) and headers:
-                    entry = dict(zip(headers, row, strict=False))
-                else:
-                    entry = {"_cells": row}
-            elif isinstance(row, dict):
-                entry = dict(row)
-            else:
-                continue
-
-            # Normalise common field names
-            code = (
-                entry.get("Ders Kodu")
-                or entry.get("On Sart Ders Kodu")
-                or entry.get("DersKodu")
-                or ""
-            )
-            name = (
-                entry.get("Ders Adı")
-                or entry.get("Ders Adi")
-                or entry.get("On Sart Ders Adı")
-                or ""
-            )
-            group = entry.get("Grup No") or entry.get("Grup") or None
-            prereq_type = entry.get("Tip") or entry.get("Tür") or entry.get("Tur") or None
-            prerequisites.append({
-                "code": clean_text(code) if code else None,
-                "name": clean_text(name) if name else None,
-                "group": clean_text(group) if group else None,
-                "type": clean_text(prereq_type) if prereq_type else None,
-                "_raw": entry,
-            })
 
     if not prerequisites:
         # Check for inline text mentioning prerequisites
