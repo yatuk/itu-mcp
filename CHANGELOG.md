@@ -1,6 +1,6 @@
 # Changelog
 
-## Yayınlanmamış
+## v1.2.1
 
 ### Düzeltmeler
 
