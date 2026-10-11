@@ -87,6 +87,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("stdio", buf.getvalue().lower())
 
+    def test_running_the_server_module_prints_no_runpy_warning(self) -> None:
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parents[1] / "src"
+        env = {**os.environ, "PYTHONPATH": str(src)}
+        for module in ("ninova_mcp.server", "ninova_mcp"):
+            with self.subTest(module=module):
+                done = subprocess.run(
+                    [sys.executable, "-m", module, "--version"],
+                    capture_output=True, text=True, env=env, timeout=120,
+                )
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn(SERVER_VERSION, done.stdout)
+                self.assertNotIn("RuntimeWarning", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
