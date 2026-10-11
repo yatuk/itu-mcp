@@ -250,6 +250,38 @@ def extract_assignment_upload_status(html: str, page_url: str, base_url: str) ->
     }
 
 
+_SUBMIT_LABELS = {"odevi gonder", "gonder", "submit", "upload"}
+
+
+def _postback_submit_control(form: Tag) -> tuple[str, str] | None:
+    """``(event target, label)`` of the LinkButton that submits the form.
+
+    The control is usually ``javascript:__doPostBack('...$lbEkle','')``. Failing
+    that and a link labelled as a submit, the first content postback that is
+    not the header's language switch is taken.
+    """
+    fallback: tuple[str, str] | None = None
+    for anchor in form.find_all("a", href=True):
+        href = anchor.get("href") or ""
+        text = clean_text(anchor.get_text(" ", strip=True))
+        match = re.search(r"__doPostBack\(\s*'([^']+)'\s*,\s*'([^']*)'\s*\)", href)
+        if not match:
+            continue
+        target = match.group(1)
+        if "lbEkle" in target or normalize_lookup_text(text) in _SUBMIT_LABELS:
+            return target, text or target
+        if fallback is None and "ContentPlaceHolder1" in target and "Header" not in target:
+            fallback = (target, text or target)
+    return fallback
+
+
+def _button_submit_control(form: Tag) -> tuple[str | None, str | None]:
+    """``(name, label)`` of the first real submit button; some themes render one."""
+    for input_tag in form.select("input[type='submit'][name], button[name]"):
+        return input_tag.get("name"), input_tag.get("value") or clean_text(input_tag.get_text(" ", strip=True))
+    return None, None
+
+
 def extract_assignment_upload_form(html: str, page_url: str, base_url: str) -> dict[str, Any]:
     """Parse the ASP.NET multipart assignment upload form (OdevGonder)."""
     soup = make_soup(html)
@@ -262,44 +294,13 @@ def extract_assignment_upload_form(html: str, page_url: str, base_url: str) -> d
         }
 
     action = form.get("action") or page_url
-    form_url = urljoin(page_url, action)
     hidden_fields: dict[str, str] = {}
     for input_tag in form.select("input[type='hidden'][name]"):
         name = input_tag.get("name")
         if name:
             hidden_fields[name] = input_tag.get("value") or ""
 
-    # Submit control is usually a LinkButton: javascript:__doPostBack('...$lbEkle','')
-    submit_event_target = None
-    submit_label = None
-    for anchor in form.find_all("a", href=True):
-        href = anchor.get("href") or ""
-        text = clean_text(anchor.get_text(" ", strip=True))
-        match = re.search(r"__doPostBack\(\s*'([^']+)'\s*,\s*'([^']*)'\s*\)", href)
-        if not match:
-            continue
-        target = match.group(1)
-        if "lbEkle" in target or normalize_lookup_text(text) in {
-            "odevi gonder",
-            "odevi gonder",
-            "gonder",
-            "submit",
-            "upload",
-        }:
-            submit_event_target = target
-            submit_label = text or target
-            break
-        if submit_event_target is None and "ContentPlaceHolder1" in target and "Header" not in target:
-            # Fallback: first content postback that is not language switch.
-            submit_event_target = target
-            submit_label = text or target
-
-    if submit_event_target is None:
-        # Some themes render a real submit button.
-        for input_tag in form.select("input[type='submit'][name], button[name]"):
-            submit_event_target = input_tag.get("name")
-            submit_label = input_tag.get("value") or clean_text(input_tag.get_text(" ", strip=True))
-            break
+    submit_event_target, submit_label = _postback_submit_control(form) or _button_submit_control(form)
 
     status = extract_assignment_upload_status(html, page_url, base_url=base_url)
     slots = status.get("upload_items") or []
@@ -310,7 +311,7 @@ def extract_assignment_upload_form(html: str, page_url: str, base_url: str) -> d
     return {
         "ok": True,
         "url": page_url,
-        "form_url": form_url,
+        "form_url": urljoin(page_url, action),
         "title": title,
         "enctype": form.get("enctype") or "multipart/form-data",
         "method": (form.get("method") or "post").lower(),
