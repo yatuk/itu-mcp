@@ -31,6 +31,19 @@
 
 ---
 
+## In English
+
+**İTÜ MCP** is an unofficial, open source [Model Context Protocol](https://modelcontextprotocol.io) server for students of Istanbul Technical University (İTÜ). It runs on your own computer and lets an AI assistant such as Claude, ChatGPT, Cursor or Codex read İTÜ's systems for you: the Ninova LMS (courses, assignments, files, announcements), OBS (grades, schedule, registration status, transcript, graduation progress), the student Portal, the library catalog and a public archive of past course offerings.
+
+- Ask in plain language: "what is due this week", "what will my GPA be if I get BB in everything", "which sections of MAT 210E still have seats".
+- Read-only by default. The two actions that change something (uploading an assignment, saving a registration draft) ask you for confirmation first.
+- Your İTÜ password stays on your machine and is sent only to İTÜ's own login page.
+- Install with `pipx install itu-mcp`, or add it to Claude Code as a plugin: `claude plugin marketplace add yatuk/itu-mcp`.
+
+The rest of this page is in Turkish. Setup: [3 adımda kur](#3-adımda-kur). Full tool list: [docs/advanced.md](docs/advanced.md). Security model: [docs/security.md](docs/security.md). This project is not affiliated with İTÜ.
+
+---
+
 ## Bu ne işe yarıyor?
 
 Ödev için Ninova'ya, not için OBS'ye, yemek için Portal'a girmek yerine asistanına yazıyorsun, o da gerçek veriyi çekip cevaplıyor.
@@ -488,6 +501,20 @@ Bilmen gereken sınırlar:
 - Uzak HTTP sunucusu (`itu-mcp-remote`) `127.0.0.1` dışında bir adrese bağlanıyorsa (Docker imajı dahil) `NINOVA_REMOTE_API_KEY` ve `NINOVA_ALLOWED_HOSTS` ya da `NINOVA_PUBLIC_BASE_URL` verilmeden çalışmaz, eksik değişkeni yazıp kapanır. Yerelde anahtar vermezsen her açılışta rastgele bir anahtar üretir ve bir kez ekrana yazar.
 
 Ayrıntılar: [docs/security.md](docs/security.md) ve [docs/advanced.md](docs/advanced.md).
+
+---
+
+## Gizlilik (Privacy Policy)
+
+İTÜ MCP senin bilgisayarında çalışır. Projenin bir sunucusu, hesabı ya da veri tabanı yoktur.
+
+- **Toplanan veri:** yok. Proje geliştiricisine hiçbir veri gönderilmez, kullanım ölçümü (telemetri) yapılmaz.
+- **Kullanım ve saklama:** İTÜ kullanıcı adın ve şifren yalnızca senin verdiğin ortam değişkenlerinden okunur ve yalnızca İTÜ'nün giriş sayfasına gönderilir. Oturum çerezleri, takip kayıtları ve indirdiğin dosyalar bilgisayarında `~/.ninova_state` klasöründe tutulur.
+- **Üçüncü taraflarla paylaşım:** araçların okuduğu veri, kullandığın yapay zeka asistanına (Claude, ChatGPT ve benzeri) cevap olarak iletilir; o verinin nasıl işlendiği asistan sağlayıcısının politikasına bağlıdır. Sunucu yalnızca İTÜ'nün kendi sitelerine ve herkese açık iki veri kaynağına istek atar: ders arşivi (`itu-ders.com`) ve ön şart karşılaştırması için bir topluluk veri seti (`raw.githubusercontent.com/itu-helper`). Bu ikisine hesabınla ilgili hiçbir bilgi gönderilmez, yalnızca ders kodları sorgulanır.
+- **Saklama süresi:** yerel dosyalar sen silene kadar durur. `~/.ninova_state` klasörünü silmek her şeyi kaldırır.
+- **İletişim:** [GitHub üzerinden sorun kaydı](https://github.com/yatuk/itu-mcp/issues) ya da güvenlik konuları için [özel bildirim](https://github.com/yatuk/itu-mcp/security/advisories/new).
+
+In short (English): the server runs locally, collects nothing, sends your İTÜ credentials only to İTÜ's login page, stores session cookies and downloads only under `~/.ninova_state` on your machine, and has no telemetry. Tool results are passed to the AI assistant you use.
 
 ---
 
