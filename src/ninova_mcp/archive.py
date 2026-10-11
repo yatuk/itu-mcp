@@ -1209,6 +1209,67 @@ def _parse_utc_timestamp(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+# -- which study levels a term dump covers ------------------------------------
+
+# A regular term whose section count is this many times the median of the
+# other terms of the same season (or that fraction of it) probably does not
+# cover the same study levels. Summer school is left out: its size really
+# does change from year to year.
+SECTION_COUNT_OUTLIER_RATIO = 1.4
+
+
+def term_levels(meta: Any, sections: Any = ()) -> list[str]:
+    """Study levels (``LS``, ``LU``, ...) one term's dump holds.
+
+    Read from the per-branch ``levels`` of ``meta.json``, which covers the
+    whole term; the levels of the loaded sections are the fallback. An empty
+    list means the level is not recorded, not that the term has none.
+    """
+    levels: set[str] = set()
+    for branch in (meta.get("branches") if isinstance(meta, dict) else None) or []:
+        if isinstance(branch, dict):
+            levels.update(str(level) for level in clean_list(branch.get("levels")) or [])
+    if not levels:
+        for section in sections or ():
+            level = clean_placeholder(section.get("level")) if isinstance(section, dict) else None
+            if level:
+                levels.add(str(level))
+    return sorted(levels)
+
+
+def section_count_outliers(index_terms: Any) -> list[dict[str, Any]]:
+    """Regular terms whose section count is far from their season's median.
+
+    ``index.json`` records no level per term, so this is only a hint that a
+    term may cover other study levels than its neighbours, never a finding.
+    """
+    by_season: dict[str, list[tuple[str, float]]] = {}
+    for entry in index_terms or []:
+        if not isinstance(entry, dict) or entry.get("missing"):
+            continue
+        slug, count = str(entry.get("slug") or ""), entry.get("sections")
+        season = slug.rsplit("-", 1)[-1]
+        if season in ("guz", "bahar") and _is_count(count) and count > 0:
+            by_season.setdefault(season, []).append((slug, count))
+    outliers = []
+    for terms in by_season.values():
+        for slug, count in terms:
+            others = sorted(other for other_slug, other in terms if other_slug != slug)
+            if len(others) < 2:
+                continue
+            middle = len(others) // 2
+            median = others[middle] if len(others) % 2 else (others[middle - 1] + others[middle]) / 2
+            ratio = count / median
+            if ratio >= SECTION_COUNT_OUTLIER_RATIO or ratio <= 1 / SECTION_COUNT_OUTLIER_RATIO:
+                outliers.append({
+                    "term": slug,
+                    "sections": count,
+                    "same_season_median": median,
+                    "ratio": round(ratio, 2),
+                })
+    return sorted(outliers, key=lambda item: _term_sort_key(item["term"]), reverse=True)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

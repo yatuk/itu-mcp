@@ -19,7 +19,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "List every term held in the İTÜ ders arşivi (2016-2017 onward), including "
             "terms OBS no longer publishes and terms not yet active. Every archive tool "
             "that takes a term accepts the slug ('2025-2026-guz'), the OBS term id (202610) "
-            "or the label printed here ('2025-2026 Güz Dönemi')."
+            "or the label printed here ('2025-2026 Güz Dönemi'). Section counts of two terms "
+            "are not comparable when 'coverage_may_differ' names one of them: the live term "
+            "holds graduate sections that older dumps may lack."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -175,8 +177,9 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "title": "Archive: List Branches",
         "description": (
             "List every branch present in one term's archive dump, with section and course "
-            "counts. Answers 'does this branch even have a döküm for this term?' directly, "
-            "instead of probing archive_term_sections branch by branch."
+            "counts and the study levels the dump holds ('levels', e.g. LS undergraduate, "
+            "LU graduate). Answers 'does this branch even have a döküm for this term?' "
+            "directly, instead of probing archive_term_sections branch by branch."
         ),
         "inputSchema": {
             "type": "object",
@@ -193,7 +196,12 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Diff one course's sections between two archived terms: instructor turnover, "
             "section-count delta, and capacity/fill movement, named explicitly rather than "
-            "left for two separate archive_term_sections calls to be compared by eye."
+            "left for two separate archive_term_sections calls to be compared by eye. "
+            "Read three flags before quoting a number: 'comparable'; 'coverage_differs' "
+            "(the two dumps hold different study levels, listed under 'levels'; only the "
+            "shared levels are compared); and 'enrolment_comparison' (a term whose enrolment "
+            "was never captured has no enrolled count or fill ratio, and is not a term with "
+            "zero students)."
         ),
         "inputSchema": {
             "type": "object",

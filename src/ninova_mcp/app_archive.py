@@ -142,7 +142,7 @@ class ArchiveHistoryToolsMixin:
 
     def archive_list_terms(self) -> dict[str, Any]:
         """List every term the archive holds, with coverage and gaps."""
-        from .archive import is_empty_record
+        from .archive import is_empty_record, section_count_outliers
 
         index = self.archive.get_index()
         # Only the live term carries a filled provenance; the older ones hold
@@ -152,19 +152,34 @@ class ArchiveHistoryToolsMixin:
             if isinstance(term, dict) else term
             for term in index.get("terms") or []
         ]
-        return {
+        outliers = section_count_outliers(terms)
+        result: dict[str, Any] = {
             "current_term": index.get("currentTerm"),
             "current_slug": index.get("currentSlug"),
             "scraped_at": index.get("scrapedAt"),
             "term_count": len(terms),
             "terms": terms,
-            "missing_terms": [t.get("slug") for t in terms if t.get("missing")],
+            "missing_terms": [t.get("slug") for t in terms if isinstance(t, dict) and t.get("missing")],
+            "coverage_may_differ": outliers,
             "note": (
                 "Arşiv, OBS'nin yalnızca aktif dönemi yayınlaması nedeniyle tutuluyor. "
                 "Aktif dönem OBS'den, geçmiş dönemler tarihsel dökümlerden geliyor."
             ),
             "untrusted_external_content": True,
         }
+        if outliers:
+            # The index has no level per term, so this stays a caution: which
+            # levels a term really holds is in its meta file.
+            result["coverage_note"] = (
+                f"{', '.join(item['term'] for item in outliers)}: şube sayısı aynı mevsimin diğer "
+                "dönemlerinin ortancasından çok farklı (coverage_may_differ). Dönemler aynı öğrenim "
+                "düzeylerini kapsamıyor olabilir: canlı taranan dönem lisans ve lisansüstü şubeleri "
+                "birlikte tutarken eski dökümler yalnızca lisans (LS) düzeyini tutabiliyor. Dönem "
+                "listesinde düzey bilgisi yok; bir dönemin kapsadığı düzeyler için "
+                "archive_list_branches(term) sonucundaki levels alanına bakın. Dönemlerin toplam şube "
+                "sayılarını bunu bilmeden karşılaştırmayın."
+            )
+        return result
 
     def archive_course_history(
         self,
@@ -525,6 +540,8 @@ class ArchiveHistoryToolsMixin:
                 "untrusted_external_content": True,
             }
 
+        from .archive import term_levels
+
         meta = self.archive.get_term_meta(term)
         branches = sorted(
             (meta.get("branches") or []), key=lambda item: str(item.get("code") or "")
@@ -537,6 +554,9 @@ class ArchiveHistoryToolsMixin:
             "branch_count": len(branches),
             "total_sections": meta.get("sections"),
             "total_courses": meta.get("courses"),
+            # Study levels this term's dump holds; empty when not recorded.
+            # Terms with different levels are not comparable by section count.
+            "levels": term_levels(meta),
             "branches": branches,
             "untrusted_external_content": True,
         }
@@ -553,7 +573,13 @@ class ArchiveHistoryToolsMixin:
         capacity/fill movement — rather than leaving two ``archive_term_sections``
         calls to be compared by eye.
         """
-        from .archive import diff_term_offerings, split_course_code, summarize_section
+        from .archive import (
+            SECTION_COUNT_OUTLIER_RATIO,
+            diff_term_offerings,
+            split_course_code,
+            summarize_section,
+            term_levels,
+        )
         from .archive_tools import known_archive_term
         from .parsing import normalize_lookup_text as _norm
 
@@ -565,6 +591,8 @@ class ArchiveHistoryToolsMixin:
         term_a = known_archive_term(self.archive, term_a)[0]
         term_b = known_archive_term(self.archive, term_b)[0]
 
+        term_facts: dict[str, tuple[list[str], Any]] = {}
+
         def _sections_for(term: str) -> tuple[str, list[dict[str, Any]], bool]:
             coverage, _, meta, sections = self._resolve_archive_term_branch(term, branch)
             captured = self._archive_enrolment_captured(meta, sections)
@@ -573,10 +601,28 @@ class ArchiveHistoryToolsMixin:
                 for section in sections
                 if _norm(section.get("code")) == _norm(canonical)
             ]
+            term_facts[term] = (term_levels(meta, sections), meta.get("sections"))
             return coverage, matched, captured or not sections
 
         coverage_a, sections_a, captured_a = _sections_for(term_a)
         coverage_b, sections_b, captured_b = _sections_for(term_b)
+        levels_a, total_a = term_facts[term_a]
+        levels_b, total_b = term_facts[term_b]
+
+        # Compare like with like. A dump that holds only the undergraduate
+        # level says nothing about a graduate section of the other term.
+        coverage_differs = set(levels_a) != set(levels_b) if levels_a and levels_b else None
+        compared_a, compared_b = sections_a, sections_b
+        excluded = {"term_a": 0, "term_b": 0}
+        common: list[str] = []
+        if coverage_differs:
+            common = sorted(set(levels_a) & set(levels_b))
+            for key, sections in (("term_a", sections_a), ("term_b", sections_b)):
+                for row in sections:
+                    row["compared"] = row.get("level") is None or row["level"] in common
+                excluded[key] = sum(1 for row in sections if not row["compared"])
+            compared_a = [row for row in sections_a if row["compared"]]
+            compared_b = [row for row in sections_b if row["compared"]]
 
         result: dict[str, Any] = {
             "course_code": canonical,
@@ -584,18 +630,62 @@ class ArchiveHistoryToolsMixin:
             "term_b": term_b,
             "coverage_a": coverage_a,
             "coverage_b": coverage_b,
+            "levels": {"term_a": levels_a, "term_b": levels_b},
+            "coverage_differs": coverage_differs,
             "untrusted_external_content": True,
         }
+        notes: list[str] = []
+        result["comparable"] = True
         if coverage_a != "covered" or coverage_b != "covered":
             result["comparable"] = False
-            result["note"] = (
+            notes.append(
                 "Bir veya iki dönem/branş arşivde tam kapsanmıyor "
                 f"(term_a: {coverage_a}, term_b: {coverage_b}); karşılaştırma güvenilir olmayabilir."
             )
-        else:
-            result["comparable"] = True
+
+        def _listed(levels: list[str]) -> str:
+            return ", ".join(levels) if levels else "bilinmiyor"
+
+        if coverage_differs:
+            result["compared_levels"] = common
+            result["excluded_sections"] = excluded
+            result["coverage_note"] = (
+                f"İki dönemin dökümü aynı öğrenim düzeylerini kapsamıyor ({term_a}: {_listed(levels_a)}; "
+                f"{term_b}: {_listed(levels_b)}). Yalnızca ortak düzeylerdeki ({_listed(common)}) şubeler "
+                "karşılaştırıldı; dışarıda kalan şubeler sections_a ve sections_b içinde "
+                "compared=false ile duruyor. Dönemlerin toplam şube sayıları da bu yüzden "
+                "karşılaştırılamaz."
+            )
+            if (excluded["term_a"] or excluded["term_b"]) and not (compared_a and compared_b):
+                # The course lives at a level one dump never recorded: its
+                # absence there is a gap in the data, not a finding.
+                for key, term, other, other_levels in (
+                    ("term_a", term_a, term_b, levels_b), ("term_b", term_b, term_a, levels_a),
+                ):
+                    if not excluded[key]:
+                        continue
+                    sections = sections_a if key == "term_a" else sections_b
+                    course_levels = sorted({str(row["level"]) for row in sections if not row["compared"]})
+                    result["comparable"] = False
+                    notes.append(
+                        f"{canonical} dersinin {term} dönemindeki {excluded[key]} şubesi "
+                        f"{_listed(course_levels)} düzeyinde; {other} dökümü yalnızca {_listed(other_levels)} "
+                        f"düzeyini içeriyor. Dersin {other} döneminde açılıp açılmadığı bu arşivden "
+                        "söylenemez."
+                    )
+        elif coverage_differs is None and isinstance(total_a, (int, float)) and isinstance(total_b, (int, float)):
+            low, high = sorted((total_a, total_b))
+            if low > 0 and high / low >= SECTION_COUNT_OUTLIER_RATIO:
+                result["coverage_note"] = (
+                    f"En az bir dönem için düzey bilgisi kayıtlı değil ({term_a}: {_listed(levels_a)}; "
+                    f"{term_b}: {_listed(levels_b)}), dönemlerin toplam şube sayıları ise çok farklı "
+                    f"({term_a}: {total_a}, {term_b}: {total_b}). Dökümler farklı öğrenim düzeylerini "
+                    "kapsıyor olabilir; farkı buna göre okuyun."
+                )
+        if notes:
+            result["note"] = " ".join(notes)
         diff = diff_term_offerings(
-            sections_a, sections_b,
+            compared_a, compared_b,
             enrolment_captured_a=captured_a, enrolment_captured_b=captured_b,
         )
         result["diff"] = diff
