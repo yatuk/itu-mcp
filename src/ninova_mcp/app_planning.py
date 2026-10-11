@@ -46,11 +46,14 @@ class PlanningToolsMixin:
             plan_rows,
             reconcile_credit_candidates,
             resolve_projection_keys,
+            validate_projected_grades,
         )
         from .gpa_reference import attach_official_reference, official_term_reference
         from .grading import LETTER_TO_GRADE, normalize_grade
         from .parsing import normalize_lookup_text
 
+        # A bad grade is rejected before OBS is contacted.
+        validate_projected_grades(projected_grades)
         resolved = self.obs.resolve_semester(semester)
         payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
         if not isinstance(payload, dict) or (

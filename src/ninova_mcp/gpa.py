@@ -48,6 +48,32 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def validate_projected_grades(projected_grades: Any) -> dict[str, str]:
+    """What-if grades with normalized letter grades (``bb`` becomes ``BB``).
+
+    Raises ``ValueError`` naming the key, the value and the valid grades.
+    """
+    if projected_grades is None:
+        return {}
+    if not isinstance(projected_grades, dict):
+        raise ValueError('projected_grades must be an object such as {"BLG 223E": "AA", "21547": "BB"}.')
+    counted = [grade for grade, value in LETTER_TO_GRADE.items() if value is not None]
+    uncounted = sorted(grade for grade, value in LETTER_TO_GRADE.items() if value is None)
+    checked: dict[str, str] = {}
+    for raw_key, raw_grade in projected_grades.items():
+        if not course_key(raw_key):
+            raise ValueError("projected_grades keys must be a course code or a CRN.")
+        grade = normalize_grade(raw_grade) if isinstance(raw_grade, str) else ""
+        if grade not in LETTER_TO_GRADE:
+            raise ValueError(
+                f"Unknown letter grade {raw_grade!r} for projected_grades[{str(raw_key)!r}]. "
+                f"Valid grades: {', '.join(counted)}. "
+                f"Accepted but not counted in GPA: {', '.join(uncounted)}."
+            )
+        checked[str(raw_key)] = grade
+    return checked
+
+
 def calculate_gpa(
     courses: list[dict[str, Any]],
     *,
@@ -64,10 +90,8 @@ def calculate_gpa(
     olmayan veya beklenen not için elle girilmiş tahmin.
     """
     projected: dict[str, str] = {}
-    for code, grade in (projected_grades or {}).items():
-        key, normalized_grade = course_key(code), normalize_grade(grade)
-        if not key or normalized_grade not in LETTER_TO_GRADE:
-            raise ValueError("Projected grades require a course code and a recognized İTÜ grade.")
+    for code, grade in validate_projected_grades(projected_grades).items():
+        key, normalized_grade = course_key(code), grade
         if key in projected and projected[key] != normalized_grade:
             raise ValueError(f"Conflicting projected grades for {key}.")
         projected[key] = normalized_grade
