@@ -12,6 +12,7 @@ from .app_archive import ArchiveHistoryToolsMixin
 from .app_base import AppBase
 from .app_campus import CampusToolsMixin
 from .app_core import SessionToolsMixin
+from .app_export import TableExportToolsMixin
 from .app_files import PageFileToolsMixin
 from .app_gpa_simulation import GpaSimulationToolsMixin
 from .app_library import LibraryToolsMixin
@@ -50,5 +51,6 @@ class NinovaMcpApp(
     ArchiveDatasetToolsMixin,
     SeatWatchToolsMixin,
     CalendarExportToolsMixin,
+    TableExportToolsMixin,
 ):
     pass

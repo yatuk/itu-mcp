@@ -540,6 +540,34 @@ the published tool set.
 - `check_course_conflicts` — scans one or more department codes
 - `get_personal_exam_calendar` — authenticated student's official final calendar
 
+### Table export (CSV)
+
+`export_table(dataset, semester, save=false)` returns one of the student's own tables as
+CSV text made for a Turkish Excel: UTF-8 with a byte order mark, `;` as the delimiter,
+decimal comma, `
+` line endings and Turkish headers. It reads through the same code
+as the matching tool and changes nothing at the university.
+
+| `dataset` | Columns | Source |
+| --- | --- | --- |
+| `term_grades` | Ders Kodu, Ders Adı, Kredi, Harf Notu | as `obs_calculate_gpa`; the term average is in `term_gpa` |
+| `all_grades` | Dönem, Ders Kodu, Ders Adı, Kredi, Harf Notu, Durum | the record of `obs_simulate_cumulative_gpa`; Durum is `Sayılıyor`, `Tekrar edildi`, `Ortalamaya girmez` or `Kredi bilinmiyor` |
+| `weekly_schedule` | Gün, Başlangıç, Bitiş, Ders Kodu, Ders Adı, CRN, Bina, Derslik | as `obs_get_schedule` |
+| `deadlines` | Ders Kodu, Ders, Ödev, Son Teslim (ISO), Son Teslim, Yüklendi | the stored tracking snapshot, every dated assignment; no sync is run |
+
+`semester` applies to `term_grades` and `weekly_schedule`; for the other two it is ignored
+and the result carries `semester_ignored`. `deadlines` reports `status`, `stale` and
+`snapshot_age_hours` like `get_upcoming_deadlines`; run `sync_all_courses` first when it is
+stale. `Yüklendi` is `Bilinmiyor` when the snapshot was taken without assignment details.
+
+The result has `columns`, `row_count`, `mime_type`, `suggested_filename` and the text in
+`csv`. Text over about 200 KB is cut at a row boundary (`truncated`, `total_row_count`).
+With `save=true` the complete file is written to `<state>/downloads/exports/` and `path`
+is returned instead of the text; an existing file is never replaced (`-2`, `-3`, ...).
+Titles come from university pages, so a cell starting with `=`, `+`, `-`, `@`, a tab or a
+carriage return is prefixed with `'` and cannot run as a formula. Because it can write a
+file, the tool is not served on the remote HTTP transport.
+
 ### Public OBS and campus tools (no credentials)
 
 - `obs_search_courses` / `obs_get_course_prerequisites`
