@@ -170,6 +170,123 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
     return "\n".join(lines)
 
 
+def _split_candidates(raw: str) -> tuple[list[str], list[str], list[str]]:
+    """Sort a free-form candidate list into CRNs, course codes and the rest."""
+    import re
+
+    from .archive import normalize_course_code
+
+    crns: list[str] = []
+    codes: list[str] = []
+    unrecognised: list[str] = []
+    for item in re.split(r"[,;\n]+", str(raw or "")):
+        token = item.strip()
+        if not token:
+            continue
+        if re.fullmatch(r"[0-9]{4,5}", token):
+            target, value = crns, token
+        else:
+            try:
+                target, value = codes, normalize_course_code(token)
+            except ValueError:
+                # Echoed back inside the prompt, so keep it short and inert.
+                target, value = unrecognised, re.sub(r"[^\w .\-]", "", token)[:30].strip()
+        if value and value not in target:
+            target.append(value)
+    return crns, codes, unrecognised
+
+
+def registration_week(candidates: str) -> str:
+    """Compare candidate courses/CRNs for registration week without saving anything."""
+    crns, codes, unrecognised = _split_candidates(candidates)
+    lines = ["Kayıt haftası için aday derslerimi değerlendir.\n"]
+    if codes:
+        lines.append(f"Aday ders kodları: {', '.join(codes)}")
+    if crns:
+        lines.append(f"Aday CRN'ler: {', '.join(crns)}")
+    if unrecognised:
+        lines.append(
+            f"Çözümlenemeyen girdiler: {', '.join(unrecognised)}. Bunları tahmin etme, "
+            "bana ne olduklarını sor."
+        )
+    if not (codes or crns):
+        lines.append(
+            "Aday listesi boş ya da okunamadı. Önce hangi ders kodlarını veya CRN'leri "
+            "düşündüğümü sor."
+        )
+    branches = sorted({code.split()[0] for code in codes})
+    departments = ", ".join(f'"{branch}"' for branch in branches) or "<branşlar>"
+    lines.append(
+        "\nBu akış yalnızca okur ve karşılaştırır: hiçbir şey kaydedilmez, derse yazılma "
+        "yapılmaz. `obs_save_registration_draft` aracını bu akışta çağırma. Kaydı OBS'de "
+        "ben yapacağım.\n"
+    )
+    lines.append(
+        "1. **Şubeleri bul.** Her ders kodu için `get_public_course_schedule("
+        'program_type="LS", department_code=<branş>, query=<ders kodu>)` ile bu dönemin '
+        "şubelerini, CRN'lerini, gün/saatlerini ve kontenjanını al. Yalnızca CRN verdiysem "
+        "ve hangi derse ait olduğu belli değilse ders kodunu bana sor; CRN'den ders "
+        "tahmin etme."
+    )
+    lines.append(
+        "2. **Çakışma.** Seçmeyi düşündüğün CRN'lerle `check_course_conflicts(crns=[...], "
+        f"department_codes=[{departments}])` çağır; `department_codes` listesine bütün "
+        "adayların branşlarını koy. `missing_crns` doluysa o CRN'ler taranan bölümlerde "
+        "bulunamadı demektir, yani kontrol edilmediler: bunu 'çakışma yok' diye sunma. "
+        "Günü veya saati `-` olan şubeler karşılaştırmaya hiç girmez; onları ayrıca belirt."
+    )
+    lines.append(
+        "3. **Önşart ve uygunluk.** Her ders kodu için `explain_course_eligibility("
+        "course_code, use_obs_history=true)` çağır. `prerequisite_status` alanında "
+        "`unknown` ile `no_prerequisites` aynı şey DEĞİL: `unknown` tablonun okunamadığını "
+        "söyler, 'önşartı yok' diye aktarma. `cross_check.agrees_with_obs=false` ise farkı "
+        "bildir ama OBS yetkili kaynaktır; `available=false` uyuşma sayılmaz."
+    )
+    lines.append(
+        "4. **Geçmiş doluluk.** Her ders kodu için `archive_fill_rate(course_code=...)` "
+        "çağır: `average_fill_ratio`, `always_fills` ve dönem dönem `offerings`. "
+        "`sections_with_quota_data` 0 ise doluluk verisi yok demektir, 'dolmuyor' demek "
+        "değildir. Bu dönemin belirli bir şubesi için `archive_fill_rate(crn=...)` günlük "
+        "kontenjan serisini verir; hata dönerse o CRN izlenmiyor demektir. Eksik dönem "
+        "şüphesi varsa `archive_term_sections` sonucundaki `coverage` alanına bak: "
+        "`term_missing` ve `branch_absent_from_term` veri eksikliğidir, 'açılmadı' değil."
+    )
+    lines.append(
+        "5. **Geçmiş not dağılımı.** Her ders kodu için `archive_grade_distribution("
+        "course_code)` çağır ve `coverage` alanını raporla: `branch_grades_missing` ve "
+        "`course_absent_from_grades` 'dağılım kaydedilmemiş' demektir, 'herkes geçti' ya da "
+        "'ders yok' değil. `related_codes` altındaki kardeş kodu (örn. `BLG 212` ile "
+        "`BLG 212E`) toplama; `same_counts_as` doluysa aynı sayılar iki kodda da duruyor. "
+        "Dağılım dersi kimin verdiğine göre değişir, tek dönemden kesin sonuç çıkarma."
+    )
+    lines.append(
+        "6. **OBS taslak kontrolü, tek sefer.** Listeyi yukarıdaki adımlarla daralttıktan "
+        "sonra, son CRN listesiyle `obs_validate_registration_plan(crns=[...])` aracını "
+        "**bir kez** çağır. Bu araç ve `obs_get_elective_group` OBS'ye kontrol isteği "
+        "gönderir; her çağrı OBS'nin taslak kontrol kotasından düşer ve kısa bir işlem "
+        "kilidi alır. Aday başına, döngü içinde ya da 'bir de şunu deneyeyim' diye "
+        "tekrar tekrar çağırma. `obs_get_elective_group(group_id)` aracını yalnızca bir "
+        "seçmeli grubunun hangi dersleri kabul ettiği gerçekten gerekiyorsa, grup başına "
+        "bir kez kullan. Sonuçta `status` üç değer alır: `valid`, `invalid`, `incomplete`. "
+        "`incomplete` (`valid: null`) planın doğrulanamadığını söyler, onay değildir; "
+        "hangi kontrolün eksik kaldığını aktar."
+    )
+    lines.append(
+        "\n**Özet.** Aday başına tek satırlık tablo ver: şube/CRN, çakışma, önşart durumu, "
+        "geçmiş doluluk, not dağılımı. Ardından net bir öneri yaz (hangi CRN'ler, hangi "
+        "yedekler) ve açık riskleri ayrı bir başlıkta say: doğrulanamayan önşartlar, "
+        "kontrol edilemeyen CRN'ler, hızlı dolan şubeler, `incomplete` kalan kontroller, "
+        "veri bulunmayan dersler.\n"
+    )
+    lines.append(
+        "Kontenjan sayıları anlık değildir (arşiv günde bir tazelenir) ve kayıt saatinde "
+        "değişir. Hiçbir şeyin kaydedilmediğini, derse yazılmanın OBS'de elle yapılacağını "
+        "ve son kararı OBS ekranının vereceğini hatırlat.\n"
+    )
+    lines.append(_UNTRUSTED_NOTE)
+    return "\n".join(lines)
+
+
 # Metadata mirrors the TOOLS list in server.py so both transports register the
 # same surface from one source.
 PROMPTS: list[dict[str, Any]] = [
@@ -220,6 +337,17 @@ PROMPTS: list[dict[str, Any]] = [
             "(GANO senaryo hesabı)."
         ),
         "builder": gpa_scenario,
+    },
+    {
+        "name": "registration_week",
+        "title": "Kayıt Haftası Kontrolü",
+        "description": (
+            "Compare candidate course codes or CRNs for registration week: time "
+            "conflicts, prerequisites, past fill rates and grade distributions, then "
+            "one deliberate OBS draft check. Nothing is saved or registered "
+            "(kayıt haftası aday ders karşılaştırması)."
+        ),
+        "builder": registration_week,
     },
 ]
 

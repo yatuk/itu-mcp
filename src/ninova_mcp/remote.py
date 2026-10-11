@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from .env import load_ninova_env
+from .public_resources import register_public_resources
 from .remote_security import (
     RemoteSecurityMiddleware,
     api_key_required,
@@ -141,6 +142,8 @@ def _build_fastmcp(app_logic: NinovaMcpApp, mount_path: str) -> FastMCP:
     # the hosted transport as-is.
     register_prompts(mcp)
     register_resources(mcp)
+    # Public, credential-free data read through the app's allowlisted clients.
+    register_public_resources(mcp, app_logic)
 
     # Keep the mounted path on the instance for observability/debug logs if needed.
     mcp.mount_path = mount_path  # type: ignore[attr-defined]

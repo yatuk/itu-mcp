@@ -39,6 +39,8 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(buf):
             main(["--list-resources"])
         self.assertIn("itu://reference/grade-scale", buf.getvalue())
+        self.assertIn("itu://archive/terms", buf.getvalue())
+        self.assertIn("itu://archive/catalog/{course_code}", buf.getvalue())
 
     def test_check_auth_missing_credentials(self) -> None:
         import os

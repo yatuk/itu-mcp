@@ -370,6 +370,33 @@ the published tool set.
 - `search_campus_locations` — official OBS building codes/names (not coordinates)
 - `get_shuttle_schedule` / `get_sports_facility_hours`
 - `get_itu_announcements` — İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation
+- `export_course_schedule_ics(crns, department_codes, program_type?, term_start?, term_end?)`:
+  the weekly meetings of the given CRNs as iCalendar (RFC 5545) text, read from the public
+  course schedule. Each meeting is a weekly recurring event between the first and last day
+  of classes. Pass those as `term_start` and `term_end` (`YYYY-MM-DD`). When one is omitted
+  the tool looks for "Beginning of ... Term" / "End of ... Term" on the academic calendar
+  page for the same academic year and level, but that page covers only the displayed month,
+  so most calls without dates return `status: "term_dates_required"`, `ics: null` and the
+  names of the missing parameters. No date is ever guessed. A meeting whose day or time is
+  an OBS placeholder (`-`, `--`, `-/-`) is listed in `skipped` with a reason and gets no
+  event; CRNs not found in the scanned departments are in `missing_crns`. Holidays and
+  make-up classes are not removed from the recurrence
+- `export_exam_schedule_ics(course_codes)`: the current public final exam schedule, filtered
+  to the given course codes, as single dated events. Rows with an unreadable date or time
+  are in `skipped`, codes without a row in `not_found`, and a branch whose schedule is not
+  published yet is skipped with `exam_schedule_not_published`. When only a start time is
+  published the event has no end time and the course is named in `end_time_unknown`
+
+Both export tools return the calendar in `ics` together with `event_count`, `summary`,
+`suggested_filename` and `mime_type: "text/calendar"`. They return text only and never write
+a file, so unlike `download_resource` and `obs_download_transcript` they need no
+`output_dir` and are available on the remote transport; save the text as a UTF-8 `.ics`
+file on the client side. Times are Europe/Istanbul local times with a fixed UTC+3
+`VTIMEZONE` block written by the server itself (no dependency on the system timezone
+database). UIDs are derived from term, CRN, weekday and time (exams: CRN, code, date and
+time), so importing the same export again updates events instead of duplicating them.
+Lines end in CRLF, are folded at 75 octets without splitting a multi-byte character, and
+commas, semicolons, backslashes and line breaks in text fields are escaped.
 
 All public HTTP clients use exact HTTPS host allowlists and the shared
 `NINOVA_REQUEST_DELAY_MS` throttle. Public clients do not receive SSO cookies.
@@ -452,21 +479,68 @@ misread in these tools' output.
   and `archive_seasonality` to be reported together
 - `research_course(course)` — archive history; forces `coverage` to be reported
 - `gpa_scenario(target_gpa="", projected="")` — current GPA, what-if, target average
+- `registration_week(candidates)`: compares candidate course codes and CRNs (one
+  comma-separated string) for registration week. Sections, then `check_course_conflicts`,
+  `explain_course_eligibility`, `archive_fill_rate` and `archive_grade_distribution`, then a
+  recommendation with the open risks. It restates that `missing_crns` means "not checked",
+  that eligibility `unknown` is not "no prerequisite", that archive `coverage` values such
+  as `branch_grades_missing` mean "not recorded", and that validator status `incomplete` is
+  not an approval. `obs_validate_registration_plan` and `obs_get_elective_group` send a
+  check to OBS that counts against a quota, so the prompt asks for one deliberate call
+  after the list is narrowed, never one per candidate. Nothing is saved or registered by
+  this flow, and it tells the model not to call `obs_save_registration_draft`
 
 Prompt arguments arrive as strings over the wire regardless of annotation, so every
 builder parses its own input and falls back to a default on garbage.
 
 ### Resources
 
-Static reference tables only — no network, no credentials, no per-student state.
+Resources are context a user or client attaches on purpose, as opposed to tools the model
+calls. Two kinds are exposed, and none of them needs a login.
+
+Static reference tables (no network, no per-student state):
 
 - `itu://reference/grade-scale` — letter-grade coefficients, grades excluded from the
   GPA, failing grades, and the GPA comment bands
 - `itu://reference/program-types` — valid `program_type` values (LS/LU/ÖL/LUİ) and their
   accepted aliases, so callers stop discovering them by triggering an error
 
-Both are concrete resources (no URI templates) and are registered on both the stdio and
-remote HTTP transports.
+Public data, fetched through the same clients the tools use (host allowlists, safe
+redirects, throttle and TTL caches all apply):
+
+- `itu://calendar/academic`: the academic calendar page as `get_academic_calendar` returns
+  it. It covers the displayed month only; check `coverage`
+- `itu://archive/terms`: the terms the course archive holds, the current term slug and the
+  known gaps
+- `itu://campus/buildings`: official OBS building codes and names
+
+Resource templates:
+
+- `itu://archive/catalog/{course_code}`: the archive catalog entry of a course, the same
+  payload as `archive_course_catalog`
+- `itu://archive/grades/{course_code}`: the historical letter grade distribution of a
+  course, the same payload as `archive_grade_distribution` over every recorded term
+- `itu://degree-plan/{program_code}`: the latest official undergraduate degree plan of an
+  OBS program code such as `BLGE_LS`, with older versions under `available_plans`. The
+  public form is keyed by faculty, so the faculty is found by reading each faculty's
+  program list (cached for an hour); the first read of a session is therefore slower
+
+Write the course code without a space (`itu://archive/catalog/BLG223E`); a percent-encoded
+space and lower case are accepted too. Every parameter is percent-decoded and validated
+before a URL is built: course codes with the validator the archive tools use, program codes
+against a strict pattern and then against the official program lists. A malformed parameter
+is rejected without any request. A well-formed but unknown course code is an answer, not an
+error: the payload carries `coverage` (`course_absent_from_catalog`, `branch_grades_missing`
+and so on). An unknown program code is an error with a one-line message. Error messages
+never include a stack trace.
+
+Each read returns `application/json` with `resource_uri`, `source_url`,
+`untrusted_external_content: true` and a `content_notice`, like the tool results.
+
+Nothing that needs the student's session (grades, transcript, personal schedule, mail) is a
+resource: a client may read resources without a per-call approval prompt, so this surface
+is limited to public data. All resources are registered on both the stdio and remote HTTP
+transports, and `itu-mcp --list-resources` prints the URIs and the templates.
 
 ### Library tools
 
