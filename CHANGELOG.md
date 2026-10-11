@@ -1,6 +1,6 @@
 # Changelog
 
-## Yayınlanmamış
+## v1.1.0
 
 ### Güvenlik
 

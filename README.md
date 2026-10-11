@@ -7,7 +7,7 @@
   <p><em>Ninova, OBS, Portal, kütüphane ve ders arşivini yapay zeka asistanına bağla. Sonra sadece sor.</em></p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v1.0.0-blue?style=flat-square" alt="Sürüm: v1.0.0" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v1.1.0-blue?style=flat-square" alt="Sürüm: v1.1.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
     <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
