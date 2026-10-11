@@ -33,6 +33,7 @@ from typing import Any
 
 from .obs_client import ObsError, ObsPublicClient
 from .parsing import normalize_lookup_text
+from .private_io import write_private_text
 
 SEAT_WATCH_STATE_VERSION = 1
 SEAT_WATCH_STATE_FILENAME = "seat-watch-state.json"
@@ -142,16 +143,10 @@ def load_seat_watch_state(path: Path) -> tuple[dict[str, Any], str | None]:
 
 
 def save_seat_watch_state(path: Path, state: dict[str, Any]) -> None:
-    """Write-then-rename, the same atomic pattern as ``save_tracking_state``."""
+    """Atomic and owner-only, the same helper as ``save_tracking_state``."""
     state["version"] = SEAT_WATCH_STATE_VERSION
     state["updated_at"] = _now_iso()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    write_private_text(path, json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 # -- reading one schedule ----------------------------------------------------

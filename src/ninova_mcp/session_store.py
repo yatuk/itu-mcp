@@ -11,6 +11,8 @@ from typing import Any
 
 from requests.cookies import RequestsCookieJar, create_cookie
 
+from .private_io import write_private_text
+
 SESSION_STATE_VERSION = 1
 DEFAULT_MAX_AGE_SECONDS = 12 * 60 * 60  # 12 hours
 
@@ -90,7 +92,6 @@ def save_session(
 ) -> None:
     if not session_persist_enabled():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": SESSION_STATE_VERSION,
         "saved_at": time.time(),
@@ -99,13 +100,8 @@ def save_session(
         "login_method": login_method,
         "cookies": cookie_jar_to_list(jar),
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    # Cookies are a login: owner-only from the first byte, see private_io.
+    write_private_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def load_session(
