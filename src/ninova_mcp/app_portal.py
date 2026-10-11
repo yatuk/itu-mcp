@@ -13,7 +13,7 @@ from .parsing import normalize_lookup_text
 
 
 class PortalToolsMixin:
-    """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and the course cache."""
+    """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and ``_course_cache``."""
 
     client: NinovaClient
 
@@ -24,7 +24,13 @@ class PortalToolsMixin:
         return campus_card(self._get_portal_json("GetBalance"))
 
     def _get_portal_page(self) -> tuple[str, str]:
-        """Fetch the portal homepage once, cached for the request lifetime."""
+        """Fetch the Portal homepage, reusing a copy from the app's TTL cache.
+
+        The page is stored in ``_course_cache`` under ``portal_home``. That
+        cache lives as long as the app, not one request: an entry expires
+        after ``NINOVA_COURSE_CACHE_TTL_SECONDS`` (60 seconds by default) or
+        when ``invalidate_caches`` runs.
+        """
         cache_key = "portal_home"
         cached = self._course_cache.get(cache_key)
         if cached is not None:
@@ -203,7 +209,12 @@ class PortalToolsMixin:
         return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
 
     def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
-        """Fetch and parse one ticket page. Callers decide ownership and redaction."""
+        """Fetch and parse one ticket page. Callers decide ownership and redaction.
+
+        A parsed ticket is kept in ``_course_cache`` under ``help_ticket:<id>``
+        for the same TTL as the course list, so a repeated read within that
+        window does not open the page again.
+        """
         from .help_tickets import help_url, parse_detail, ticket_url
 
         cache_key = f"help_ticket:{identifier}"

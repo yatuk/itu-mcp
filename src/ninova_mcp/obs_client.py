@@ -249,6 +249,8 @@ class ObsClient:
                         and payload.get("resultCode") in ("VAL16", "ERRMaxIstekTaslakKontrol")):
                     continue
                 return normalize_validation(payload, selected)
+        # Not reached: the second attempt always returns or raises. Kept so the
+        # function visibly ends in a return or a raise on every path.
         raise ObsError("OBS CRN validation remained busy.")
 
     def get_advisor(self) -> dict[str, Any]:

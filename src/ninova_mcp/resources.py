@@ -17,7 +17,9 @@ from typing import Any
 
 from .gpa import LETTER_TO_GRADE
 
-# Mirrors the bands calculate_gpa() uses to annotate a computed GANO.
+# Reference bands published in the grade-scale resource only. calculate_gpa()
+# does not use them: it returns no comment and states that its result does
+# not determine honour standing or academic status.
 GPA_BANDS: list[dict[str, Any]] = [
     {"min_gpa": 3.50, "label": "Yüksek onur derecesinde."},
     {"min_gpa": 3.00, "label": "Onur derecesinde."},
