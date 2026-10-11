@@ -4,12 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 REGISTRATION_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_registration_status",
         "title": "OBS Registration Status",
-        "description": "Read official OBS registration status, class/GPA provenance and published class registration windows. Personal holds and credit limits are reported only when verified.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "description": (
+            "Read official OBS registration status, class level, GPA and published class registration windows. "
+            "Returns summary.per_program. class_level, official_term_gpa and official_cumulative_gpa come from "
+            "the latest term reported by KayitDurumu, which can be a summer term; last_regular_term holds the "
+            "latest fall or spring term with its GPA and cumulative GPA, or same_as_latest_academic_term when "
+            "that is the same term. term_history lists every reported term, newest first, with its GPA, "
+            "cumulative GPA, awarded credit and class label. registration_permission.status is what OBS reports "
+            "for the course-registration term; it does not prove that every personal hold or CRN restriction is "
+            "clear. registration_window and all_students_reopening are the published undergraduate class "
+            "calendar (times in the result's timezone), not a confirmation of personal clearance; "
+            "all_students_reopening_unavailable_reason is present only when several reopening events cannot be "
+            "told apart. These "
+            "endpoints never report a maximum registration credit, a list of personal holds or an academic-"
+            "standing decision, so the result carries no such field. The two raw OBS payloads are returned only "
+            "with include_raw=true."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_raw": include_raw_property("obs_get_registration_status")},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "obs_get_registration_draft",
@@ -17,6 +38,7 @@ REGISTRATION_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read the saved OBS registration draft with CRNs, course names, saved eligibility "
             "verdicts, restriction reasons, last check time and available draft meeting times. "
+            "Each meeting gives room (the door label) and room_type (e.g. Amfi, Derslik). "
             "Reads the active registration term. Does not save or recheck the draft. "
             "Saved eligibility is a snapshot; use obs_validate_registration_plan for a fresh check."
         ),

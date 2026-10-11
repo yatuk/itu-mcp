@@ -13,6 +13,7 @@ tally, so the mapping is stated rather than inferred.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .archive import normalize_course_code
@@ -47,6 +48,16 @@ def _credit_of(item: dict[str, Any]) -> float:
         return 0.0
 
 
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _semester_label(item: dict[str, Any]) -> str | None:
     number = item.get("donemNo")
     return f"{number}. yarıyıl" if number else None
@@ -67,6 +78,7 @@ def summarize_graduation_plan(payload: dict[str, Any]) -> dict[str, Any]:
     open_slots: list[dict[str, Any]] = []
     completed_courses: list[dict[str, Any]] = []
     remaining_courses: list[dict[str, Any]] = []
+    credit_gaps: list[dict[str, Any]] = []
 
     for item in entries:
         group = str(item.get("grupName") or "").strip()
@@ -83,16 +95,28 @@ def summarize_graduation_plan(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
         if item.get("isMet"):
+            # ``credit`` is the plan row's credit; ``counted_credit`` is what OBS
+            # counted for the course taken. A slot filled by a course of another
+            # size carries two different values.
+            counted = _number(item.get("sayilanKredi"))
+            differs = counted is not None and counted > 0 and abs(counted - record["credit"]) > 1e-9
+            if differs:
+                credit_gaps.append({
+                    "course_code": code or None, "slot": group or None,
+                    "slot_credit": record["credit"], "counted_credit": counted,
+                    "difference": round(counted - record["credit"], 2),
+                })
             if group:
                 # A named elective slot with a real course behind it: this is
                 # the mapping the raw payload buries.
-                filled_slots.append({**record, "slot": group})
+                filled_slots.append({**record, "slot": group, "slot_credit": record["credit"], "credit_differs": differs})
             completed_courses.append(record)
         else:
             if group:
                 open_slots.append({
                     "slot": group,
                     "credit": _credit_of(item),
+                    "slot_credit": _credit_of(item),
                     "semester": _semester_label(item),
                 })
             else:
@@ -116,7 +140,40 @@ def summarize_graduation_plan(payload: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         credits_left = None
 
-    return {
+    items_total = round(
+        math.fsum(course["credit"] for course in remaining_courses)
+        + math.fsum(slot["credit"] for slot in open_slots), 2,
+    )
+    reconciliation: dict[str, Any] | None = None
+    if credits_left is not None and math.isfinite(credits_left) and abs(items_total - credits_left) > 0.005:
+        difference = round(items_total - credits_left, 2)
+        explained = round(math.fsum(gap["difference"] for gap in credit_gaps), 2)
+        names = ", ".join(
+            f"{gap['course_code'] or gap['slot']} ({gap['slot_credit']:g} kredilik yerde "
+            f"{gap['counted_credit']:g} kredi sayıldı)" for gap in credit_gaps
+        )
+        if credit_gaps and abs(explained - difference) <= 0.005:
+            note = (
+                f"Kalan kalemlerin kredi toplamı ({items_total:g}) ile credits_remaining ({credits_left:g}) "
+                f"arasındaki {difference:g} kredilik fark şundan kaynaklanıyor: {names}."
+            )
+        else:
+            note = (
+                f"Kalan kalemlerin kredi toplamı ({items_total:g}) ile credits_remaining ({credits_left:g}) "
+                f"arasında {difference:g} kredi fark var"
+                + (f"; {explained:g} kredisi şundan kaynaklanıyor: {names}. Kalanı" if credit_gaps else "; fark")
+                + " listedeki kalemlerle açıklanamıyor."
+            )
+        reconciliation = {
+            "remaining_items_credit_total": items_total,
+            "credits_remaining": credits_left,
+            "difference": difference,
+            "explained_difference": explained,
+            "explained_by": credit_gaps,
+            "note": note,
+        }
+
+    summary = {
         "program": plan.get("akademikProgramAdiTR"),
         "plan_title": plan.get("dersPlaniBaslik"),
         "gpa": info.get("gpa"),
@@ -124,6 +181,11 @@ def summarize_graduation_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "credits_required": required_credits,
         "credits_earned": earned_credits,
         "credits_remaining": credits_left,
+        "remaining_items_credit_total": items_total,
+        "credit_fields_note": (
+            "credit ve slot_credit ders planındaki kalemin kredisidir; counted_credit, o kalem için "
+            "alınan dersten OBS'nin saydığı kredidir. İkisi farklıysa credit_differs true olur."
+        ),
         "courses_total": info.get("toplamDersSayisi"),
         "courses_completed": info.get("tamamlananDersSayisi"),
         "internship_days_required": plan.get("gerekliStajGunu"),
@@ -140,3 +202,6 @@ def summarize_graduation_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "gösterir; ham listede bu eşleşme yalnızca grupName alanında gizlidir."
         ),
     }
+    if reconciliation:
+        summary["credit_reconciliation"] = reconciliation
+    return summary

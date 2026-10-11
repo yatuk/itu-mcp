@@ -121,7 +121,7 @@ def course_catalog(app: Any, course_code: str) -> dict[str, Any]:
 def course_grades(app: Any, course_code: str) -> dict[str, Any]:
     """Archive letter grade distribution for one course code, every term."""
     branch, canonical = course_code_parameter(course_code)
-    payload = app.archive_grade_distribution(canonical)
+    payload = app.archive_grade_distribution(canonical, limit_terms=30)
     uri = COURSE_GRADES_TEMPLATE.format(course_code=canonical.replace(" ", ""))
     return _provenance(payload, uri, f"{app.archive.base_url}/grades/{branch}.json")
 
@@ -174,8 +174,9 @@ PUBLIC_RESOURCES: list[dict[str, Any]] = [
         "title": "İTÜ Akademik Takvim",
         "description": (
             "Official İTÜ academic calendar events (registration, exams, holidays, term "
-            "dates) as published on the calendar page. Covers the displayed month only; "
-            "see 'coverage'. Public, no login."
+            "dates) as published on the calendar page, in English and Turkish. Lists recent "
+            "and upcoming events of the current academic year; see 'default_window' and "
+            "'coverage'. Public, no login."
         ),
         "builder": academic_calendar,
     },

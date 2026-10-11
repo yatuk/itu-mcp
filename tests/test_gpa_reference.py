@@ -44,7 +44,9 @@ class OfficialGpaTests(unittest.TestCase):
             {'bransKodu': 'BBB 101', 'kredisiDec': 2},
             {'bransKodu': 'CCC 101', 'donem': '202610', 'kredisiDec': 5},
         ]}
-        self.assertEqual(app._plan_credit_lookup(info, '202620'), {'AAA 101': 3, 'BBB 101': 2})
+        # Credit prefers the requested attempt (AAA 101) but, unlike the grade, may
+        # come from a row of another term when this term has none (CCC 101).
+        self.assertEqual(app._plan_credit_lookup(info, '202620'), {'AAA 101': 3, 'BBB 101': 2, 'CCC 101': 5})
         self.assertEqual(app._plan_grade_lookup(info, '202620'), {'AAA 101': 'BA+'})
         app._obs = Mock()
         app._obs.resolve_semester.return_value = {'akademikDonemId': 1, 'donemKodu': '202620'}

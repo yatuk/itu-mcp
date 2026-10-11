@@ -95,8 +95,10 @@ class ArchiveAggregationTests(unittest.TestCase):
         self.assertTrue(result["truncated"])
 
     def test_seasonality_detects_single_season(self) -> None:
-        result = seasonality(["2023-2024-guz", "2022-2023-guz"])
+        result = seasonality(["2023-2024-guz", "2022-2023-guz", "2021-2022-guz"])
         self.assertEqual(result["only_season"], "Güz")
+        # Two records are too few to call it a single-season course.
+        self.assertIsNone(seasonality(["2023-2024-guz", "2022-2023-guz"])["only_season"])
 
     def test_seasonality_none_when_mixed(self) -> None:
         result = seasonality(["2023-2024-guz", "2022-2023-bahar"])
@@ -219,7 +221,7 @@ class DiffTermOfferingsTests(unittest.TestCase):
 
 class RecommendCourseTimingTests(unittest.TestCase):
     def test_single_season_course(self) -> None:
-        summary = seasonality(["2023-2024-guz", "2022-2023-guz"])
+        summary = seasonality(["2023-2024-guz", "2022-2023-guz", "2021-2022-guz"])
         text = recommend_course_timing("CEN 411E", summary, [])
         self.assertIn("yalnızca Güz", text)
 
@@ -528,16 +530,16 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
 
     def test_compare_terms_reports_instructor_turnover(self) -> None:
         def by_term(slug, branch):
-            return SECTIONS_TERM_A_RAW if slug == "term-a" else SECTIONS_TERM_B_RAW
+            return SECTIONS_TERM_A_RAW if slug == "2024-2025-bahar" else SECTIONS_TERM_B_RAW
 
         index = dict(self.INDEX)
         index["terms"] = [
-            {"slug": "term-a", "label": "Term A", "sections": 2},
-            {"slug": "term-b", "label": "Term B", "sections": 2},
+            {"slug": "2024-2025-bahar", "label": "Term A", "sections": 2},
+            {"slug": "2025-2026-bahar", "label": "Term B", "sections": 2},
         ]
         meta = {"sections": 2, "branches": [{"code": "BLG", "sections": 2}]}
         with self._patch(get_index=lambda: index, get_term_meta=lambda slug: meta, get_term_branch=by_term):
-            result = self.app.archive_compare_terms("BLG 102E", "term-a", "term-b")
+            result = self.app.archive_compare_terms("BLG 102E", "2024-2025-bahar", "2025-2026-bahar")
         self.assertTrue(result["comparable"])
         self.assertEqual(result["diff"]["instructors_added"], ["Yaşar Erenler"])
         self.assertEqual(result["diff"]["instructors_removed"], ["Ayşe Tosun"])
@@ -578,6 +580,8 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
         }
         with self._patch(get_course_history=lambda branch: {"BLG 102E": COURSE_ENTRY}), \
              patch.object(self.app.obs, "get_graduation_remaining", return_value=graduation), \
+             patch.object(self.app.obs, "resolve_semester", return_value={"akademikDonemId": 1}), \
+             patch.object(self.app.obs, "list_registered_courses", return_value={"kayitSinifResultList": []}), \
              patch.object(self.app.obs, "default_program_id", return_value=1):
             result = self.app.plan_remaining_courses()
         # summarize_graduation_plan routes the grupName entry into open_elective_slots,
@@ -603,6 +607,8 @@ class ArchiveToolBehaviourTests(unittest.TestCase):
         }
         with self._patch(get_course_history=lambda branch: {}), \
              patch.object(self.app.obs, "get_graduation_remaining", return_value=graduation), \
+             patch.object(self.app.obs, "resolve_semester", return_value={"akademikDonemId": 1}), \
+             patch.object(self.app.obs, "list_registered_courses", return_value={"kayitSinifResultList": []}), \
              patch.object(self.app.obs, "default_program_id", return_value=1):
             result = self.app.plan_remaining_courses()
         self.assertEqual(result["resolved_count"], 0)
@@ -642,7 +648,8 @@ class ExplainEligibilityArchiveSeasonalityTests(unittest.TestCase):
         )
 
     def test_single_season_course_is_flagged(self) -> None:
-        entry = {"code": "CEN 354E", "name": "Signal&Systems", "terms": ["2025-2026-bahar", "2024-2025-bahar"], "rows": []}
+        entry = {"code": "CEN 354E", "name": "Signal&Systems",
+                 "terms": ["2025-2026-bahar", "2024-2025-bahar", "2023-2024-bahar"], "rows": []}
         with patch.object(self.app.obs_public, "get_branch_prerequisites", return_value=self.branch_rules), \
              patch.object(self.app.archive, "get_course_history", return_value={"CEN 354E": entry}), \
              patch.object(self.app.prereq_crosscheck, "get_course_prerequisite_tree", return_value=None):
@@ -651,13 +658,25 @@ class ExplainEligibilityArchiveSeasonalityTests(unittest.TestCase):
         self.assertEqual(result["archive_seasonality"]["only_season"], "Bahar")
         self.assertIn("yalnızca Bahar", result["archive_seasonality"]["note"])
 
-    def test_multi_season_course_has_no_note(self) -> None:
-        entry = {"code": "CEN 354E", "name": "x", "terms": ["2025-2026-bahar", "2025-2026-guz"], "rows": []}
+    def test_single_record_is_not_called_a_single_season_course(self) -> None:
+        entry = {"code": "CEN 354E", "name": "x", "terms": ["2025-2026-guz"], "rows": []}
+        with patch.object(self.app.obs_public, "get_branch_prerequisites", return_value=self.branch_rules),              patch.object(self.app.archive, "get_course_history", return_value={"CEN 354E": entry}),              patch.object(self.app.prereq_crosscheck, "get_course_prerequisite_tree", return_value=None):
+            result = self.app.explain_course_eligibility("CEN 354E")
+        seasonality_result = result["archive_seasonality"]
+        self.assertEqual(seasonality_result["pattern"], "insufficient_data")
+        self.assertIsNone(seasonality_result["only_season"])
+        self.assertIn("yetersiz veri", seasonality_result["note"])
+        self.assertNotIn("yalnızca Güz döneminde", seasonality_result["note"])
+
+    def test_multi_season_course_is_not_flagged_as_single_season(self) -> None:
+        entry = {"code": "CEN 354E", "name": "x", "rows": [],
+                 "terms": ["2025-2026-bahar", "2025-2026-guz", "2024-2025-bahar", "2024-2025-guz"]}
         with patch.object(self.app.obs_public, "get_branch_prerequisites", return_value=self.branch_rules), \
              patch.object(self.app.archive, "get_course_history", return_value={"CEN 354E": entry}), \
              patch.object(self.app.prereq_crosscheck, "get_course_prerequisite_tree", return_value=None):
             result = self.app.explain_course_eligibility("CEN 354E")
-        self.assertIsNone(result["archive_seasonality"]["note"])
+        self.assertIsNone(result["archive_seasonality"]["only_season"])
+        self.assertIn("her iki normal dönemde", result["archive_seasonality"]["note"])
 
     def test_archive_failure_is_non_fatal(self) -> None:
         with patch.object(self.app.obs_public, "get_branch_prerequisites", return_value=self.branch_rules), \

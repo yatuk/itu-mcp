@@ -254,7 +254,8 @@ class HelpToolTests(unittest.TestCase):
             result = self.app.obs_get_help_tickets(include_details=False)
         item = result['tickets'][0]
         self.assertIsNone(item['unit'])
-        self.assertIn('unit', item['missing_fields'])
+        self.assertIn('unit', item['not_in_list_view'])
+        self.assertNotIn('unit', item['missing_fields'])
         self.assertFalse(result['metadata_complete'])
         self.app._client.get_help_desk_html.assert_not_called()
 

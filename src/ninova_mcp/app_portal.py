@@ -10,7 +10,28 @@ from typing import Any
 
 from .client import NinovaClient, NinovaError
 from .operator_settings import SENSITIVE_OUTPUT_DISABLED_NOTE, sensitive_output_allowed
-from .parsing import normalize_lookup_text
+from .parsing import clean_text, normalize_lookup_text
+
+
+def _unique_allergens(effects: Any) -> list[dict[str, Any]]:
+    """Allergens of one dish, each once and in source order.
+
+    The Portal's own list repeats entries for a dish, so the repeats are
+    dropped here. Names are compared without case, accents or extra spaces.
+    """
+    allergens: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for effect in effects or []:
+        if not isinstance(effect, dict):
+            continue
+        name = clean_text(str(effect.get("SideEffectName") or "")) or None
+        name_en = clean_text(str(effect.get("SideEffectNameEN") or "")) or None
+        key = normalize_lookup_text(name or name_en)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        allergens.append({"name": name, "name_en": name_en})
+    return allergens
 
 
 class PortalToolsMixin:
@@ -20,9 +41,9 @@ class PortalToolsMixin:
 
     def obs_get_campus_card(self) -> dict[str, Any]:
         """Read campus card balance and recent transactions from the İTÜ Portal."""
-        from .portal_data import campus_card
+        from .portal_data import campus_card, portal_call
 
-        return campus_card(self._get_portal_json("GetBalance"))
+        return campus_card(portal_call(self._get_portal_json, "GetBalance"))
 
     def _get_portal_page(self) -> tuple[str, str]:
         """Fetch the Portal homepage, reusing a copy from the app's TTL cache.
@@ -89,14 +110,9 @@ class PortalToolsMixin:
             raise NinovaError(
                 f"Portal {operation} isteği HTTP {response.status_code} ile başarısız oldu."
             )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise NinovaError(f"Portal {operation} JSON yanıtı ayrıştırılamadı.") from exc
-        data = payload.get("d") if isinstance(payload, dict) else None
-        if not isinstance(data, dict):
-            raise NinovaError(f"Portal {operation} beklenen 'd' nesnesini döndürmedi.")
-        return data
+        from .portal_data import decode_portal_response
+
+        return decode_portal_response(operation, response)
 
     def get_cafeteria_menu(
         self,
@@ -141,11 +157,7 @@ class PortalToolsMixin:
                 "name": item.get("FoodName"),
                 "type": item.get("FoodType"),
                 "kcal": item.get("TotalWeight"),
-                "allergens": [
-                    {"name": effect.get("SideEffectName"), "name_en": effect.get("SideEffectNameEN")}
-                    for effect in (item.get("FoodSideEffectInformationList") or [])
-                    if isinstance(effect, dict)
-                ],
+                "allergens": _unique_allergens(item.get("FoodSideEffectInformationList")),
             })
         return {
             "date": date_value,
@@ -162,19 +174,72 @@ class PortalToolsMixin:
     def obs_get_notifications(
         self,
         notification_id: str | None = None,
-        limit: int = 20,
+        limit: int | None = None,
+        include_all: bool = False,
     ) -> dict[str, Any]:
-        """Read İTÜ Portal notifications (requires login)."""
-        from .parsing import clean_text, make_soup
+        """Read İTÜ Portal notifications (requires login).
 
+        The service is asked the way the Portal page asks it: ``all=false``
+        returns the recent notifications shown on the home page, ``all=true``
+        the whole list. The whole list is read when ``include_all`` is set,
+        when one notification is looked up by id, or when an explicit
+        ``limit`` is larger than the number of recent ones.
+
+        A read that failed is reported as ``status: "unavailable"`` with a
+        null count. Only a successful read may say that there are none.
+        """
+        from .portal_data import (
+            PortalUnreachableError, notification_params, notifications_from_api, portal_call,
+        )
+
+        api_source = "portal.itu.edu.tr/GetNotification"
+        row_limit = max(1, min(20 if limit is None else limit, 100))
+
+        def read(everything: bool) -> list[dict[str, Any]]:
+            return notifications_from_api(
+                portal_call(self._get_portal_json, "GetNotification", notification_params(everything)),
+            )
+
+        scope = "all" if include_all or notification_id else "recent"
+        scope_note = None
         try:
-            data = self._get_portal_json("GetNotification")
-        except (NinovaError, ValueError):
-            html, url = self._get_portal_page()
+            notifications = read(scope == "all")
+            if scope == "recent" and limit is not None and row_limit > len(notifications):
+                # More was asked for than the home page list holds.
+                try:
+                    notifications, scope = read(True), "all"
+                except PortalUnreachableError:
+                    raise
+                except (NinovaError, ValueError):
+                    scope_note = "The full list could not be read; these are the recent notifications only."
+        except PortalUnreachableError:
+            raise
+        except (NinovaError, ValueError) as api_exc:
             from .parsing import extract_notifications
+            from .parsing_portal import notification_list_is_script_filled
 
+            api_error = str(api_exc)[:600]
+            html, url = self._get_portal_page()
             fallback = extract_notifications(html, url)
             notifications = fallback.get("notifications") or []
+            if not notifications:
+                reason = (
+                    "The Portal notification service reply could not be read, and the Portal "
+                    "homepage carries no notification list. This is not an empty inbox."
+                )
+                if notification_list_is_script_filled(html):
+                    reason = (
+                        "The Portal notification service reply could not be read. The homepage holds "
+                        "only an empty notification list that the page fills by script, so it could "
+                        "not be read from the markup either. This is not an empty inbox."
+                    )
+                if notification_id:
+                    raise NinovaError(f"Portal notifications could not be read: {api_error}")
+                return {
+                    "status": "unavailable", "reason": reason, "count": None, "notifications": None,
+                    "api_fallback": True, "api_error": api_error, "source": api_source,
+                    "untrusted_external_content": True,
+                }
             if notification_id:
                 target = next(
                     (item for item in notifications if str(item.get("id") or item.get("notification_id") or "") == str(notification_id)),
@@ -182,32 +247,45 @@ class PortalToolsMixin:
                 )
                 if target is None:
                     raise NinovaError(f"Portal bildirimi bulunamadı: {notification_id}")
-                return {"notification": target, "source": url, "detail_available": False, "untrusted_external_content": True}
-            fallback["notifications"] = notifications[: max(1, min(limit, 100))]
+                return {"notification": target, "source": url, "detail_available": False,
+                        "api_fallback": True, "source_kind": "homepage_html_fallback",
+                        "untrusted_external_content": True}
+            fallback["status"] = "ok"
+            fallback["notifications"] = notifications[:row_limit]
             fallback["count"] = len(fallback["notifications"])
             fallback["api_fallback"] = True
+            fallback["source_kind"] = "homepage_html_fallback"
+            fallback["fallback_note"] = (
+                "The notification service reply could not be read. These rows come from the Portal "
+                "homepage markup: titles and relative times only, possibly incomplete."
+            )
+            fallback["api_error"] = api_error
             fallback["untrusted_external_content"] = True
             return fallback
-        notifications = []
-        for item in data.get("NotificationInformationList") or []:
-            if not isinstance(item, dict):
-                continue
-            content_html = str(item.get("ContentText") or "")
-            notifications.append({
-                "id": str(item.get("ObjectId") or ""),
-                "title": clean_text(str(item.get("Title") or "")),
-                "content": clean_text(make_soup(content_html).get_text(" ", strip=True)),
-                "created_at": item.get("CreateDate"),
-                "age": item.get("BeforeCreateDate"),
-                "unread": item.get("IsRead") in {0, "0", False},
-            })
         if notification_id:
             target = next((item for item in notifications if item["id"] == str(notification_id)), None)
             if target is None:
                 raise NinovaError(f"Portal bildirimi bulunamadı: {notification_id}")
-            return {"notification": target, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
-        notifications = notifications[: max(1, min(limit, 100))]
-        return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
+            return {"notification": target, "source": api_source, "untrusted_external_content": True}
+        # The body is returned for one requested notification only.
+        listed = [
+            {key: value for key, value in item.items() if key not in ("content", "content_truncated")}
+            for item in notifications[:row_limit]
+        ]
+        result: dict[str, Any] = {
+            "status": "ok", "count": len(listed), "total_count": len(notifications),
+            "unread_count": sum(1 for item in notifications if item["unread"]),
+            "scope": scope, "notifications": listed,
+            "source": api_source, "untrusted_external_content": True,
+        }
+        if scope_note:
+            result["scope_note"] = scope_note
+        elif scope == "recent":
+            result["scope_note"] = (
+                "These are the recent notifications the Portal home page shows. "
+                "Pass include_all=true for the whole list."
+            )
+        return result
 
     def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
         """Fetch and parse one ticket page. Callers decide ownership and redaction.
@@ -243,8 +321,12 @@ class PortalToolsMixin:
         from .help_tickets import summary
         from .parsing import extract_help_tickets
 
+        from .portal_data import PortalUnreachableError, portal_call
+
         try:
-            data = self._get_portal_json("GetYardim")
+            data = portal_call(self._get_portal_json, "GetYardim")
+        except PortalUnreachableError:
+            raise
         except (NinovaError, ValueError):
             data = {}
         raw_items = data.get("YardimInformationList") or data.get("HelpInformationList") or []
@@ -286,7 +368,7 @@ class PortalToolsMixin:
         self, query: str | None = None, limit: int = 20, include_details: bool = False,
     ) -> dict[str, Any]:
         """List help tickets. Detail pages are opened only when include_details is true."""
-        from .help_tickets import SUMMARY_FIELDS
+        from .help_tickets import LIST_VIEW_ABSENT_FIELDS, SUMMARY_FIELDS
 
         tickets, payload = self._help_ticket_rows()
         if query:
@@ -309,10 +391,23 @@ class PortalToolsMixin:
                     item["detail_available"] = True
                     if detail.get("parse_warning"):
                         item["detail_warning"] = detail["parse_warning"]
-            item["missing_fields"] = [key for key in SUMMARY_FIELDS if item.get(key) is None]
+            # Without the ticket page, fields the list never carries are not
+            # "missing": they are named apart so nobody reads them as a fault.
+            absent = [key for key in SUMMARY_FIELDS if item.get(key) is None]
+            listed_only = item.get("detail_available") is not True
+            item["not_in_list_view"] = [key for key in absent if listed_only and key in LIST_VIEW_ABSENT_FIELDS]
+            item["missing_fields"] = [key for key in absent if key not in item["not_in_list_view"]]
         payload["tickets"] = selected
         payload["count"] = len(selected)
-        payload["metadata_complete"] = all(not item["missing_fields"] for item in selected)
+        payload["metadata_complete"] = all(
+            not item["missing_fields"] and not item["not_in_list_view"] for item in selected
+        )
+        if any(item["not_in_list_view"] for item in selected):
+            payload["full_fields_hint"] = (
+                "The list view does not carry the fields named in not_in_list_view. Call "
+                "obs_get_help_tickets with include_details=true, or get_help_ticket with the ticket "
+                "id, to read unit, category, created_at, updated_at and has_reply."
+            )
         payload["untrusted_external_content"] = True
         return payload
 

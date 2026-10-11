@@ -1,0 +1,11 @@
+{
+  "name": "itu-mcp",
+  "displayName": "İTÜ MCP",
+  "version": "1.2.0",
+  "description": "Read your own Istanbul Technical University (İTÜ) Ninova, OBS and Portal data from a conversation: assignments and deadlines, grades and GPA what-ifs, schedule, registration, course archive and library. Runs locally with your own account. Unofficial.",
+  "author": { "name": "yatuk", "url": "https://github.com/yatuk" },
+  "homepage": "https://github.com/yatuk/itu-mcp",
+  "repository": "https://github.com/yatuk/itu-mcp",
+  "license": "MIT",
+  "keywords": ["itu", "istanbul-technical-university", "ninova", "obs", "student", "mcp"]
+}

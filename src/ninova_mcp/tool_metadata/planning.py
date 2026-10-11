@@ -4,6 +4,29 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
+# Parameter descriptions are shared with the published signature in
+# ``app_planning`` so the schema a client sees and this entry say the same.
+TARGET_CURRENT_GPA_DESCRIPTION = "Current cumulative GPA (GANO) on the 4.00 scale, e.g. 2.35."
+TARGET_CURRENT_CREDITS_DESCRIPTION = (
+    "Credits that count in the current GPA, e.g. 101. Not ECTS and not the credits completed."
+)
+TARGET_TARGET_GPA_DESCRIPTION = "Cumulative GPA to reach, e.g. 2.5."
+TARGET_FUTURE_CREDITS_DESCRIPTION = (
+    "Total credits of the courses still to be taken, retakes included, e.g. 18."
+)
+TARGET_RETAKES_DESCRIPTION = (
+    "The part of future_credits that repeats a course already counted in the current GPA, "
+    'e.g. [{"credit": 3, "old_grade": "FF"}, {"credit": 4, "old_grade": "DD"}]. A retake '
+    "replaces its old grade and adds no credit. Omit it only when no course is a retake."
+)
+TARGET_RETAKE_CREDIT_DESCRIPTION = "Credit of the retaken course, e.g. 3 or 3.5."
+TARGET_RETAKE_OLD_GRADE_DESCRIPTION = (
+    'Grade of the course that counts in the GPA now, e.g. "FF". One of: AA, BA+, BA, BB+, BB, '
+    "CB+, CB, CC+, CC, DC+, DC, DD+, DD, FD, FF, VF."
+)
+
 PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_calculate_gpa",
@@ -12,22 +35,49 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "Calculate a term GPA estimate from OBS registered courses and compare it with "
             "the official term record. For factual average questions use preferred_term_gpa "
             "and preferred_term_gpa_source; the legacy gpa field remains the calculated estimate. "
-            "This is a term average, not cumulative GANO. "
-            "Supports projected grades for what-if scenarios. "
-            "Uses İTÜ 4.00-scale letter grade conversion."
+            "This is a term average, not cumulative GANO; for cumulative what-if questions use obs_simulate_cumulative_gpa. "
+            "Supports projected grades for what-if scenarios, keyed by course code or CRN; "
+            "check projection_status and unmatched_projected_keys before reporting a what-if. "
+            "Each course may carry attempts (other terms of the same course, and "
+            "likely_equivalent failed attempts under another code, which are unconfirmed). "
+            "credit_ambiguity names courses whose plan row carries two credit values; its status "
+            "says whether the official term average settled them: resolved_by_official_average or "
+            "confirmed_by_official_average (all of them), partly_resolved_by_official_average (only "
+            "the courses that carry credit_choice), otherwise the listed used_credit is a default. "
+            "The same rule decides in obs_simulate_cumulative_gpa. "
+            "Uses İTÜ 4.00-scale letter grade conversion. "
+            "The average covers only the courses of this term; it decides no honour degree, "
+            "academic standing or cumulative GANO. gpa is null when a grade or credit is missing "
+            "or invalid, and known_courses_gpa then holds the average of the verified courses. "
+            "Grades without a coefficient (BL, BZ, T, E, M and the like) are listed in "
+            "excluded_courses and stay out of the average. "
+            "credit_source and grade_source say where the credits and grades of the courses came "
+            "from: registration (the registered-course record) or degree_plan (the graduation "
+            "plan row of this term, used when the registration record has no usable value, which "
+            "is the usual case); a course carries its own credit_source or grade_source only when "
+            "it differs. A course also carries plan_credit or counted_credit only when that value "
+            "differs from the credit used. credits_unresolved names courses that need a credit "
+            "for the average and have none; a credit of 0 is a real zero-credit course and weighs nothing. ff_risk lists the codes of courses graded FF or VF; "
+            "whether one must be retaken or can be replaced follows OBS rules. A grade of DC or "
+            "lower weighs on the average in proportion to the course's credit."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "semester": {
-                    "type": "string",
-                    "description": "Semester id, code, or name (default: latest).",
+                    "type": ["string", "integer", "number"],
+                    "description": (
+                        "Term code as a number or string (202410), internal term id "
+                        "(akademikDonemId), or term name (\"2024-2025 Güz\"). Default: latest."
+                    ),
                 },
                 "projected_grades": {
                     "type": "object",
+                    "additionalProperties": {"type": "string"},
                     "description": (
-                        "Optional dict of course code → expected letter grade "
-                        'for what-if scenarios, e.g. {"BLG 223E": "AA"}.'
+                        "Optional what-if grades. Keys are course codes (any spacing or case) "
+                        'or CRNs of the term, values are letter grades, '
+                        'e.g. {"BLG 223E": "AA", "21547": "BB"}.'
                     ),
                 },
                 "include_official": {
@@ -41,14 +91,53 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "calculate_target_gpa",
         "title": "Calculate Target GPA",
-        "description": "Estimate the future average required to reach a target cumulative GPA without reading a transcript.",
+        "description": (
+            "Quick arithmetic without the student's record and without login: the average needed "
+            "over future credits to reach a target cumulative GPA, from four numbers the caller "
+            "supplies. It cannot see retakes; a retake replaces its old grade and adds no credit, "
+            "so state them in retakes or the result understates what is reachable (see the "
+            "assumption field). When the student is logged in, prefer "
+            "obs_simulate_cumulative_gpa(target_gpa=...), which works from the record and "
+            "handles retakes."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "current_gpa": {"type": "number", "minimum": 0, "maximum": 4},
-                "current_credits": {"type": "number", "minimum": 0},
-                "target_gpa": {"type": "number", "minimum": 0, "maximum": 4},
-                "future_credits": {"type": "number", "exclusiveMinimum": 0},
+                "current_gpa": {
+                    "type": "number", "minimum": 0, "maximum": 4,
+                    "description": TARGET_CURRENT_GPA_DESCRIPTION,
+                },
+                "current_credits": {
+                    "type": "number", "minimum": 0,
+                    "description": TARGET_CURRENT_CREDITS_DESCRIPTION,
+                },
+                "target_gpa": {
+                    "type": "number", "minimum": 0, "maximum": 4,
+                    "description": TARGET_TARGET_GPA_DESCRIPTION,
+                },
+                "future_credits": {
+                    "type": "number", "exclusiveMinimum": 0,
+                    "description": TARGET_FUTURE_CREDITS_DESCRIPTION,
+                },
+                "retakes": {
+                    "type": "array",
+                    "description": TARGET_RETAKES_DESCRIPTION,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "credit": {
+                                "type": "number", "exclusiveMinimum": 0,
+                                "description": TARGET_RETAKE_CREDIT_DESCRIPTION,
+                            },
+                            "old_grade": {
+                                "type": "string",
+                                "description": TARGET_RETAKE_OLD_GRADE_DESCRIPTION,
+                            },
+                        },
+                        "required": ["credit", "old_grade"],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": ["current_gpa", "current_credits", "target_gpa", "future_credits"],
             "additionalProperties": False,
@@ -64,6 +153,11 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "the actual instructor may use different T-score cutoffs) and Method 2 (mean ± "
             "standard-deviation multiples, Table 2, a fixed formula with no table lookup). "
             "This is an estimate for planning purposes only, not the official grade. "
+            "Scores must be finite numbers from 0 to 100; anything else is rejected with the "
+            "offending value. No letter is estimated when fewer than 10 scores are counted or "
+            "when all scores are equal: estimate_available is false, no_estimate_reason says "
+            "why, and the mean and standard deviation are still returned. my_score is added to "
+            "the list unless the same value is already in it (reported as my_score_included). "
             "class_scores must be every student's raw 0-100 score who counts toward the "
             "relative-grading average (VF students are excluded from that average per the "
             "regulation and must not be included here)."
@@ -86,6 +180,13 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                     "maximum": 100,
                     "description": "Your own raw 0-100 score.",
                 },
+                "my_score_included": {
+                    "type": "boolean",
+                    "description": (
+                        "true: my_score is already in class_scores; false: add it even if a classmate "
+                        "has the same score; omitted: counted as included when the value is in the list."
+                    ),
+                },
             },
             "required": ["class_scores", "my_score"],
             "additionalProperties": False,
@@ -96,7 +197,11 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
         "title": "Check Course Conflicts",
         "description": (
             "Check for schedule time conflicts between courses by CRN. "
-            "Uses the public course schedule to look up session day/time/room."
+            "Uses the public course schedule to look up session day/time/room. "
+            "Give only the CRNs: the department of each CRN is found from the course archive "
+            "(no login) and, for what is left, from the student's registered courses when "
+            "logged in. Read status: ok, partial (missing_crns were not checked), not_found, "
+            "or departments_required (pass department_codes)."
         ),
         "inputSchema": {
             "type": "object",
@@ -113,14 +218,19 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                 },
                 "department_code": {
                     "type": "string",
-                    "default": "BLG",
-                    "description": "Department code (default: 'BLG').",
+                    "description": (
+                        "Optional single department to scan, e.g. 'MAT'. Omit it to let the "
+                        "tool find the departments of the CRNs."
+                    ),
                 },
                 "department_codes": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 25,
-                    "description": "Optional multi-department scan; overrides department_code.",
+                    "description": (
+                        "Optional departments to scan, e.g. ['MAT', 'FIZ']; overrides "
+                        "department_code. Omit it to let the tool find them."
+                    ),
                 },
             },
             "required": ["crns"],
@@ -147,7 +257,12 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
     {
         "name": "build_degree_plan",
         "title": "Build Degree Plan",
-        "description": "Read an official semester-by-semester OBS curriculum; latest plan is selected by default.",
+        "description": (
+            "Read an official semester-by-semester OBS curriculum; latest plan is selected by "
+            "default. Courses are listed once, under plan.semesters[].courses. 'ects' is a number; "
+            "when the plan gives a range such as '4 / 5' it is null and ects_min, ects_max and "
+            "ects_raw carry the range."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -176,7 +291,14 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "is reported, never silently resolved either way. 'archive_seasonality', when "
             "the archive has the course, flags courses that only open in one term of the "
             "year (e.g. eligible now, but only ever offered in Güz) — check it even when "
-            "eligibility alone looks fine."
+            "eligibility alone looks fine. With use_obs_history=true, prerequisites the student "
+            "is taking this term are listed in in_progress_prerequisites and "
+            "eligible_if_in_progress_passed says what the answer becomes once they are passed; "
+            "report that instead of a bare 'not eligible'. In missing_courses the alternatives of "
+            "one OR group are a single entry ('A VEYA B'): one of them is enough. "
+            "requirement is the whole rule as text with its minimum grades, and prerequisite_grades "
+            "holds the student's grade in each prerequisite course already completed. The full "
+            "completed-course history and the rule tree are returned only with include_raw=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -203,6 +325,7 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
                 "completed_credits": {"type": "number", "minimum": 0},
                 "class_year": {"type": "integer", "minimum": 1},
                 "program_type": {"type": "string", "default": "LS"},
+                "include_raw": include_raw_property("explain_course_eligibility"),
             },
             "required": ["course_code"],
             "additionalProperties": False,
@@ -216,7 +339,12 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "seasonality and who_taught history for each, producing a one-line scheduling "
             "recommendation per course (e.g. 'only offered in Güz, usually taught by X, "
             "average fill 0.95 — plan for Güz'). Replaces manually calling "
-            "archive_course_history once per remaining course."
+            "archive_course_history once per remaining course. The result keeps three things "
+            "apart: in_progress (required courses the student is registered in this term, with "
+            "CRN; do not present them as untaken; once passed they leave the remaining list), "
+            "plans and unresolved_courses (still to plan), and open_elective_slots with their "
+            "credits. A course in other_registered_courses may be filling one of the open "
+            "elective slots: OBS does not show that until its grade is entered."
         ),
         "inputSchema": {
             "type": "object",

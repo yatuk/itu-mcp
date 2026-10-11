@@ -148,21 +148,22 @@ class EstimateRelativeGradeTests(unittest.TestCase):
         self.assertIn("otomatik eklendi", result["note"])
 
     def test_both_methods_present_for_normal_input(self) -> None:
-        result = estimate_relative_grade(class_scores=[30, 40, 50, 60, 70, 80, 90], my_score=70)
+        result = estimate_relative_grade(class_scores=[30, 35, 40, 50, 55, 60, 70, 75, 80, 90], my_score=70)
         self.assertIsNotNone(result["yontem_1"])
         self.assertIn("harf_notu", result["yontem_1"])
         self.assertIn("harf_notu", result["yontem_2"])
         self.assertIn("my_t_score", result)
 
     def test_zero_variance_class_skips_method_1_gracefully(self) -> None:
-        """Every student got the same score: T-score is undefined, but the
-        tool must still return Method 2 and explain why Method 1 is absent
-        rather than raising.
+        """Every student got the same score: T-score is undefined and every
+        Method 2 bound equals the mean, so neither method may name a letter.
+        The tool explains why instead of raising.
         """
-        result = estimate_relative_grade(class_scores=[70, 70, 70], my_score=70)
+        result = estimate_relative_grade(class_scores=[70] * 12, my_score=70)
         self.assertIsNone(result["yontem_1"])
         self.assertIn("yontem_1_uyari", result)
-        self.assertIsNotNone(result["yontem_2"])
+        self.assertIsNone(result["yontem_2"])
+        self.assertEqual(result["no_estimate_reason"], "zero_std_dev")
 
     def test_note_always_present(self) -> None:
         result = estimate_relative_grade(class_scores=[40, 50, 60], my_score=50)

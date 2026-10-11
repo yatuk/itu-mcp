@@ -12,3 +12,6 @@ import os
 
 os.environ.setdefault("NINOVA_USERNAME", "dummy")
 os.environ.setdefault("NINOVA_PASSWORD", "dummy")
+# Tests that drop the placeholders must never read the developer's real OS
+# keychain. The keychain tests inject a fake ``keyring`` module instead.
+os.environ["NINOVA_KEYRING"] = "0"

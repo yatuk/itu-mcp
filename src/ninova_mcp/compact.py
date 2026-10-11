@@ -95,6 +95,11 @@ def compact_value(
                 if isinstance(item, str) and len(item) > text_chars:
                     result[key] = _truncate_str(item, text_chars)
                     continue
+                # "text" is also the label of a heading or a link, so a short
+                # one is kept; a long page body was truncated just above.
+                if key == "text" and isinstance(item, str):
+                    result[key] = item
+                    continue
                 if key in {"before", "after", "thread", "pages", "links", "text", "text_diff_preview"}:
                     continue
             if key == "links" and isinstance(item, list):

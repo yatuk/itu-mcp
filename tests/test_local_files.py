@@ -472,7 +472,8 @@ class SensitiveOutputTests(LocalFileCase):
                 rendered = json.dumps(result, ensure_ascii=False)
                 for value in SENSITIVE_VALUES:
                     self.assertNotIn(value, rendered)
-                self.assertIn("ornek@itu.edu.tr", rendered)
+                self.assertNotIn("ornek@itu.edu.tr", rendered)
+                self.assertIn("iletisimBilgiList: E-posta", result["redacted_fields"])
                 self.assertEqual(result["sensitive_output"], "disabled_by_operator")
                 self.assertIn("NINOVA_ALLOW_SENSITIVE_OUTPUT=1", result["sensitive_output_note"])
                 plain = tool()
@@ -528,6 +529,92 @@ class OperatorSettingTests(unittest.TestCase):
                 with patch.dict(os.environ, {"NINOVA_TEST_DIRS": value}):
                     with self.assertRaises(OperatorSettingError):
                         extra_directories("NINOVA_TEST_DIRS")
+
+
+class ExtensionlessNameTests(LocalFileCase):
+    """A file saved under a name without an extension must still be readable."""
+
+    FILE = NINOVA + "/f/ders.pdf"
+
+    def make_download(self, body: bytes, headers: dict[str, str], url: str | None = None) -> Any:
+        return self.make({url or self.FILE: (200, headers, body)})[0]
+
+    def test_extension_is_taken_from_the_served_file_name(self) -> None:
+        app = self.make_download(b"%PDF-1.4 ders", {"Content-Type": "application/octet-stream"})
+        result = app.download_resource("/f/ders.pdf", filename="hafta 1 notlari")
+        self.assertEqual(Path(result["path"]).name, "hafta 1 notlari.pdf")
+
+    def test_extension_is_taken_from_content_disposition_or_content_type(self) -> None:
+        url = NINOVA + "/f/indir"
+        app = self.make_download(b"%PDF-1.4 ders", {"Content-Type": "application/pdf"}, url)
+        self.assertEqual(Path(app.download_resource("/f/indir", filename="ozet")["path"]).name, "ozet.pdf")
+        app = self.make_download(
+            b"icerik", {"Content-Type": "application/octet-stream",
+                        "Content-Disposition": 'attachment; filename="sentetik.txt"'}, url,
+        )
+        self.assertEqual(Path(app.download_resource("/f/indir", filename="ozet")["path"]).name, "ozet.txt")
+
+    def test_a_dangerous_served_extension_is_still_neutralised(self) -> None:
+        url = NINOVA + "/f/indir"
+        app = self.make_download(
+            b"@echo x", {"Content-Type": "application/octet-stream",
+                         "Content-Disposition": 'attachment; filename="kur.bat"'}, url,
+        )
+        result = app.download_resource("/f/indir", filename="odev")
+        self.assertEqual(Path(result["path"]).name, "odev.bat.download")
+        self.assertTrue(result["filename_neutralised"])
+
+    def test_a_name_with_an_extension_is_kept_as_given(self) -> None:
+        app = self.make_download(b"%PDF-1.4 ders", {"Content-Type": "application/pdf"})
+        self.assertEqual(Path(app.download_resource("/f/ders.pdf", filename="rapor.docx")["path"]).name, "rapor.docx")
+
+    def test_unknown_type_keeps_the_bare_name(self) -> None:
+        url = NINOVA + "/f/indir"
+        app = self.make_download(b"icerik", {"Content-Type": "application/octet-stream"}, url)
+        self.assertEqual(Path(app.download_resource("/f/indir", filename="ozet")["path"]).name, "ozet")
+
+    def test_a_file_without_a_suffix_is_read_by_its_first_bytes(self) -> None:
+        from ninova_mcp.text_extract import extract_text_from_bytes
+
+        result = extract_text_from_bytes(b"%PDF-1.4 bozuk", extension="")
+        self.assertEqual(result["extension"], ".pdf")
+        self.assertEqual(result["extension_source"], "content")
+        self.assertNotIn("Unsupported", str(result["error"]))
+
+    def test_a_docx_without_a_suffix_is_recognised(self) -> None:
+        import zipfile
+        from io import BytesIO
+        from ninova_mcp.text_extract import extract_text_from_bytes
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr(
+                "word/document.xml",
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>Sentetik metin</w:t></w:r></w:p></w:body></w:document>",
+            )
+        result = extract_text_from_bytes(buffer.getvalue(), extension=".bin")
+        self.assertEqual(result["extension"], ".docx")
+        self.assertEqual(result["extension_source"], "content")
+
+    def test_legacy_doc_says_what_to_do_next(self) -> None:
+        from ninova_mcp.text_extract import extract_text_from_bytes
+
+        legacy = bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 64
+        for extension in (".doc", ""):
+            with self.subTest(extension=extension):
+                result = extract_text_from_bytes(legacy, extension=extension)
+                self.assertFalse(result["ok"])
+                self.assertIn(".docx", result["error"])
+                self.assertIn("PDF", result["error"])
+
+    def test_unrecognised_bytes_are_still_unsupported(self) -> None:
+        from ninova_mcp.text_extract import extract_text_from_bytes
+
+        result = extract_text_from_bytes(b"\x00\x01\x02 ikili", extension="")
+        self.assertFalse(result["ok"])
+        self.assertIn("Unsupported file type (unknown)", result["error"])
 
 
 if __name__ == "__main__":

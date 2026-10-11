@@ -67,6 +67,34 @@ def _count_marks(payload: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def course_reference(course: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A short pointer to the class; the full record is already in the tool's ``class`` field."""
+    if not isinstance(course, dict):
+        return None
+    code = " ".join(str(course.get(key) or "").strip() for key in ("bransKodu", "dersKodu")).strip()
+    reference = {
+        "sinifId": course.get("sinifId"),
+        "crn": course.get("crn"),
+        "code": code or None,
+        "title": course.get("dersAdiTR") or course.get("dersAdiEN"),
+    }
+    return {key: value for key, value in reference.items() if value not in (None, "")}
+
+
+def _nothing_recorded(payload: dict[str, Any]) -> bool:
+    """OBS answers a class without any attendance entry with a ``...YoklamaYok`` code."""
+    root = payload.get("sinifOgrenciYoklama")
+    code = str(payload.get("resultCode") or "")
+    if root is None:
+        return code.endswith("YoklamaYok")
+    return (
+        isinstance(root, dict)
+        and not (root.get("yoklamaHaftaListe") or [])
+        and not root.get("katilim")
+        and code.endswith("YoklamaYok")
+    )
+
+
 def summarize_obs_attendance(
     attendance_payload: dict[str, Any] | None,
     *,
@@ -81,21 +109,33 @@ def summarize_obs_attendance(
     if max_absence_ratio <= 0 or max_absence_ratio >= 1:
         max_absence_ratio = 0.30
 
+    reference = course_reference(course)
     if not attendance_payload:
         return {
             "available": False,
-            "message": "Yoklama verisi yok.",
-            "course": course,
+            "status": "unavailable",
+            "message": "Yoklama verisi alınamadı.",
+            "course": reference,
         }
 
     root = attendance_payload.get("sinifOgrenciYoklama")
-    if root is None:
+    if _nothing_recorded(attendance_payload):
         return {
             "available": False,
-            "message": attendance_payload.get("resultMessage")
-            or "Bu sinif icin yoklama kaydi bulunamadi.",
+            "status": "no_attendance_recorded",
+            "message": "Bu sınıf için henüz yoklama girilmemiş.",
             "result_code": attendance_payload.get("resultCode"),
-            "course": course,
+            "course": reference,
+        }
+    if root is None:
+        # OBS sends its generic success text with an empty record, so that
+        # text is not repeated as if it described the attendance.
+        return {
+            "available": False,
+            "status": "unavailable",
+            "message": "OBS bu sınıf için yoklama kaydı döndürmedi.",
+            "result_code": attendance_payload.get("resultCode"),
+            "course": reference,
         }
 
     marks = _count_marks(attendance_payload)
@@ -164,7 +204,8 @@ def summarize_obs_attendance(
 
     return {
         "available": True,
-        "course": course,
+        "status": "ok",
+        "course": reference,
         "raw_labels": {
             "katilim": present_str,
             "genel_katilim": genel,

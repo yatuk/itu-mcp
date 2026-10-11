@@ -92,6 +92,35 @@ def _clock(value: Any) -> str | None:
     return f'{value // 60:02d}:{value % 60:02d}'
 
 
+def _label(value: Any) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    return str(value).strip() or None
+
+
+def _room(entry: dict[str, Any]) -> dict[str, Any]:
+    """The door label is the room. ``mekanAdi`` holds its type (Amfi, Derslik)."""
+    door, kind = _label(entry.get('mekanKapiTabelasi')), _label(entry.get('mekanAdi'))
+    if door:
+        return {'room': door, 'room_type': kind, 'room_source': 'mekanKapiTabelasi'}
+    # Older payloads carried the room in mekanAdi; keep reading it.
+    return {'room': kind, 'room_type': None, 'room_source': 'mekanAdi' if kind else None}
+
+
+def _calendar_code(row: dict[str, Any]) -> str | None:
+    """Join branch and number; leave a code that already has its branch."""
+    branch, number = _label(row.get('bransKodu')), _label(row.get('dersKodu'))
+    if not number:
+        return None
+    if branch and not number.upper().startswith(branch.upper()):
+        return f'{branch} {number}'
+    return number
+
+
+def _has_branch(code: Any) -> bool:
+    return isinstance(code, str) and re.match(r'\s*[^\W\d_]{2,}\s*[0-9]', code) is not None
+
+
 def normalize_calendar(payload: Any) -> list[dict[str, Any]]:
     body = require_success(payload, 'draft calendar')
     rows = body.get('kayitSinifResultList')
@@ -113,10 +142,10 @@ def normalize_calendar(payload: Any) -> list[dict[str, Any]]:
                 'day_en': entry.get('gunAdiEN'),
                 'time': f'{start}/{end}' if start and end else None,
                 'start': start, 'end': end,
-                'room': entry.get('mekanAdi'), 'building': entry.get('binaAdi'),
+                **_room(entry), 'building': entry.get('binaAdi'),
                 'campus': entry.get('kampusAdi'),
             })
-        result.append({'crn': str(row.get('crn') or ''), 'code': row.get('dersKodu'),
+        result.append({'crn': str(row.get('crn') or ''), 'code': _calendar_code(row),
                        'name': row.get('dersAdiEN') or row.get('dersAdiTR'), 'sessions': sessions})
     return result
 
@@ -158,6 +187,10 @@ def read_registration_draft(obs: Any) -> dict[str, Any]:
         if eligible is False and not reasons:
             reasons = [{'code': 'unknown', 'message': 'OBS marked this section unavailable without a reason.'}]
         crn = str(row['crn'])
+        # A calendar row can carry the course number without its branch. The
+        # saved draft row for the same CRN has the whole code.
+        if crn in by_crn and not _has_branch(by_crn[crn].get('code')) and _has_branch(row.get('dersKodu')):
+            by_crn[crn]['code'] = row['dersKodu'].strip()
         courses.append({
             'crn': crn, 'course_code': row.get('dersKodu'),
             'course_name': row.get('dersAdiEN') or row.get('dersAdiTR'),

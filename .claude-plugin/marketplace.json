@@ -1,0 +1,14 @@
+{
+  "name": "itu-mcp",
+  "owner": { "name": "yatuk", "url": "https://github.com/yatuk" },
+  "metadata": {
+    "description": "İTÜ MCP: read your own Istanbul Technical University Ninova, OBS and Portal data from Claude."
+  },
+  "plugins": [
+    {
+      "name": "itu-mcp",
+      "source": "./plugin/itu-mcp",
+      "description": "Local MCP server and skill for İTÜ students: assignments, grades and GPA what-ifs, schedule, registration, course archive and library."
+    }
+  ]
+}

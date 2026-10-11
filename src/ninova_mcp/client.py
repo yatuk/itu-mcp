@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from .credentials import MISSING_CREDENTIALS_MESSAGE, resolve_credentials
 from .env import load_ninova_env
 from .http_security import (
     RequestTarget,
@@ -79,13 +80,11 @@ class NinovaCredentials:
     @classmethod
     def from_env(cls) -> "NinovaCredentials":
         load_ninova_env()
-        username = os.getenv("NINOVA_USERNAME")
-        password = os.getenv("NINOVA_PASSWORD")
-        if not username or not password:
-            raise NinovaAuthError(
-                "NINOVA_USERNAME and NINOVA_PASSWORD must both be set."
-            )
-        return cls(username=username, password=password)
+        # Environment first, then the OS keychain: see credentials.py.
+        resolved = resolve_credentials()
+        if not resolved.username or not resolved.password:
+            raise NinovaAuthError(MISSING_CREDENTIALS_MESSAGE)
+        return cls(username=resolved.username, password=resolved.password)
 
 
 class NinovaClient:
@@ -402,7 +401,8 @@ class NinovaClient:
             "username": self.credentials.username,
             "last_login_at": self.last_login_at,
             "login_method": self.login_method,
-            "cookie_names": sorted(cookie.name for cookie in self.session.cookies),
+            # One cookie name can be set for several hosts; each is named once.
+            "cookie_names": sorted({cookie.name for cookie in self.session.cookies}),
             "request_delay_ms": int(self._min_request_interval * 1000),
             "session_persist": session_persist_enabled(),
             "session_path": str(self.session_path) if session_persist_enabled() else None,

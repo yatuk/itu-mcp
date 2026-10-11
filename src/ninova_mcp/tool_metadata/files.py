@@ -41,7 +41,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
     {
         "name": "crawl_course",
         "title": "Crawl Course",
-        "description": "Inventory pages and downloadable resources inside a Ninova course tree.",
+        "description": "Inventory pages and downloadable resources inside a Ninova course tree. A link that is refused or fails is listed in skipped with its reason and the crawl continues.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -73,7 +73,10 @@ FILES_TOOLS: list[dict[str, Any]] = [
     {
         "name": "download_resource",
         "title": "Download Resource",
-        "description": "Download a Ninova file or other authenticated resource to disk.",
+        "description": (
+            "Download a Ninova file or other authenticated resource to disk. The text of a saved "
+            "PDF/DOCX/TXT is also added to the local index that search_content searches."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -99,7 +102,8 @@ FILES_TOOLS: list[dict[str, Any]] = [
         "title": "Read Resource Text",
         "description": (
             "Extract plain text from a Ninova PDF/DOCX/TXT (or a local path from "
-            "download_resource) so the assistant can read lecture notes and assignments."
+            "download_resource) so the assistant can read lecture notes and assignments. "
+            "The extracted text is also added to the local index that search_content searches."
         ),
         "inputSchema": {
             "type": "object",

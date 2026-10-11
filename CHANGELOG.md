@@ -1,5 +1,275 @@
 # Changelog
 
+## v1.2.0
+
+### Yeni araçlar
+
+- **`obs_simulate_cumulative_gpa`:** "Bu dönem hepsinden BB alırsam genel ortalamam kaç olur?"
+  sorusunu tek çağrıda yanıtlar. Mevcut GANO'yu kendi OBS kaydından yeniden kurar, her geçmiş
+  dönemin resmi genel ortalamasıyla karşılaştırır, sonra kayıtlı derslere verilen notları uygular
+  - Tekrar alınan ders eski notun yerine geçer, kredi ikinci kez eklenmez. Geçilmiş bir dersi
+    yükseltmek için tekrar almak da aynı şekilde hesaplanır
+  - Kodu değişmiş dersler (aynı ad ve kredi, farklı kod) yalnızca resmi dönem ortalamaları bunu
+    gerektiriyorsa eşdeğer sayılır. Kullanılan her eşdeğerlik gerekçesiyle sonuçta listelenir
+  - Seçmeli derslerde `kredisi` ile `sayilanKredi` farklıysa doğru ağırlık o dönemin resmi
+    ortalamasına göre seçilir. Karar verilemezse sonuç aralık olarak verilir
+  - `projected_grades` ders kodu ya da CRN ile not alır, `default_grade` adı geçmeyen tüm kayıtlı
+    derslere uygulanır, `extra_courses` şu an kayıtlı olmayan varsayımsal dersleri ekler
+  - Kredisi bulunamayan ders tahmin edilmez, sonuç eksik olarak işaretlenir. Eşleşmeyen ders
+    anahtarı ya da geçersiz harf notu sessizce yok sayılmaz
+  - Salt okunur bir tahmindir, resmi sonuç değildir
+
+- **`export_table`:** dönem notları, tüm notlar, haftalık program ve ödev teslim tarihleri CSV
+  olarak alınabiliyor (`dataset`: `term_grades`, `all_grades`, `weekly_schedule`, `deadlines`)
+  - Dosya Türkçe Excel'de doğru açılacak biçimde yazılır: UTF-8 BOM, `;` ayraç, ondalık virgül
+  - `all_grades` her denemenin ortalamaya sayılıp sayılmadığını da yazar (`Sayılıyor`,
+    `Tekrar edildi`, `Ortalamaya girmez`)
+  - Ders ve ödev başlıkları üniversite sayfalarından geldiği için formül gibi başlayan hücrelerin
+    önüne `'` konur
+  - Varsayılan olarak metni döndürür. `save=true` dosyayı indirme klasöründeki `exports` altına,
+    var olanın üzerine yazmadan kaydeder. 200 KB'ı aşan metin satır sınırında kesilir
+  - Dosya yazabildiği için uzak HTTP sunucusunda yayınlanmaz. Excel (xlsx) ve PDF çıktısı yoktur
+- **`search_content`:** daha önce çekilmiş duyuru, ödev, mesaj panosu başlığı, dosya adı ve
+  okunmuş ya da indirilmiş dosya metinlerinde yerel arama yapar
+  - Türkçe harfler ve büyük küçük harf fark etmez (`sinav`, `SINAV`, `sınavda` aynı sonucu bulur)
+  - Ninova'ya istek atmaz, giriş gerektirmez. Dizin yalnızca bu bilgisayarda, durum klasöründeki
+    `search.sqlite3` dosyasında durur. Temizlemek için dosyayı silmek yeterli
+  - Hiç okunmamış bir dosya yalnızca adıyla bulunur
+- **Değişiklik özeti:** `sync_all_courses` sonucunda artık `change_summary` var: derse göre
+  gruplanmış kısa satırlar ("Yeni duyuru: ...", "Teslim tarihi değişti: ...", "Not girildi: ...").
+  Aynı özet geçmiş için `get_updates(summary=true, since="2026-10-05")` ile alınır
+
+### Kurulum komutları
+
+- **`itu-mcp setup`:** İTÜ kullanıcı adını ve şifresini sorar, işletim sisteminin anahtar zincirine
+  kaydeder. İstenirse girişi hemen dener
+- **`itu-mcp connect [claude-desktop|claude-code|cursor|all] [--dry-run]`:** sunucuyu asistan
+  ayarına şifresiz ekler. Yalnızca `mcpServers.itu` değişir, zaman damgalı yedek alınır, geçerli
+  JSON olmayan dosyaya dokunulmaz. Kayıtta düz metin şifre varsa çıkarmadan önce sorar
+- **`itu-mcp doctor [--online]`:** Python ve paket sürümü, giriş bilgilerinin kaynağı, anahtar
+  zinciri, durum klasörü, ayar dosyalarındaki düz metin şifre ve kayıtlı asistanlar için satır
+  satır OK / UYARI / HATA ve çözüm adımı verir. Ağa yalnızca `--online` ile çıkar
+- **`itu-mcp logout [--forget-password]`:** kayıtlı oturumu, istenirse anahtar zincirindeki
+  bilgileri siler
+- Giriş bilgileri tek yerden çözülüyor: önce ortam değişkenleri, sonra `.env` dosyası, sonra
+  anahtar zinciri. `keyring` kurulu değilse davranış eskisiyle aynı. Düz metin ve dosya tabanlı
+  `keyring` arka uçları kabul edilmez. `NINOVA_KEYRING=0` anahtar zinciri aramasını kapatır
+- `itu-mcp[keyring]` isteğe bağlı eki eklendi
+
+### Düzeltmeler
+- "Önlisans" ve "Lisansüstü 2. Öğretim" ders programı HTTP 500 veriyordu. OBS bu iki program
+  tipini Türkçe harfsiz anahtarla (`OL`, `LUI`) bekliyor, artık öyle gönderiliyor
+- Program tipi adlarında büyük küçük harf ve Türkçe karakter farkı önemsiz (`lisansustu 2`,
+  `ONLISANS`). Tanınmayan değer için hata kabul edilen adları sayıyor
+- Arşivde Türkçe harfli ders kodları (`işl 101`, `ISL 101`, `İŞL101`) aynı derse çıkıyor
+- `obs_simulate_cumulative_gpa`: kredisi kesinleşmeyen dersler için verilen `gpa_range`, yalnızca
+  resmi dönem ortalamasıyla çelişmeyen seçeneklerden hesaplanıyor, aralık gereksiz geniş çıkmıyor
+
+- `obs_calculate_gpa` ve diğer OBS araçlarında `semester` artık sayı olarak gönderilen dönem
+  kodunu kabul ediyor (`202410`). Tırnaklı ve ondalıklı yazımlar da tanınıyor, tam kod ya da
+  kimlik eşleşmesi ad parçası eşleşmesinden önce geliyor
+- `obs_calculate_gpa`: `projected_grades` anahtarı olarak CRN kabul ediliyor. Eşleşmeyen
+  anahtarlar `unmatched_projected_keys`, `valid_projected_keys` ve `projection_status` alanlarıyla
+  bildiriliyor
+- `obs_calculate_gpa`: bu dönem kayıtlı olunan dersin kredisi, ders planında yalnızca başka bir
+  dönemin satırı varsa da bulunuyor
+- `obs_calculate_gpa`: seçmeli yuvayı dolduran derste `kredisi` ile `sayilanKredi` farklıysa
+  resmi dönem ortalamasını veren değer kullanılıyor. Karar verilemeyen dersler `credit_ambiguity`
+  alanında adlandırılıyor
+- `obs_calculate_gpa`: bütün derslerin başarısız olduğu dönemde resmi ortalama (0.00) artık
+  "yok" sayılmıyor
+- `obs_calculate_gpa`: her ders için `attempts` alanı aynı dersin diğer dönemlerdeki notlarını
+  ve farklı kodla alınmış olası eşdeğer başarısız denemeleri gösteriyor
+- README'deki "hepsinden BB alırsam" örneği genel ortalamayı veremeyen araca işaret ediyordu
+
+### Canlı denemelerde bulunan düzeltmeler
+
+Araçlar gerçek bir öğrenci hesabıyla ve girişsiz olarak yaklaşık 200 soruyla denendi. Bulunan
+hatalar aşağıda, alan alan.
+
+#### Ortalama ve planlama
+
+- `calculate_target_gpa`: yeni `retakes` parametresi. Tekrar alınan ders eski notunun yerine
+  geçer ve kredi eklemez. Tekrar bilgisi verilmediğinde sonuç bu varsayımı `assumption` alanında
+  söyler
+- `obs_simulate_cumulative_gpa`: yeni `target_gpa` parametresi. Kayıtlı derslerin hepsinde
+  gereken en düşük ortak harf notunu, hedefe AA ile bile ulaşılamıyorsa ulaşılabilir en yüksek
+  ortalamayı verir
+- `check_course_conflicts`: bölüm verilmediğinde artık sessizce BLG taranmıyor. CRN'lerin bölümü
+  önce girişsiz ders arşivinden, kalanlar için öğrencinin kayıtlı derslerinden bulunuyor.
+  Günü ve saati olmayan dersler `unscheduled_crns` ile bildiriliyor
+- `plan_remaining_courses`: bu dönem alınan dersler `in_progress` listesinde ayrı gösteriliyor,
+  öneriler yalnızca henüz alınmamış dersler için üretiliyor. Boş seçmeli yuvalar ve kredileri
+  plana eklendi
+- Dönem tahminleri: üçten az dönem kaydı olan derste artık "yalnızca Güz" gibi bir hüküm
+  verilmiyor. Her iki normal dönemde açılan dersler "çoğunlukla" diye sunulmuyor, yaz okulu
+  ayrı sayılıyor
+- `explain_course_eligibility`: bu dönem alınan ön şartlar `in_progress_prerequisites` alanında,
+  bunlar geçilirse sonucun ne olacağı `eligible_if_in_progress_passed` alanında. Bir VEYA
+  grubunun seçenekleri tek kalem olarak listeleniyor
+- `obs_get_graduation_remaining`: yuva kredisi ile sayılan kredi ayrıldı. Kalan kalemlerin
+  toplamı `credits_remaining` ile tutmadığında fark ve sorumlu ders bildiriliyor
+- `estimate_relative_grade`: puanlar doğrulanıyor (0-100). 10 puandan küçük sınıfta ve standart
+  sapma 0 iken harf notu tahmini verilmiyor, nedeni söyleniyor
+
+#### Ninova
+
+- `get_upcoming_deadlines` artık eski kayıttan "teslim yok" demiyor. Kayıt 12 saatten eskiyse
+  (`NINOVA_TRACKING_MAX_AGE_SECONDS`) dersleri kendisi yeniden okuyor. Yenileme başarısız olursa
+  eski veri `stale_snapshot` olarak işaretlenip hatayla birlikte dönüyor. `get_updates` ve
+  `get_course_overview` de verinin yaşını bildiriyor
+- `get_course_attendance`: henüz girilmemiş haftalar devamsızlık sayılmıyor. Kepler tablosu
+  "yok" ile "girilmedi"yi ayırmadığı için belirsiz haftalar `unmarked_or_absent`, gelecek
+  haftalar `future` olarak ayrılıyor
+- Pano: ders kodu artık şube adından okunmuyor (yıl içeren şube adı ders numarası sanılıyordu).
+  Aynı dersin iki şubesi `section` ve `crn` ile ayırt ediliyor, tarih aralıkları başlangıç ve
+  bitiş olarak ayrıldı
+- Ders arama esnekleşti: bitişik ya da küçük harfli kod (`cen354e`), harf eki farkı
+  (`ING 201` / `ING 201A`), CRN ve Roma/Arap rakamlı ad (`fizik 2`) tek bir derse denk geliyorsa
+  kabul ediliyor ve `matched_by` ile belirtiliyor. Birden fazla aday varsa araç seçim yapmıyor,
+  adayları listeliyor
+- `crawl_course` bozuk bir bağlantıda durmuyor, bağlantıyı `skipped` listesine yazıp devam ediyor
+- Aynı kodu paylaşan iki şubede ödev yükleme alanları ders bağlantısıyla bulunabiliyor
+- `compact=true` başlık ve bağlantı metinlerini silmiyor
+- Boş duyuru ve ödev sayfalarında yanlış "sayfa düzeni değişmiş olabilir" uyarısı kaldırıldı
+- Duyuru metni sayfanın yardım kutusu olmadan dönüyor, duyuru ve pano tarihlerine ISO alanları
+  eklendi
+- `download_resource` uzantısız verilen dosya adına uzantıyı sunucudan alıyor,
+  `read_resource_text` uzantısı bilinmeyen dosyayı içeriğinden tanıyor
+
+#### OBS ve Portal
+
+- Dönem adı gevşek verildiğinde (`"bahar"`) artık en eski eşleşen dönem sessizce seçilmiyor:
+  en güncel dönem kullanılıyor ve sonuç bunu söylüyor. Belirsiz sorgular adayları listeleyen bir
+  hata veriyor
+- `obs_get_notifications`: bildirimler okunamadığında boş liste yerine `status: "unavailable"`
+  ve neden dönüyor
+- `obs_get_attendance`: yoklama girilmemiş sınıf `no_attendance_recorded` durumu ve açık bir
+  mesajla bildiriliyor
+- `obs_get_profile`: e-posta, telefon, adres, doğum bilgileri ve anne/baba adı da varsayılan
+  olarak gizleniyor. Gizlenen alanlar `redacted_fields` içinde listeleniyor
+- `obs_get_registration_draft`: `room` artık kapı tabelasını (ör. A36) veriyor, takvimdeki ders
+  kodu branşla birlikte
+- `obs_get_registration_status`: boş kalan `enrollment_status` dolduruluyor. Son güz ya da bahar
+  döneminin ortalaması `last_regular_term` olarak eklendi
+- `obs_get_help_tickets`: listedeki tarih artık `age` değil `list_date`. Liste görünümünde
+  bulunmayan alanlar eksik sayılmıyor
+- `get_cafeteria_menu`: aynı yemekte tekrarlanan alerjenler tek kez listeleniyor
+- Kota ve kampüs kartı çıktılarına sayısal ve etiketli alanlar eklendi
+
+#### Akademik takvim ve kampüs
+
+- `get_academic_calendar` artık yalnızca görüntülenen ayı değil, akademik yılın tamamını okuyor.
+  Türkçe sorgular çalışıyor (`dersten çekilme`, `cekilme`), her etkinlik iki dilde dönüyor.
+  Etkinliklerin iki kez gelmesi ve çözülmemiş HTML kodları giderildi
+- Takvim sonucuna `terms` alanı eklendi: dönem bazında derslerin ilk ve son günü.
+  `export_course_schedule_ics` bu tarihleri kendisi buluyor
+- `get_shuttle_schedule` 404 hatası giderildi, araç SKS'nin yeni ring servis sayfasını okuyor
+- `get_itu_announcements` ana site duyurularını yeniden okuyor, duyurular kaynaklar arasında en
+  yeniden eskiye sıralanıyor
+- `search_campus_locations` her bina kodunu bir kez listeliyor, bina içi kodlar `sub_locations`
+  altında
+- `get_sports_facility_hours` saatleri `HH:MM` biçimine çeviriyor, kapalı günleri ayrı veriyor
+
+#### Ders programı ve arşiv
+
+- `find_open_course_sections` rezervasyon kontenjanlarını hesaba katıyor: `available_seats`
+  yalnızca öğrencinin alabileceği yerleri sayar. Yeni `program_code` parametresiyle kendi
+  programına ayrılan yerler de eklenir. Toplam boş yer `total_free_seats` alanında
+- Ders programında yer tutucular (`-`, `--`, `Detay`) artık veri olarak dönmüyor
+- `find_empty_classrooms` gün adını Türkçe ve İngilizce, kısaltmalı ve aksansız kabul ediyor.
+  Saat `10`, `10.00`, `9:45` biçimlerinde verilebilir
+- CRN, ders numarası ve dönem kodu alan araçlar sayı olarak gönderilen değerleri kabul ediyor
+- Arşiv: kayıtlı sayısı hiç alınmamış dönemlerin (ör. 2025-2026 Güz) sıfırları artık ölçüm
+  sayılmıyor, ortalama ve karşılaştırmalardan çıkarıldı
+- Arşiv: dönem parametresi arşiv kodunu (`2025-2026-guz`), OBS dönem kodunu (`202610`) ve dönem
+  adını kabul ediyor. `archive_fill_rate` ders koduyla verilen dönemi artık yok saymıyor
+- Arşiv: bölüm kodu değişmiş dersler için `same_course_other_codes` alanı (ör. CEN 411E için
+  BLG 411E). Öğretim üyesi duyurulmamış şubeler kişi olarak listelenmiyor
+- Arşiv: `archive_compare_terms` farklı öğrenim düzeylerini kapsayan dönemleri bildiriyor ve
+  yalnızca ortak düzeyi karşılaştırıyor
+- Arşiv: ders adı araması aksan ve kelime sırasından bağımsız. Dizin İngilizce verilen derslerin
+  yalnızca İngilizce adını tuttuğu için Türkçe sorguda boş sonuç nedenini söylüyor
+- `build_degree_plan`: AKTS artık sayı, dersler bir kez listeleniyor
+- `obs_search_courses` her ders kodu için tek ve temiz bir kayıt döndürüyor
+
+### Sadeleştirme sırasında bulunan hatalar
+
+Kod sadeleştirilirken (en karmaşık fonksiyon 64'ten 15'e indi, `parsing.py` ve `obs_client.py`
+alanlara bölündü) fark edilen hatalar ayrı bir turda düzeltildi.
+
+- **Ödev yükleme sonucu:** `submit_assignment` artık yalnızca seçilen dosya alanına bakarak karar
+  veriyor. Sayfanın başka yerindeki "yüklediniz" gibi ifadeler başarı sayılmıyor. Yeni `status`
+  alanı: `uploaded`, `not_confirmed` (Ninova'dan elle kontrol et) ya da `failed`. `ok` yalnızca
+  `uploaded` için doğru. Var olan dosya değiştirilirken tarih ya da ad değişmediyse başarı
+  bildirilmiyor
+- **Profil gizleme:** büyük İ ile başlayan etiketler ("İkamet") ve "E-Posta", "Tel No" gibi
+  yazımlar artık tanınıyor. Hassas bir iletişim satırının bütün metin alanları gizleniyor. Hangi
+  alanda olursa olsun e-posta, Türkiye telefon numarası ve 11 haneli kimlik numarası
+  maskeleniyor. Öğrenci numarası, CRN, dönem kodu ve tarihlere dokunulmuyor
+- **Portal bildirimleri:** `obs_get_notifications` servisi sayfanın kendi gönderdiği `all`
+  parametresiyle çağırıyor ve artık bildirimleri döndürüyor. Yeni `include_all` parametresi,
+  `unread_count`, `is_read`, `summary`. Bir bildirimin tam metni yalnızca `notification_id` ile
+  istenince döner
+- **İki GANO aracı aynı kararı veriyor:** `obs_calculate_gpa` ile `obs_simulate_cumulative_gpa`
+  seçmeli ders kredisini, ders adı karşılaştırmasını, plan satırı okumayı ve senaryo anahtarı
+  eşleştirmesini artık tek bir yerden (`gpa_common`) alıyor. İkisinin her dönem için aynı krediyi
+  ve aynı ortalamayı bulduğu ortak bir testle sınanıyor
+- Kredisi 0 olan dersler (BL gibi) artık "kredisi eksik" sayılmıyor. Metin olmayan not değerleri
+  "tanınmayan not" yerine "henüz not yok" olarak ele alınıyor
+- Takvim dışa aktarma: takvimden gelen tarihler hatalıysa hata mesajı her tarihin kaynağını
+  söylüyor. Bozuk bir takvim satırı ya da okunamayan tarih artık çökertmiyor
+- Kayıt durumu: sayı olarak gelen sınıf düzeyi tanınıyor, aynı başlangıç ve bitişe sahip
+  pencereler tek pencere sayılıyor, boş ders satırı kanıt sayılmıyor
+- Açık OBS: boş bölüm kodu rastgele bir bölüme çözülmüyor. Yalnızca rakamdan oluşan girdi (ör. bir
+  CRN) ders kodu olarak çözülmüyor. Boş dönem metni en son dönem anlamına geliyor
+- Pano: kendi kodu bulunamayan ders komşu dersin kodunu ve CRN'ini almıyor
+- Boşluktan ibaret ödev ya da ders adı başlıksız bir ödevle eşleşmiyor
+- Bir test verisinde kalmış gerçek ad sahte adla değiştirildi
+
+### Daha kısa cevaplar
+
+- OBS araçları varsayılan olarak kısaltılmış sonuç döndürüyor: özet önce gelir, ham OBS yanıtı
+  yalnızca `include_raw=true` ile eklenir. 16 araçta aynı parametre var, sonuçtaki
+  `raw_available` alanı bunu tek satırda söyler. Örnek: mezuniyet durumu 29 KB'den 4 KB'ye,
+  pano 12 KB'den 3 KB'ye indi
+- Başarılı OBS yanıtlarındaki `statusCode`, `resultCode`, `resultMessage` alanları sonuçtan
+  çıkarıldı. Hatalı yanıtlarda ve bir cevap taşıyan kodlarda (ör. `SCCSinifOgrenciYoklamaYok`)
+  korunuyor
+- Türkçe ve İngilizce gelen etiketler tek dilde veriliyor, ders adları farklıysa iki dilde
+  kalıyor. Dönem bilgisi sonuçta bir kez yer alıyor
+- `obs_get_schedule` artık `weekly_schedule` döndürüyor: gün, saat, ders, bina ve derslik, güne
+  ve saate göre sıralı
+- `obs_calculate_gpa`: kredi ve not kaynağı sonuçta bir kez bildiriliyor, sabit açıklamalar araç
+  tanımına taşındı, `ff_risk` ders kodlarını veriyor
+- `explain_course_eligibility` sonucu kararla başlıyor
+- `obs_get_registration_status` her program için `term_history` (tüm dönemlerin ortalaması)
+  döndürüyor
+- `archive_grade_distribution` varsayılan olarak son 6 dönemi ve yalnızca not sayılarını
+  döndürüyor. Yüzdeler için `include_percentages=true`, daha fazla dönem için `limit_terms`
+- Arşiv: kontenjanı hiç alınmamış dönemlerde (ör. 2022-2023 Güz) `capacity` artık 0 değil boş
+  dönüyor ve dönem `capacity_not_captured` ile işaretleniyor. Geçmiş araçları bir dönemin
+  verisinin alınıp alınmadığına dönem geneline bakarak karar veriyor, küçük bir branşın gerçekten
+  boş şubeleri "alınmamış" sayılmıyor
+- En ağır araçların varsayılan sonuç boyutu test ediliyor, boyut fark edilmeden büyüyemez
+
+### Yükseltirken bilmen gerekenler
+
+- `submit_assignment` sonucunda `ok: true` artık yalnızca yükleme seçilen alanda doğrulandıysa
+  gelir. `status: "not_confirmed"` başarı değildir, Ninova'dan kontrol edilmelidir
+- `obs_get_notifications` listesinde `content` alanı yok, tam metin `notification_id` ile gelir
+- Ham OBS verisini okuyan bir betiğin varsa ilgili araca `include_raw=true` eklemen gerekir.
+  `obs_calculate_gpa` içinde kaldırılan sabit alanların (`note`, `scale`, `calculated_term_gpa`,
+  `credit_fallback_courses` ve benzerleri) geri alma seçeneği yoktur
+- `find_open_course_sections` içinde `available_seats` anlam değiştirdi: toplam boş yer değil,
+  alınabilecek yer
+- `get_upcoming_deadlines` kayıt eskiyse kendiliğinden istek atabiliyor
+- `get_academic_calendar` filtresiz çağrıldığında son 14 gün ile önümüzdeki 90 günü listeliyor
+- `obs_get_profile` daha fazla alanı gizliyor. Görmek için `NINOVA_ALLOW_SENSITIVE_OUTPUT=1`
+  gerekiyor
+- `check_course_conflicts` sonucunda `error` alanı yerine `status` var
+- `estimate_relative_grade` 10 puandan az sınıfta harf notu vermiyor
+
 ## v1.1.0
 
 ### Güvenlik

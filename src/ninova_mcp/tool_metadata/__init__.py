@@ -32,6 +32,9 @@ from .campus import CAMPUS_TOOLS
 from .planning import PLANNING_TOOLS
 from .library import LIBRARY_TOOLS
 from .archive import ARCHIVE_HISTORY_TOOLS
+from .gpa_simulation import GPA_SIMULATION_TOOLS
+from .export import EXPORT_TOOLS
+from .search import SEARCH_TOOLS
 
 TOOL_GROUPS: tuple[list[dict[str, Any]], ...] = (
     CORE_TOOLS,
@@ -47,6 +50,9 @@ TOOL_GROUPS: tuple[list[dict[str, Any]], ...] = (
     PLANNING_TOOLS,
     LIBRARY_TOOLS,
     ARCHIVE_HISTORY_TOOLS,
+    GPA_SIMULATION_TOOLS,
+    EXPORT_TOOLS,
+    SEARCH_TOOLS,
 )
 
 PUBLISH_ORDER: tuple[str, ...] = (
@@ -146,6 +152,7 @@ PUBLISH_ORDER: tuple[str, ...] = (
     "archive_list_branches",
     "archive_compare_terms",
     "plan_remaining_courses",
+    "obs_simulate_cumulative_gpa",
 )
 
 

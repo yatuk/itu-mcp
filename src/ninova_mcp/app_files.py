@@ -33,6 +33,7 @@ from .parsing import (
 from .text_extract import (
     DEFAULT_MAX_CHARS as TEXT_EXTRACT_DEFAULT_MAX_CHARS,
     MAX_EXTRACT_BYTES,
+    SUPPORTED_EXTENSIONS as TEXT_EXTRACT_SUPPORTED_EXTENSIONS,
     extract_text_from_bytes,
     extract_text_from_path,
     guess_extension,
@@ -98,6 +99,7 @@ class PageFileToolsMixin:
         queue: list[tuple[str, int]] = [(start_url, 0)]
         pages: list[dict[str, Any]] = []
         downloads: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         seen_downloads: set[tuple[str, str]] = set()
 
         from .interaction import progress_steps
@@ -112,7 +114,16 @@ class PageFileToolsMixin:
             visited.add(normalized)
             steps.advance(f"Sayfa taranıyor ({len(pages) + 1}, en fazla {max_pages}): {normalized}")
 
-            html, response = self.client.get_html(normalized)
+            try:
+                html, response = self.client.get_html(normalized)
+            except Exception as exc:
+                # The start page is the caller's own input and still fails
+                # loudly. A link found on a page is not: one refused or broken
+                # link is noted and the rest of the course is still crawled.
+                if not pages:
+                    raise
+                skipped.append({"url": normalized, "depth": depth, "reason": str(exc) or type(exc).__name__})
+                continue
             page = parse_html_page(response.url, html, base_url=self.client.base_url)
             page_summary = {
                 "url": page["url"],
@@ -151,6 +162,8 @@ class PageFileToolsMixin:
             "pages_crawled": len(pages),
             "pages": pages,
             "downloads": downloads[:500],
+            "skipped_count": len(skipped),
+            "skipped": skipped[:100],
         }
 
     def download_resource(
@@ -177,9 +190,20 @@ class PageFileToolsMixin:
         response = self.client.get(url, stream=True)
         try:
             try:
-                resolved_name, neutralised = requested_name or safe_download_name(
-                    self._filename_from_response(response)
-                )
+                served_name = self._filename_from_response(response)
+                if requested_name is not None and not Path(requested_name[0]).suffix:
+                    # A name given without an extension would save a file
+                    # nothing can open by type. The extension the server names
+                    # (file name, then content type) is added, and the result
+                    # goes through the same safe-name rules as any other name.
+                    extension = guess_extension(
+                        url=response.url,
+                        content_type=response.headers.get("Content-Type"),
+                        filename=served_name,
+                    )
+                    if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", extension or ""):
+                        requested_name = safe_download_name(requested_name[0] + extension)
+                resolved_name, neutralised = requested_name or safe_download_name(served_name)
             except LocalFileError as exc:
                 raise NinovaError(str(exc)) from exc
             self._refuse_oversized(response.headers.get("Content-Length"), max_bytes)
@@ -213,7 +237,22 @@ class PageFileToolsMixin:
                 "This file type can run code when opened, so '.download' was appended to its name. "
                 "Rename it yourself only if you trust the file."
             )
+        elif target_path.suffix.lower() in TEXT_EXTRACT_SUPPORTED_EXTENSIONS and written <= MAX_EXTRACT_BYTES:
+            # The saved file is searchable by content afterwards (search_content).
+            pages: list[tuple[int | None, str]] = []
+            try:
+                extract_text_from_path(target_path, max_chars=1_000, pages_out=pages)
+            # The download itself succeeded; a file that cannot be parsed is only not indexed.
+            except Exception:  # nosec B110
+                pass
+            self._feed_search_index(pages, title=target_path.name, url=response.url)
         return result
+
+    def _feed_search_index(self, pages: list[tuple[int | None, str]], **source: Any) -> None:
+        """Hand extracted text to the search index when the app has one (``SearchToolsMixin``)."""
+        feeder = getattr(self, "_index_file_text", None)
+        if feeder is not None and pages:
+            feeder(pages, **source)
 
     @staticmethod
     def _oversize_message(max_bytes: int) -> str:
@@ -258,8 +297,10 @@ class PageFileToolsMixin:
                 local_path = resolve_readable_file(path, state_dir=self.state_dir)
             except LocalFileError as exc:
                 raise NinovaError(str(exc)) from exc
-            extracted = extract_text_from_path(local_path, max_chars=max_chars)
+            pages: list[tuple[int | None, str]] = []
+            extracted = extract_text_from_path(local_path, max_chars=max_chars, pages_out=pages)
             extracted["source"] = "path"
+            self._feed_search_index(pages, title=local_path.name, path=str(local_path))
             return extracted
 
         if url is None:  # narrowed above; keep runtime safety under python -O
@@ -307,7 +348,9 @@ class PageFileToolsMixin:
                 handle.write(data)
             saved_path = str(target_path)
 
-        extracted = extract_text_from_bytes(data, extension=extension, max_chars=max_chars)
+        url_pages: list[tuple[int | None, str]] = []
+        extracted = extract_text_from_bytes(data, extension=extension, max_chars=max_chars, pages_out=url_pages)
+        self._feed_search_index(url_pages, title=resolved_name, url=response.url)
         extracted.update(
             {
                 "source": "url",

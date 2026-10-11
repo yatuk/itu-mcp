@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from .common import include_raw_property
+
 NINOVA_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_dashboard",
         "title": "Get Dashboard",
-        "description": "Read the Ninova dashboard and summarize courses, recent announcements, assignments, and messages.",
+        "description": (
+            "Read the Ninova dashboard and summarize courses, recent announcements, assignments, and messages. "
+            "Each course row is one enrolled section: section and crn tell two sections of one course apart, "
+            "and code_uncertain marks a code that could not be read reliably. Dashboard dates have no year: "
+            "date_iso is inferred from today's date (date_year_inferred). A start/end window is split in "
+            "date_ranges (start, end, raw) without ISO values. The page's link list and headings are "
+            "left out by default (link_count says how many links there are); include_raw=true adds them."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -17,6 +26,7 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
                     "default": False,
                     "description": "Shrink large fields for smaller LLM context.",
                 },
+                "include_raw": include_raw_property("get_dashboard"),
             },
             "additionalProperties": False,
         },
@@ -45,8 +55,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 },
                 "include_full_text": {
                     "type": "boolean",
@@ -77,8 +91,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 },
                 "recursive": {"type": "boolean", "default": True},
                 "max_depth": {"type": "integer", "minimum": 0, "maximum": 8, "default": 3},
@@ -100,8 +118,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 },
                 "recursive": {"type": "boolean", "default": True},
                 "max_depth": {"type": "integer", "minimum": 0, "maximum": 8, "default": 3},
@@ -126,8 +148,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
                 "include_details": {
@@ -156,8 +182,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 }
             },
             "required": ["course"],
@@ -172,8 +202,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 }
             },
             "required": ["course"],
@@ -192,8 +226,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 }
             },
             "required": ["course"],
@@ -208,8 +246,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 },
                 "include_thread_details": {
                     "type": "boolean",
@@ -232,15 +274,24 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
         "title": "Get Course Attendance",
         "description": (
             "Read the Ninova 'Yoklama' page for a course — attendance as the instructor "
-            "recorded it in the LMS, not the official OBS record. For official attendance "
+            "recorded it in the LMS, not the official OBS record. The grid shows 0 both for an "
+            "absence and for a session not entered yet, so only zeros in weeks that also hold a "
+            "recorded 1 are counted as absences (total_absent_marks); the rest are "
+            "total_unmarked_or_absent_marks, and weeks after today are total_future_marks. Never "
+            "report unmarked or future marks as absences; when absence_counts_reliable is false, "
+            "say the count is uncertain. For official attendance "
             "with an absence-risk summary, use obs_get_attendance instead."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 }
             },
             "required": ["course"],
@@ -255,8 +306,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
-                    "description": "Course code, title, course path, or full course URL.",
+                    "type": ["string", "integer"],
+                    "description": (
+                        "Course code, CRN, title, course path, or full course URL. A code with or without "
+                        "its letter suffix (ING 201 / ING 201A) and loose names (fizik 2) are accepted when "
+                        "exactly one course fits; the result's course.matched_by says when the match was not exact."
+                    ),
                 }
             },
             "required": ["course"],
@@ -311,7 +366,7 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "course": {
-                    "type": "string",
+                    "type": ["string", "integer"],
                     "description": "Course code/title/URL (required with assignment if upload_url omitted).",
                 },
                 "assignment": {
@@ -332,7 +387,12 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Upload a local file to one Ninova assignment slot via the official "
             "multipart form. Requires confirm=true to actually post; without it, "
-            "returns a dry-run preview only. Ask the user before confirming."
+            "returns a dry-run preview only. Ask the user before confirming. "
+            "After a real upload read `status`: `uploaded` means the chosen slot was seen to hold "
+            "the new file; `not_confirmed` means the POST went through but the slot does not show "
+            "it, so tell the user to check Ninova manually and never report it as submitted; "
+            "`failed` means Ninova answered with an error or its login page. `ok` is true only "
+            "for `uploaded`; relay `message`, which says what was seen."
         ),
         "inputSchema": {
             "type": "object",
@@ -342,7 +402,7 @@ NINOVA_TOOLS: list[dict[str, Any]] = [
                     "description": "Absolute path to the local file to upload.",
                 },
                 "course": {
-                    "type": "string",
+                    "type": ["string", "integer"],
                     "description": "Course code/title/URL (with assignment) if upload_url omitted.",
                 },
                 "assignment": {

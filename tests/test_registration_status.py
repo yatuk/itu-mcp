@@ -163,7 +163,8 @@ class RegistrationStatusTests(unittest.TestCase):
         obs.get_lesson_registration_status.return_value = lesson
         public = Mock(spec=["get_academic_calendar"])
         public.get_academic_calendar.side_effect = requests.Timeout("Synthetic failure")
-        result = NinovaMcpApp.obs_get_registration_status(SimpleNamespace(obs=obs, obs_public=public))
+        app = SimpleNamespace(obs=obs, obs_public=public)
+        result = NinovaMcpApp.obs_get_registration_status(app, include_raw=True)
         self.assertIs(result["kayit_durumu"], registration)
         self.assertIs(result["ders_kayit_durumu"], lesson)
         self.assertIsNone(result["summary"]["per_program"][0]["registration_window"])
@@ -171,6 +172,16 @@ class RegistrationStatusTests(unittest.TestCase):
         obs.get_registration_status.assert_called_once_with()
         obs.get_lesson_registration_status.assert_called_once_with()
         public.get_academic_calendar.assert_called_once_with()
+        # The default result keeps the official status without the two payloads.
+        default = NinovaMcpApp.obs_get_registration_status(app)
+        self.assertNotIn("kayit_durumu", default)
+        self.assertNotIn("ders_kayit_durumu", default)
+        row = default["summary"]["per_program"][0]
+        self.assertEqual(row["enrollment_status"], "Aktif")
+        self.assertEqual(row["registration_permission"], {"status": "Kayıt Olabilir"})
+        self.assertIsNone(row["registration_window"])
+        self.assertTrue(default["summary"]["errors"])
+        self.assertIn("kayit_durumu", default["raw_available"])
 
     def test_business_failure_never_becomes_a_successful_empty_program_list(self):
         result = summarize_registration_status({"statusCode": 1, "kayitDurumuList": []}, {"statusCode": 1}, None, now=NOW)

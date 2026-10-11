@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "itu-mcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "MCP server for İTÜ Ninova, OBS, Portal, campus services and library: courses, grades, schedules, planning and more."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,12 +37,16 @@ dependencies = [
   "python-docx>=1.1.0",
   "requests>=2.33.0",
   "starlette>=1.3.1",
+  "typing-extensions>=4.9.0",
   "tzdata>=2024.1; sys_platform == 'win32'",
   "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]
 playwright = ["playwright>=1.40"]
+# OS keychain storage for `itu-mcp setup` (Windows Credential Manager,
+# macOS Keychain, Secret Service, KWallet).
+keyring = ["keyring>=24"]
 
 [project.urls]
 Homepage = "https://github.com/yatuk/itu-mcp"

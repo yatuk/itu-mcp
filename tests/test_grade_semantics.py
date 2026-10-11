@@ -105,8 +105,11 @@ class GradeSemanticsTests(unittest.TestCase):
         app.prereq_crosscheck.get_course_prerequisite_tree.return_value = None
         app.archive.get_course_history.return_value = {}
         result = NinovaMcpApp.explain_course_eligibility(app, "BLG201E", use_obs_history=True)
-        assert result["completed_grades"] == expected
+        assert result["prerequisite_grades"] == expected
+        assert "completed_grades" not in result
         assert result["eligible"] is True
+        full = NinovaMcpApp.explain_course_eligibility(app, "BLG201E", use_obs_history=True, include_raw=True)
+        assert full["completed_grades"] == expected
 
 
     @cases("grade", ["BL", "BZ", "T", "E", "M"])
@@ -134,7 +137,7 @@ class GradeSemanticsTests(unittest.TestCase):
     def test_conflicting_or_unrecognized_projection_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Conflicting"):
             calculate_gpa([], projected_grades={"BLG101E": "AA", "BLG 101E": "BB"})
-        with self.assertRaisesRegex(ValueError, "recognized"):
+        with self.assertRaisesRegex(ValueError, "Unknown letter grade 'AA.' for projected_grades.'BLG101E'"):
             calculate_gpa([], projected_grades={"BLG101E": "AA+"})
 
 

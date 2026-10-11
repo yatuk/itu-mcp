@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import calendar as month_calendar
+import html as html_entities
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -53,7 +54,7 @@ def parse_event_dates(value: str, *, default_year: int | None = None) -> dict[st
         short_start = re.search(r"(?<!\d)(\d{1,2})\s*-\s*$", text[: first.start()])
         if short_start:
             start_day = int(short_start[1])
-            start_time = None
+            start_time, end_time = None, first["time"]
         time_end = _TIME_END.match(text, first.end())
         if time_end and start_time:
             end_time = time_end[1]
@@ -104,21 +105,38 @@ def _scope(value: str) -> str:
     return "general"
 
 
-def _metadata(description: str, context: str) -> dict[str, Any]:
+_REGISTRATION_SOURCE_CATEGORIES = {"course registrations", "ders kayitlari"}
+_EXAM_SOURCE_CATEGORIES = {"exams", "sinavlar", "last grade entry date", "son not girisi"}
+_TERM_BOUNDARY = re.compile(
+    r"(?:beginning|start|end) of\b.*\b(?:term|semester|school|classes|courses)\b"
+    r"|.*\b(?:yariyili|donemi|ogretimi|derslerinin) (?:baslangici|sonu|baslamasi|tamamlanmasi)$"
+)
+_SECTION_TERMS = {
+    "fall term": "fall", "guz donemi": "fall", "spring term": "spring", "bahar donemi": "spring",
+    "summer school": "summer", "yaz okulu": "summer",
+}
+
+
+def _metadata(description: str, context: str, *, source_section: str = "", source_category: str = "") -> dict[str, Any]:
     text = normalize_lookup_text(description)
     whole = normalize_lookup_text(f"{context} {description}")
+    source_section, source_category = normalize_lookup_text(source_section), normalize_lookup_text(source_category)
     classes = sorted({int(n) for n in re.findall(r"\b([1-4])(?:st|nd|rd|th|\.)?\s*(?:class|sinif)\b", text)})
     # Year-of-study synonyms are used only alongside registration wording.
-    registration = any(word in text for word in ("registration", "kayit", "kaydi", "kaydinin", "course selection", "add/drop", "add drop", "add-drop", "bir baska derse yazilma"))
+    registration = source_category in _REGISTRATION_SOURCE_CATEGORIES or any(word in text for word in (
+        "registration", "kayit", "kaydi", "kaydinin", "course selection", "add/drop", "add drop", "add-drop",
+        "bir baska derse yazilma", "ekle-birak", "ekle birak", "withdrawal", "cekilme"))
     if registration and not classes:
         classes = [n for label, n in (("freshman", 1), ("sophomore", 2), ("junior", 3), ("senior", 4)) if re.search(rf"\b{label}\b", text)]
     if registration:
         category = "registration"
-    elif any(word in text for word in ("exam", "sinav", "final", "midterm", "butunleme")):
+    elif source_category in _EXAM_SOURCE_CATEGORIES or any(word in text for word in ("exam", "sinav", "final", "midterm", "butunleme", "make-up", "mazeret")):
         category = "exam"
-    elif any(word in text for word in ("holiday", "tatil", "bayram")):
+    elif any(word in text for word in ("holiday", "tatil", "bayram")) or re.search(r"\bbreak\b", text):
         category = "holiday"
-    elif any(word in text for word in ("term", "semester", "donem", "classes", "yariyil")):
+    elif _TERM_BOUNDARY.match(text) or (not source_category and any(word in text for word in ("term", "semester", "donem", "classes", "yariyil"))):
+        # On the year list almost every row names its term; only the rows that
+        # open or close a term are semester events there.
         category = "semester"
     else:
         category = "other"
@@ -133,8 +151,10 @@ def _metadata(description: str, context: str) -> dict[str, Any]:
             kind = "all_students_reopening"
         elif any(word in text for word in ("first time", "ilk defa", "new conservatory")):
             kind = "first_registration"
-        elif any(word in text for word in ("add/drop", "add drop", "add-drop", "bir baska derse yazilma")):
+        elif any(word in text for word in ("add/drop", "add drop", "add-drop", "bir baska derse yazilma", "ekle-birak", "ekle birak")):
             kind = "add_drop"
+        elif any(word in text for word in ("withdrawal", "cekilme")):
+            kind = "withdrawal"
         elif any(word in text for word in ("exam registration", "sinav kay")):
             kind = "exam_registration"
         elif "cezali" in text or "late registration" in text:
@@ -142,9 +162,9 @@ def _metadata(description: str, context: str) -> dict[str, Any]:
         else:
             kind = "other"
         result["registration_kind"] = kind
-    term = None
+    term = _SECTION_TERMS.get(source_section)
     for label, pattern in (("fall", r"\b(fall|guz)\b"), ("spring", r"\b(spring|bahar)\b"), ("summer", r"\b(summer|yaz)\b")):
-        if re.search(pattern, whole):
+        if term is None and re.search(pattern, whole):
             term = label
             break
     result["academic_term"] = term
@@ -182,6 +202,263 @@ def _split_inline(text: str) -> tuple[str, str] | None:
     return None
 
 
+_NOTE = "Coverage describes the fetched pages only. Class registration windows are public schedules, not confirmation of personal eligibility."
+_STATUS_UNKNOWN = "not_explicitly_identified_by_source"
+
+
+def _available_academic_years(soup: Tag) -> list[dict[str, str]]:
+    years = []
+    for option in soup.select('select[name="akademikyil"] option'):
+        value = str(option.get("value") or "")
+        match = re.search(r"\b(\d{4})\s*[-–]\s*(\d{4})\b", option.get_text(" ", strip=True))
+        if value.isdigit() and match:
+            years.append({"id": value, "academic_year": f"{match[1]}-{match[2]}"})
+    return years
+
+
+def _parse_year_list(soup: Tag, page_url: str, academic_year: str | None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]] | None:
+    """Read the full academic-year list (``div#results``), one row per event.
+
+    Each row is: date text, a bold description, then a line
+    "calendar name / term or section / site category" and a link carrying the
+    site's own event id (UID). Returns ``None`` when the page has no such
+    list, so the caller can fall back to the older layouts.
+    """
+    container = soup.select_one("div#results")
+    if container is None:
+        return None
+    events: dict[str, dict[str, Any]] = {}
+    unparsed: list[tuple[str, str]] = []
+    for row in container.find_all("div", recursive=False):
+        try:
+            bold = row.find("b")
+            date_parts = []
+            for node in row.children:
+                if isinstance(node, Tag) and node.name in {"br", "b"}:
+                    break
+                date_parts.append(str(node) if isinstance(node, NavigableString) else node.get_text(" ", strip=True))
+            # "(12 days left)" changes daily and is not part of the date.
+            raw_date = clean_text(html_entities.unescape(" ".join(date_parts)).split("(", 1)[0]).rstrip(" :")
+            description = clean_text(html_entities.unescape(bold.get_text(" ", strip=True))) if bold else ""
+            label_node = next((f for f in row.find_all("font") if f.get("size") == "2" and not f.find("a")), None)
+            label = clean_text(html_entities.unescape(label_node.get_text(" ", strip=True))) if label_node else ""
+            link = row.find("a", href=re.compile(r"UID=\d+"))
+            uid_match = re.search(r"UID=(\d+)", str(link.get("href"))) if link else None
+            parts = [part.strip() for part in label.split(" / ")]
+            calendar_name = " / ".join(parts[:-2]) if len(parts) >= 3 else label
+            section, site_category = (parts[-2], parts[-1]) if len(parts) >= 3 else ("", "")
+            parsed = parse_event_dates(raw_date) if raw_date and description else None
+        except (AttributeError, TypeError, ValueError):
+            unparsed.append(("", ""))
+            continue
+        if parsed is None:
+            unparsed.append((raw_date, calendar_name))
+            continue
+        uid = uid_match[1] if uid_match else None
+        item = {"date": raw_date, "description": description, **parsed,
+                **_metadata(description, calendar_name, source_section=section, source_category=site_category),
+                "source_calendar": calendar_name or None, "source_section": section or None,
+                "source_category": site_category or None, "source_url": page_url,
+                "academic_year": academic_year, "uid": uid}
+        key = uid or "|".join(str(item[k]) for k in ("start_date", "end_date", "start_at", "end_at")) + normalize_lookup_text(description + calendar_name)
+        events.setdefault(key, item)
+    return list(events.values()), unparsed
+
+
+def _sorted_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(events, key=lambda e: (e["start_date"], e["start_at"] or "", e["description"], e.get("source_calendar") or ""))
+
+
+def _year_list_result(parsed: tuple[list[dict[str, Any]], list[tuple[str, str]]], page_url: str,
+                      academic_year: str | None, available: list[dict[str, str]]) -> dict[str, Any]:
+    events, unparsed = parsed
+    ordered = _sorted_events(events)
+    complete = bool(ordered) and not unparsed
+    result: dict[str, Any] = {
+        "url": page_url, "event_count": len(ordered), "events": ordered, "semesters": [], "current_semester": None,
+        "current_semester_status": _STATUS_UNKNOWN, "source": urlparse(page_url).hostname, "timezone": TIMEZONE,
+        "coverage": {"scope": "academic_year",
+                     "start_date": min((e["start_date"] for e in ordered), default=None),
+                     "end_date": max((e["end_date"] for e in ordered), default=None),
+                     "complete": complete, "academic_years": [academic_year] if academic_year else []},
+        "parse_complete": complete, "unparsed_event_count": len(unparsed), "truncated": False,
+        "academic_year": academic_year, "available_academic_years": available, "languages": ["en"],
+        "note": _NOTE,
+    }
+    if unparsed or not ordered:
+        result["parse_warning"] = (f"Could not parse {len(unparsed)} dated event entries. Results may be incomplete." if unparsed
+                                   else "No recognizable dated events were found. This does not establish an empty calendar.")
+        result["unparsed_events"] = [{"date": d, "source_calendar": c} for d, c in sorted(set(unparsed))]
+    return finalize_calendar(result)
+
+
+_TERM_START = re.compile(r"beginning of (?:the )?\w+ (?:term|semester|school)|(?:guz|bahar) yariyili baslangici|yaz ogretimi baslangici")
+_TERM_END = re.compile(r"end of (?:the )?\w+ (?:term|semester|school)|(?:guz|bahar) yariyili sonu|yaz ogretimi sonu")
+_TERM_LABELS = {"fall": "Fall (Güz)", "spring": "Spring (Bahar)", "summer": "Summer School (Yaz Okulu)"}
+
+
+def build_terms(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """First and last day of classes per academic year, term and level.
+
+    Only a row whose whole description is "Beginning of Fall Term" / "End of
+    Fall Term" (or the Turkish "Güz Yarıyılı Başlangıcı" / "Sonu") counts, and
+    the term comes from the site's own term column, not from the wording (the
+    site has misspelled "Spring"). Two rows that disagree leave that date
+    empty. The summer school calendar is shared by both levels.
+    """
+    found: dict[tuple[str, str, str], dict[str, set[str]]] = {}
+    calendars: dict[tuple[str, str, str], str] = {}
+    for event in events:
+        term = _SECTION_TERMS.get(normalize_lookup_text(event.get("source_section")))
+        year = event.get("academic_year")
+        calendar_name = normalize_lookup_text(event.get("source_calendar"))
+        if not term or not year or "preparatory" in calendar_name or "hazirlik" in calendar_name:
+            continue
+        texts = [normalize_lookup_text(event.get(k)).strip(" .") for k in ("description", "description_tr") if event.get(k)]
+        bound = "classes_start" if any(_TERM_START.fullmatch(t) for t in texts) else "classes_end" if any(_TERM_END.fullmatch(t) for t in texts) else None
+        if bound is None:
+            continue
+        scopes = ["undergraduate", "graduate"] if term == "summer" else [event.get("scope")]
+        for scope in scopes:
+            if scope not in {"undergraduate", "graduate"}:
+                continue
+            key = (str(year), term, scope)
+            found.setdefault(key, {"classes_start": set(), "classes_end": set()})[bound].add(
+                event["start_date"] if bound == "classes_start" else event["end_date"])
+            calendars.setdefault(key, event.get("source_calendar") or "")
+    terms = []
+    for (year, term, scope), bounds in sorted(found.items(), key=lambda item: (item[0][0], ("fall", "spring", "summer").index(item[0][1]), item[0][2])):
+        start = next(iter(bounds["classes_start"])) if len(bounds["classes_start"]) == 1 else None
+        end = next(iter(bounds["classes_end"])) if len(bounds["classes_end"]) == 1 else None
+        if start and end and end < start:
+            start = end = None
+        terms.append({"academic_year": year, "term": term, "scope": scope, "classes_start": start,
+                      "classes_end": end, "source_calendar": calendars[(year, term, scope)] or None})
+    return terms
+
+
+def finalize_calendar(calendar: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
+    """Derive ``terms``, ``semesters`` and ``current_semester`` from the events."""
+    today = today or datetime.now(ZoneInfo(TIMEZONE)).date()
+    terms = build_terms(calendar.get("events") or [])
+    calendar["terms"] = terms
+    calendar["semesters"] = [
+        {"semester": _TERM_LABELS[t["term"]], "academic_year": t["academic_year"], "start": t["classes_start"], "end": t["classes_end"]}
+        for t in terms if t["scope"] == "undergraduate"]
+    current = next((t for t in terms if t["scope"] == "undergraduate" and t["classes_start"] and t["classes_end"]
+                    and t["classes_start"] <= today.isoformat() <= t["classes_end"]), None)
+    calendar["current_semester"] = dict(current) if current else None
+    calendar["current_semester_status"] = "derived_from_term_start_and_end_dates" if current else _STATUS_UNKNOWN
+    return calendar
+
+
+def merge_calendar_languages(english: dict[str, Any], turkish: dict[str, Any]) -> dict[str, Any]:
+    """Attach the Turkish description to each English row with the same site id.
+
+    Rows are paired by UID and only when both pages give the same dates, so a
+    Turkish text is never attached to a different event.
+    """
+    by_uid = {e["uid"]: e for e in turkish.get("events") or [] if e.get("uid")}
+    events, unmatched = [], 0
+    for event in english.get("events") or []:
+        other = by_uid.get(event.get("uid"))
+        if other and all(other.get(k) == event.get(k) for k in ("start_date", "end_date", "start_at", "end_at")):
+            event = {**event, "description_tr": other["description"]}
+        else:
+            unmatched += 1
+        events.append(event)
+    merged = {**english, "events": events, "languages": ["en", "tr"]}
+    if unmatched:
+        merged["bilingual_unmatched_count"] = unmatched
+    return finalize_calendar(merged)
+
+
+def academic_years_for_range(start: date, end: date) -> list[str]:
+    """Academic years whose list can hold events between ``start`` and ``end``.
+
+    The list of year Y/Y+1 starts with applications in spring of Y and ends
+    with summer school results in September of Y+1.
+    """
+    return [f"{year}-{year + 1}" for year in range(start.year - 2, end.year + 1)
+            if date(year, 4, 1) <= end and start <= date(year + 1, 9, 30)]
+
+
+def combine_calendars(calendars: list[dict[str, Any]], *, warnings: list[str] | None = None,
+                      requested_years: list[str] | None = None, today: date | None = None) -> dict[str, Any]:
+    """Join the lists of several academic years into one result."""
+    warnings = list(warnings or [])
+    events: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for calendar in calendars:
+        for event in calendar.get("events") or []:
+            key = (event.get("academic_year"), event.get("uid")) if event.get("uid") else (
+                normalize_lookup_text(event["description"]), event["start_date"], event["end_date"], event.get("scope"), event.get("source_calendar"))
+            events.setdefault(key, event)
+    ordered = _sorted_events(list(events.values()))
+    years = [c["academic_year"] for c in calendars if c.get("academic_year")]
+    unparsed = sum(int(c.get("unparsed_event_count") or 0) for c in calendars)
+    missing = [y for y in requested_years or [] if y not in years]
+    complete = bool(calendars) and all(c.get("parse_complete") for c in calendars) and not missing
+    languages = ["en", "tr"] if calendars and all(c.get("languages") == ["en", "tr"] for c in calendars) else ["en"]
+    first = calendars[0] if calendars else {}
+    result: dict[str, Any] = {
+        "url": first.get("url"), "urls": [c.get("url") for c in calendars],
+        "event_count": len(ordered), "events": ordered, "source": first.get("source"), "timezone": TIMEZONE,
+        "coverage": {"scope": "academic_year",
+                     "start_date": min((c["coverage"]["start_date"] for c in calendars if c["coverage"].get("start_date")), default=None),
+                     "end_date": max((c["coverage"]["end_date"] for c in calendars if c["coverage"].get("end_date")), default=None),
+                     "complete": complete, "academic_years": years},
+        "parse_complete": bool(calendars) and all(c.get("parse_complete") for c in calendars),
+        "unparsed_event_count": unparsed, "truncated": False, "languages": languages,
+        "available_academic_years": first.get("available_academic_years") or [],
+        "note": _NOTE,
+    }
+    unmatched = sum(int(c.get("bilingual_unmatched_count") or 0) for c in calendars)
+    if unmatched:
+        result["bilingual_unmatched_count"] = unmatched
+    if languages == ["en"]:
+        result["language_note"] = "Turkish descriptions are unavailable for at least one fetched year; Turkish queries match through a small built-in vocabulary only."
+    if missing:
+        result["missing_academic_years"] = missing
+    if warnings:
+        result["coverage_warning"] = " ".join(warnings)
+    parse_warnings = [c["parse_warning"] for c in calendars if c.get("parse_warning")]
+    if parse_warnings or not calendars:
+        result["parse_warning"] = " ".join(parse_warnings) or "No calendar page could be read for the requested dates. This does not establish an empty calendar."
+        result["unparsed_events"] = [u for c in calendars for u in c.get("unparsed_events") or []]
+    return finalize_calendar(result, today=today)
+
+
+# Event fields the result states once for all events.
+_SHARED_EVENT_FIELDS = {"timezone": "timezone", "source_url": "url", "academic_year": "academic_year"}
+
+
+def compact_events(result: dict[str, Any]) -> dict[str, Any]:
+    """The calendar result with every event reduced to what is its own.
+
+    An event loses a field that is empty (null or an empty list), a
+    ``timezone``, ``source_url`` or ``academic_year`` equal to the result's
+    own, and ``uid``, the site's row id that only joins the two languages. A
+    value that differs from the result's, such as the academic year of an
+    event from another year's page, stays on the event.
+    """
+    events = []
+    for event in result.get("events") or []:
+        if not isinstance(event, dict):
+            events.append(event)
+            continue
+        events.append({
+            key: value for key, value in event.items()
+            if key != "uid" and value is not None and value != []
+            and not (key in _SHARED_EVENT_FIELDS and value == result.get(_SHARED_EVENT_FIELDS[key]))
+        })
+    return {**result, "events": events}
+
+
+def default_event_window(today: date) -> tuple[date, date]:
+    """Window shown when the caller gives no filter at all: recent and upcoming."""
+    return today - timedelta(days=14), today + timedelta(days=90)
+
+
 def parse_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
     soup = make_soup(html)
     events: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -194,8 +471,10 @@ def parse_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
     headings = {clean_text(b.get_text(" ", strip=True)) for p in soup.select("p.auto") for b in p.select("b") if b.find("span")}
 
     def add(raw_date: str, description: str, context: str = "") -> None:
-        raw_date = clean_text(raw_date).rstrip(" :")
-        description = clean_text(description)
+        # lxml leaves HTML5-only entities such as &lpar; in the text.
+        raw_date = clean_text(html_entities.unescape(raw_date)).rstrip(" :")
+        description = clean_text(html_entities.unescape(description))
+        context = clean_text(html_entities.unescape(context))
         if not description:
             unparsed.add((raw_date, context))
             return
@@ -208,12 +487,22 @@ def parse_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
         event_year = f"{context_year[1]}-{context_year[2]}" if context_year else academic_year
         item = {"date": raw_date, "description": description, **parsed, **_metadata(description, context),
                 "source_calendar": source_calendar or None, "source_url": page_url, "academic_year": event_year}
-        key = (*[item[k] for k in ("start_date", "end_date", "start_at", "end_at")], normalize_lookup_text(description), normalize_lookup_text(source_calendar))
+        # The grid writes apostrophes as an acute accent; compare letters and digits only.
+        key = (*[item[k] for k in ("start_date", "end_date", "start_at", "end_at")],
+               re.sub(r"[\W_]+", "", normalize_lookup_text(description)), normalize_lookup_text(source_calendar))
         if key in events:
             if item["academic_term"] and not events[key].get("academic_term"):
+                # The upcoming list is the cleaner copy of a grid row: it names the term.
                 events[key]["academic_term"] = item["academic_term"]
+                events[key]["description"] = description
         else:
             events[key] = item
+
+    year_list = _parse_year_list(soup, page_url, academic_year)
+    if year_list is not None:
+        # The same page also shows a month grid and an "upcoming" list. Both
+        # repeat rows of this list with less detail, so they are not read.
+        return _year_list_result(year_list, page_url, academic_year, _available_academic_years(soup))
 
     # The monthly grid repeats each event on every active day. Each bold date
     # is followed by its description, while colored bold spans name a calendar.
@@ -304,30 +593,44 @@ def parse_academic_calendar(html: str, page_url: str) -> dict[str, Any]:
     return result
 
 
+_QUERY_FILLER = {"ne", "zaman", "when", "is", "are", "the", "tarih", "tarihi", "tarihleri", "date", "dates"}
+
+
 def calendar_query_matches(event: dict[str, Any], query: str) -> bool:
     """Match words and a small explicit Turkish/English academic vocabulary."""
     def tokens(value: str) -> list[str]:
         text = normalize_lookup_text(value)
         replacements = (
             (r"\b(?:kayit\w*|kaydi\w*|kaydin\w*|registrations?)\b", "registration"),
-            (r"\b(?:ders(?:ler\w*|in|i|e)?|courses?)\b", "course"),
+            (r"\b(?:ders(?:ten|ler\w*|in|i|e)?|courses?)\b", "course"),
             (r"\b(?:sinif\w*|classes|class)\b", "class"),
             (r"\b(?:sinav\w*|exams?|examinations?)\b", "exam"),
             (r"\b(?:guz|fall)\b", "fall"), (r"\b(?:bahar|spring)\b", "spring"),
-            (r"\b(?:yaz|summer)\b", "summer"), (r"\b(?:tatil\w*|holidays?)\b", "holiday"),
+            (r"\b(?:yaz|summer)\b", "summer"), (r"\b(?:tatil\w*|holidays?|breaks?)\b", "holiday"),
+            (r"\b(?:yariyil\w*|donem\w*|terms?|semesters?)\b", "term"),
+            (r"\b(?:cekil\w*|withdraw\w*)\b", "withdrawal"), (r"\bfinal\w*\b", "final"),
+            (r"\b(?:butunleme\w*|mazeret\w*|make\s*-?\s*up)\b", "makeup"),
+            (r"\b(?:birak\w*|sil\w*|drop)\b", "drop"), (r"\b(?:ekle\w*|add)\b", "add"),
         )
         for pattern, replacement in replacements:
             text = re.sub(pattern, replacement, text)
         return re.findall(r"\w+", text)
-    official_text = f"{event.get('description') or ''} {event.get('date') or ''}"
+    official_text = " ".join(str(event.get(k) or "") for k in ("description", "description_tr", "date"))
     if normalize_lookup_text(query) in normalize_lookup_text(official_text):
         return True
     aliases = []
+    if event.get("registration_kind") == "add_drop":
+        aliases.append("add drop")
+    if event.get("registration_kind") == "withdrawal":
+        aliases.append("withdrawal")
+    if event.get("category") == "exam" and re.search(r"(?:yariyili|ogretimi) sonu sinav", normalize_lookup_text(event.get("description_tr"))):
+        aliases.append("final")
     if event.get("category") == "registration":
         aliases.append("registration")
         if event.get("scope") in {"undergraduate", "graduate"}:
             aliases.append("course")
     if event.get("class_levels"):
         aliases.extend(f"{number} class" for number in event["class_levels"])
-    haystack = set(tokens(" ".join(str(event.get(k) or "") for k in ("description", "date", "academic_term", "category")) + " " + " ".join(aliases)))
-    return set(tokens(query)).issubset(haystack)
+    haystack = set(tokens(" ".join(str(event.get(k) or "") for k in ("description", "description_tr", "date", "academic_term", "category")) + " " + " ".join(aliases)))
+    wanted = set(tokens(query)) - _QUERY_FILLER
+    return bool(wanted) and wanted.issubset(haystack)

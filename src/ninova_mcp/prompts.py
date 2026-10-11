@@ -113,9 +113,10 @@ def research_course(course: str) -> str:
     return (
         f"\"{query}\" dersini arşivden araştır.\n\n"
         f"1. Elinde tam ders kodu yoksa önce `archive_search_courses(query="
-        f"\"{query}\")` ile kodu bul. Arşiv araması tüm dönemleri tarar; "
-        "`obs_search_courses` yalnızca aktif dönemi görür, bu iş için onu "
-        "kullanma.\n"
+        f"\"{query}\")` ile kodu bul. Arşiv araması tüm dönemleri tarar ve "
+        "dersin kaç dönemde görüldüğünü verir. `obs_search_courses` tam ders "
+        "kodunu OBS kataloğunda doğrular, ad ya da kısmi kod aramasında aynı "
+        "arşive düşer; iki araç da dersin bu dönem açıldığını göstermez.\n"
         "2. Kod netleşince sırayla: `archive_course_history` (hangi dönemlerde "
         "açılmış, kaç şube), `archive_who_taught` (kim, kaç dönem, ortalama "
         "doluluk), `archive_fill_rate` (kontenjan dolma eğilimi).\n"
@@ -125,8 +126,11 @@ def research_course(course: str) -> str:
         "dökümünde yok), `covered` (veri var, filtreye uyan yok). Yalnızca "
         "sonuncusu 'açılmadı' demeye yaklaşır — ilk ikisi veri eksikliğidir.\n\n"
         "Özetle: bu ders hangi mevsimde açılıyor, kim veriyor, dolar mı? "
-        "Kontenjan verisinin günde bir tazelendiğini ve anlık olmadığını "
-        "hatırlat."
+        "Kontenjan verisinin anlık olmadığını hatırlat: `archive_fill_rate(crn=...)` "
+        "sonucundaki `note`, `last_snapshot_age_days` ve `scan_active` alanlarını aktar. "
+        "Arşiv kayıt ve ekle-bırak haftaları dışında taramayı durdurur; günlük tazelenme "
+        "varsayma. `enrolment_not_captured` işaretli dönemlerde kayıtlı sayısı bilinmiyor "
+        "demektir, sıfır değil."
     )
 
 
@@ -135,12 +139,14 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
     lines = [
         "Ortalamamı hesapla ve senaryo çalıştır.\n",
         "1. Önce `obs_calculate_gpa()` ile mevcut durumu al.",
+        "   Genel ortalama (GANO) soruluyorsa `obs_simulate_cumulative_gpa` kullan: "
+        "tekrar alınan dersleri eski notun yerine sayar. `obs_calculate_gpa` yalnızca dönem ortalaması verir.",
     ]
     if projected.strip():
         lines.append(
             f"2. Ardından `obs_calculate_gpa(projected_grades=…)` ile şu "
             f"varsayımı dene: {projected.strip()}. Beklenen notları "
-            '`{"BLG 223E": "AA"}` biçiminde ver.'
+            '`{"BLG 223E": "AA"}` biçiminde ver; anahtar ders kodu ya da CRN olabilir.'
         )
     else:
         lines.append(
@@ -149,21 +155,29 @@ def gpa_scenario(target_gpa: str = "", projected: str = "") -> str:
         )
     if target_gpa.strip():
         lines.append(
-            f"3. `calculate_target_gpa(...)` ile {target_gpa.strip()} GANO'ya "
+            f"3. `obs_simulate_cumulative_gpa(target_gpa=...)` ile {target_gpa.strip()} GANO'ya "
             "ulaşmak için kalan derslerde gereken ortalamayı hesapla."
         )
     else:
         lines.append(
-            "3. Kullanıcı bir hedef GANO söylerse `calculate_target_gpa(...)` "
+            "3. Kullanıcı bir hedef GANO söylerse `obs_simulate_cumulative_gpa(target_gpa=...)` "
             "ile gereken ortalamayı hesapla."
         )
     lines.append(
-        "\nSonuçta şu alanları atlamadan aktar: `credit_fallback_courses` "
-        "(kredisi kayıt kaydında 0 gelip ders planından tamamlanan dersler) ve "
-        "`credits_unresolved` (kredisi hiçbir kaynakta bulunamayan, ortalamaya "
-        "0 kredi ile giren dersler) — ikincisi varsa hesap eksiktir.\n"
-        "`ff_risk` listesindeki FF/VF dersleri tekrar alınması gerekenlerdir, "
-        "ayrıca belirt.\n\n"
+        "\nSonuçta şu alanları atlamadan aktar: `credit_source` ve `grade_source` "
+        "(kredilerin ve notların kaynağı; `degree_plan` ise kayıt kaydı boş geldiği "
+        "için ders planından alınmıştır, bu olağan durumdur) ve `credits_unresolved` "
+        "(ortalamaya girmesi gerekip kredisi hiçbir kaynakta bulunamayan dersler). "
+        "İkincisi varsa hesap eksiktir.\n"
+        "`ff_risk` FF/VF alınan derslerin kodlarını verir; ayrıntıları `courses` "
+        "içindedir. Bunları ayrıca belirt.\n"
+        "`unmatched_projected_keys` doluysa senaryo eksik uygulanmıştır: "
+        "`valid_projected_keys` içinden doğru anahtarla yeniden dene. "
+        "`credit_ambiguity` varsa kredisi iki değerli dersleri adıyla söyle. "
+        "`credit_ambiguity.status` `partly_resolved_by_official_average` ise yalnız "
+        "`credit_choice` taşıyan derslerin kredisi kesinleşmiştir. "
+        "Derslerdeki `attempts` alanı aynı dersin başka dönemlerini verir; "
+        "`likely_equivalent` kesin bilgi değil, olasılıktır.\n\n"
         "Bu hesabın bilgi amaçlı olduğunu, resmî GANO için OBS transkriptine "
         "bakılması gerektiğini söyle."
     )
@@ -279,7 +293,7 @@ def registration_week(candidates: str) -> str:
         "veri bulunmayan dersler.\n"
     )
     lines.append(
-        "Kontenjan sayıları anlık değildir (arşiv günde bir tazelenir) ve kayıt saatinde "
+        "Kontenjan sayıları anlık değildir (son görüntünün yaşı `archive_fill_rate` sonucundaki `last_snapshot_age_days` alanında; arşiv kayıt haftaları dışında taramayı durdurur) ve kayıt saatinde "
         "değişir. Hiçbir şeyin kaydedilmediğini, derse yazılmanın OBS'de elle yapılacağını "
         "ve son kararı OBS ekranının vereceğini hatırlat.\n"
     )

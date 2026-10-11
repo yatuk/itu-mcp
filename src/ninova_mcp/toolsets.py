@@ -65,6 +65,7 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "sync_all_courses",
             "get_updates",
             "get_upcoming_deadlines",
+            "search_content",
         ),
     ),
     "files": (
@@ -130,6 +131,8 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "build_degree_plan",
             "explain_course_eligibility",
             "plan_remaining_courses",
+            "obs_simulate_cumulative_gpa",
+            "export_table",
         ),
     ),
     "public": (

@@ -7,7 +7,7 @@
   <p><em>Ninova, OBS, Portal, kütüphane ve ders arşivini yapay zeka asistanına bağla. Sonra sadece sor.</em></p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v1.1.0-blue?style=flat-square" alt="Sürüm: v1.1.0" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/sürüm-v1.2.0-blue?style=flat-square" alt="Sürüm: v1.2.0" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="Lisans: MIT" /></a>
     <a href="https://github.com/yatuk/itu-mcp"><img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square" alt="Python 3.11+" /></a>
     <a href="https://yatuk.github.io/mcpradar/"><img src="https://yatuk.github.io/mcpradar/badges/itu-mcp.svg" alt="MCPRadar Security" /></a>
@@ -28,6 +28,19 @@
   <sub>Sesli ve tam çözünürlüklü hali: <a href="docs/demo.mp4">docs/demo.mp4</a></sub>
 
 </div>
+
+---
+
+## In English
+
+**İTÜ MCP** is an unofficial, open source [Model Context Protocol](https://modelcontextprotocol.io) server for students of Istanbul Technical University (İTÜ). It runs on your own computer and lets an AI assistant such as Claude, ChatGPT, Cursor or Codex read İTÜ's systems for you: the Ninova LMS (courses, assignments, files, announcements), OBS (grades, schedule, registration status, transcript, graduation progress), the student Portal, the library catalog and a public archive of past course offerings.
+
+- Ask in plain language: "what is due this week", "what will my GPA be if I get BB in everything", "which sections of MAT 210E still have seats".
+- Read-only by default. The two actions that change something (uploading an assignment, saving a registration draft) ask you for confirmation first.
+- Your İTÜ password stays on your machine and is sent only to İTÜ's own login page.
+- Install with `pipx install itu-mcp`, or add it to Claude Code as a plugin: `claude plugin marketplace add yatuk/itu-mcp`.
+
+The rest of this page is in Turkish. Setup: [3 adımda kur](#3-adımda-kur). Full tool list: [docs/advanced.md](docs/advanced.md). Security model: [docs/security.md](docs/security.md). This project is not affiliated with İTÜ.
 
 ---
 
@@ -60,23 +73,37 @@ Python 3.11 veya üstü gerekir. Yüklü değilse [python.org](https://www.pytho
 **1. Programı kur**
 
 ```bash
-pipx install itu-mcp
+pipx install "itu-mcp[keyring]"
 ```
 
-`pipx` yoksa `pip install --user itu-mcp` da olur.
+`pipx` yoksa `pip install --user "itu-mcp[keyring]"` da olur.
 
-**2. Asistanına bağla**
+**2. Giriş bilgilerini kaydet ve asistanına bağla**
 
-Claude Code kullanıyorsan tek komut yeter. Kendi İTÜ e-postanı ve şifreni yaz:
+```bash
+itu-mcp setup
+```
+
+```bash
+itu-mcp connect
+```
+
+`itu-mcp setup` İTÜ e-postanı ve şifreni sorar. Şifre yazarken ekranda görünmez ve hiçbir dosyaya yazılmaz, işletim sisteminin anahtar zincirine kaydedilir (Windows Kimlik Bilgileri Yöneticisi, macOS Anahtar Zinciri, Linux'ta GNOME Keyring ya da KWallet).
+
+`itu-mcp connect` sunucuyu Claude Desktop, Claude Code ve Cursor ayarlarına şifresiz olarak ekler. Diğer ayarlarına dokunmaz, dosyanın yedeğini alır. Ne yapacağını önce görmek istersen `itu-mcp connect --dry-run` yaz. Tek bir asistan için: `itu-mcp connect claude-desktop` (ya da `claude-code`, `cursor`).
+
+<details>
+<summary><strong>Anahtar zinciri istemiyorum ya da Codex kullanıyorum</strong></summary>
+
+<br />
+
+Şifreyi asistanın ayarına elle de yazabilirsin.
+
+**Claude Code**
 
 ```bash
 claude mcp add itu itu-mcp -e NINOVA_USERNAME=ad.soyad@itu.edu.tr -e NINOVA_PASSWORD=sifren
 ```
-
-<details>
-<summary><strong>Codex, Claude Desktop veya Cursor kullanıyorum</strong></summary>
-
-<br />
 
 **Codex CLI**
 
@@ -103,21 +130,22 @@ Bir liste geldiyse kurulum tamam.
 
 <br />
 
-Önce programın kendisini dene:
+Önce şunu çalıştır:
 
 ```bash
-itu-mcp --version
-itu-mcp --check-auth
+itu-mcp doctor
 ```
 
-- `--check-auth` hata veriyorsa kullanıcı adını tam e-posta olarak yazdığından emin ol (`ad.soyad@itu.edu.tr`, yalnızca `ad.soyad` değil).
+Her satır OK, UYARI ya da HATA ile başlar ve OK olmayan satırın altında çözümü yazar. Girişi de denemesi için `itu-mcp doctor --online` yaz.
+
+- Giriş hata veriyorsa kullanıcı adını tam e-posta olarak yazdığından emin ol (`ad.soyad@itu.edu.tr`, yalnızca `ad.soyad` değil).
 - Komut bulunamıyorsa terminali kapatıp yeniden aç. `pipx` kurulumdan sonra yeni bir terminal ister.
 - Asistan aracı görmüyorsa asistanı tamamen kapatıp açmayı dene.
 - Hâlâ olmuyorsa [bir sorun kaydı aç](https://github.com/yatuk/itu-mcp/issues), ekran çıktısını ekle. Şifreni yazma.
 
 </details>
 
-> **Şifre vermek istemiyor musun?** Ders programı, final tarihleri, not dağılımları, ders arşivi, mekik saatleri ve kütüphane kataloğu gibi herkese açık bilgiler şifresiz de çalışır. İkinci adımdaki `-e` kısımlarını silmen yeterli.
+> **Şifre vermek istemiyor musun?** Ders programı, final tarihleri, not dağılımları, ders arşivi, mekik saatleri ve kütüphane kataloğu gibi herkese açık bilgiler şifresiz de çalışır. `itu-mcp setup` adımını atlayıp yalnızca `itu-mcp connect` çalıştırman yeterli.
 
 ---
 
@@ -238,11 +266,14 @@ Ayazağa'dan sonraki mekik 13:30.
 > Bu dönem hepsinden BB alırsam
   ortalamam kaç olur?
 
-● itu · obs_calculate_gpa
+● itu · obs_simulate_cumulative_gpa
 
-Şu anki GANO:      2.84
+Şu anki GANO:      2.08
 Dönem tahmini:     3.00
-Dönem sonu GANO:   2.89
+Dönem sonu GANO:   2.74
+
+Tekrar aldığın 2 ders eski notun
+yerine sayıldı, 1 ders yeni eklendi.
 
 Bu bir tahmin, resmi ortalama
 OBS'de açıklanır.
@@ -391,8 +422,8 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
     <td valign="top">
       <code>auth_status</code> · <code>list_courses</code><br/>
       <code>get_course_*</code> · <code>sync_all_courses</code><br/>
-      <code>get_upcoming_deadlines</code><br/>
-      <code>read_resource_text</code> · <code>submit_assignment</code>
+      <code>get_upcoming_deadlines</code> · <code>search_content</code><br/>
+      <code>export_table</code> · <code>read_resource_text</code> · <code>submit_assignment</code>
     </td>
     <td valign="top">
       <code>obs_auth_status</code> · <code>obs_get_profile</code><br/>
@@ -414,7 +445,7 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>export_course_schedule_ics</code> · <code>export_exam_schedule_ics</code>
     </td>
     <td valign="top">
-      <code>obs_calculate_gpa</code> · <code>calculate_target_gpa</code><br/>
+      <code>obs_calculate_gpa</code> · <code>obs_simulate_cumulative_gpa</code> · <code>calculate_target_gpa</code><br/>
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>library_*</code>
@@ -454,6 +485,7 @@ NINOVA_EXTRA_READ_DIRS=...          # asistanın okuyabileceği ek klasörler (t
 NINOVA_EXTRA_DOWNLOAD_DIRS=...      # indirmelerin yazılabileceği ek klasörler (tam yol)
 NINOVA_MAX_DOWNLOAD_MB=200          # tek indirme için boyut sınırı
 NINOVA_TOOLSETS=ninova,obs,archive  # yalnızca bu araç gruplarını aç
+NINOVA_TRACKING_MAX_AGE_SECONDS=43200  # teslim kaydı bu süreden eskiyse yeniden oku (varsayılan 12 saat)
 NINOVA_MAIL_USERNAME=...            # mail için ayrı kullanıcı adı
 NINOVA_MAIL_PASSWORD=...            # mail için ayrı şifre
 ```
@@ -484,6 +516,20 @@ Bilmen gereken sınırlar:
 - Uzak HTTP sunucusu (`itu-mcp-remote`) `127.0.0.1` dışında bir adrese bağlanıyorsa (Docker imajı dahil) `NINOVA_REMOTE_API_KEY` ve `NINOVA_ALLOWED_HOSTS` ya da `NINOVA_PUBLIC_BASE_URL` verilmeden çalışmaz, eksik değişkeni yazıp kapanır. Yerelde anahtar vermezsen her açılışta rastgele bir anahtar üretir ve bir kez ekrana yazar.
 
 Ayrıntılar: [docs/security.md](docs/security.md) ve [docs/advanced.md](docs/advanced.md).
+
+---
+
+## Gizlilik (Privacy Policy)
+
+İTÜ MCP senin bilgisayarında çalışır. Projenin bir sunucusu, hesabı ya da veri tabanı yoktur.
+
+- **Toplanan veri:** yok. Proje geliştiricisine hiçbir veri gönderilmez, kullanım ölçümü (telemetri) yapılmaz.
+- **Kullanım ve saklama:** İTÜ kullanıcı adın ve şifren yalnızca senin verdiğin ortam değişkenlerinden okunur ve yalnızca İTÜ'nün giriş sayfasına gönderilir. Oturum çerezleri, takip kayıtları ve indirdiğin dosyalar bilgisayarında `~/.ninova_state` klasöründe tutulur.
+- **Üçüncü taraflarla paylaşım:** araçların okuduğu veri, kullandığın yapay zeka asistanına (Claude, ChatGPT ve benzeri) cevap olarak iletilir; o verinin nasıl işlendiği asistan sağlayıcısının politikasına bağlıdır. Sunucu yalnızca İTÜ'nün kendi sitelerine ve herkese açık iki veri kaynağına istek atar: ders arşivi (`itu-ders.com`) ve ön şart karşılaştırması için bir topluluk veri seti (`raw.githubusercontent.com/itu-helper`). Bu ikisine hesabınla ilgili hiçbir bilgi gönderilmez, yalnızca ders kodları sorgulanır.
+- **Saklama süresi:** yerel dosyalar sen silene kadar durur. `~/.ninova_state` klasörünü silmek her şeyi kaldırır.
+- **İletişim:** [GitHub üzerinden sorun kaydı](https://github.com/yatuk/itu-mcp/issues) ya da güvenlik konuları için [özel bildirim](https://github.com/yatuk/itu-mcp/security/advisories/new).
+
+In short (English): the server runs locally, collects nothing, sends your İTÜ credentials only to İTÜ's login page, stores session cookies and downloads only under `~/.ninova_state` on your machine, and has no telemetry. Tool results are passed to the AI assistant you use.
 
 ---
 

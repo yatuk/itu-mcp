@@ -63,6 +63,7 @@ export NINOVA_STATE_DIR="/absolute/path/to/.ninova_state"
 export NINOVA_DISABLE_PLAYWRIGHT_FALLBACK="1"
 export NINOVA_ENV_FILE="/absolute/path/to/.env"
 export NINOVA_COURSE_CACHE_TTL_SECONDS="60"          # course list cache; 0 disables
+export NINOVA_TRACKING_MAX_AGE_SECONDS="43200"       # tracking snapshot is stale after this (12h)
 export NINOVA_REQUEST_DELAY_MS="120"                 # min gap between HTTP calls
 export NINOVA_COMPACT_DEFAULT="0"                    # 1 = shrink heavy tool payloads by default
 export NINOVA_SESSION_PERSIST="1"                    # cache cookies under NINOVA_STATE_DIR
@@ -84,7 +85,7 @@ export NINOVA_MAIL_HOST="imap.itu.edu.tr"            # the only accepted host
 export NINOVA_MAIL_PORT="993"                        # the only accepted port
 export NINOVA_MAIL_TIMEOUT_SECONDS="15"
 export ITU_ARCHIVE_BASE_URL="https://itu-ders.com/data"  # course archive
-export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates daily
+export ITU_ARCHIVE_CACHE_TTL_SECONDS="21600"         # archive regenerates about daily while its scraper runs
 export PREREQ_CROSSCHECK_BASE_URL="<community pipe-delimited course feed URL>"
 export PREREQ_CROSSCHECK_CACHE_TTL_SECONDS="21600"    # community prerequisite cross-check
 ```
@@ -343,8 +344,13 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 - `get_dashboard_announcements` — announcements from `/Kampus?1/Duyurular`.
 - `get_dashboard_assignments` — assignments from `/Kampus?1/Odevler` (`include_details` default true).
 - `sync_all_courses` — snapshot every visible course and detect changes (`include_assignment_details` default false for speed).
-- `get_updates` — recently detected changes from the local tracking state.
+- `get_updates`: recently detected changes from the local tracking state. `summary=true`
+  returns `change_summary` (a headline and short Turkish lines grouped by course) instead of
+  the raw records; `since` takes an ISO date. `sync_all_courses` returns the same summary
+  for the changes it just found.
 - `get_upcoming_deadlines` — upcoming assignment deadlines from the tracking state.
+- `search_content(query, course, kinds, limit, offset)`: search the local index of content
+  that was already fetched (see "Local search index" below). Makes no request.
 - `read_page`: read and structure any Ninova HTML page. Like every tool that takes a URL
   or path, it accepts the Ninova host only.
 - `crawl_course` — inventory internal pages and downloadable resources inside a course.
@@ -358,6 +364,19 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 
 Many list/overview tools accept `compact=true` to shrink long fields (or set `NINOVA_COMPACT_DEFAULT=1`).
 
+### Reduced results and `include_raw`
+
+Tools that pass OBS data on return the answer in reduced form by default:
+
+- the envelope of a successful OBS answer (`statusCode`, `resultCode`, `resultMessage`) is left out; a failed answer keeps it, and so does a result code that says more than "success";
+- a label OBS sends in Turkish and English is given once, in Turkish (course titles keep both when they differ);
+- a term or course the result already states is not repeated on every row;
+- a summary is returned without the payload it was built from.
+
+A reduced result carries a short `raw_available` field. Passing `include_raw=true` returns what was left out: `graduation` in `obs_get_graduation_remaining`, `kayit_durumu` and `ders_kayit_durumu` in `obs_get_registration_status`, `schedule` in `obs_get_schedule`, the completed-course history and rule tree in `explain_course_eligibility`, `links` and `page.headings` in `get_dashboard`, and the unreduced rows in the other `obs_*` record tools.
+
+`include_raw` and `compact` are independent. `include_raw` decides what a result holds; `compact` then shortens long texts and lists of whatever it holds.
+
 ### Assignment upload safety
 
 - `submit_assignment` without `confirm=true` only returns a preview (no network POST of the file).
@@ -369,6 +388,27 @@ Many list/overview tools accept `compact=true` to shrink long fields (or set `NI
   assignment's upload page. The preview and the result carry `form_url` and
   `file.sha256`. The file is read once, before the confirmation dialog, and those bytes
   are what is sent.
+
+### Local search index
+
+`search_content` answers "is X mentioned anywhere in this term's material" from a local
+SQLite file, `<NINOVA_STATE_DIR>/search.sqlite3`. It never contacts Ninova and needs no login.
+
+- What fills it: `sync_all_courses` indexes announcements, assignments, message board topics
+  and file names from the snapshots it stores; `read_resource_text` and `download_resource`
+  index the text of the file they handled (one entry per PDF page). A file that was never
+  read or downloaded is found by its name only. No extra request is made for the index.
+- Matching folds Turkish letters and capitals (`sinav` finds `SINAV`, `sınavda`); words of
+  four or more letters match as prefixes. Every word must match; when nothing does, the
+  search is repeated for any word and the result says `matched: "any"`. `engine` is `fts5`,
+  or `scan` on an SQLite build without FTS5.
+- Privacy: the index holds course content (announcement and assignment text, file text) in
+  plain text on this computer, with the same owner-only protection as the rest of the state
+  directory. Nothing in it is sent anywhere. It cannot be read through
+  `read_resource_text(path=...)`. Documents of a course that leaves the course list are
+  removed at the next sync, and the stored text is capped at about 200 MB (oldest first).
+- To clear it, stop the server and delete `search.sqlite3`; the next sync rebuilds it. There
+  is no tool for this (`SearchIndex.clear()` in `search_index.py` does the same from code).
 
 ### Local files and URLs
 
@@ -466,7 +506,8 @@ the published tool set.
 - CLI: `itu-mcp --version`, `--check-auth`, `--list-tools`, or no args for the stdio server.
 - **OBS** tools are prefixed with `obs_`. They reuse the same İTÜ username/password (SSO),
   open `obs.itu.edu.tr/ogrenci/`, fetch a JWT from `/ogrenci/auth/jwt`, and call
-  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact TCKN/phone by default;
+  `/api/ogrenci/...` JSON endpoints. Profile/contact tools redact ID numbers, e-mail, phone, address and birth details by default
+  and list the hidden fields in `redacted_fields`;
   `include_sensitive=true` needs `NINOVA_ALLOW_SENSITIVE_OUTPUT=1`.
 
 ### OBS tools
@@ -509,15 +550,49 @@ the published tool set.
   time without assuming a timezone. Detail reads share the course-cache TTL
   (60 seconds by default).
 - `obs_get_cloud_quota`
+- `obs_simulate_cumulative_gpa(projected_grades, default_grade, extra_courses, semester)`: projects the cumulative GPA from the student's own record; a retake replaces the earlier grade; read-only estimate
 - `obs_calculate_gpa(projected_grades)` — projected values override existing grades
 - `calculate_target_gpa` — aggregate target-GPA estimate without reading OBS
 - `estimate_relative_grade(class_scores, my_score)` — likely letter grade under İTÜ's
   bağıl değerlendirme rules, by both official methods (T-score against an example
   class-level table, and mean ± standard-deviation multiples); pure local computation,
   no OBS call. The example table is exactly that — an example — so treat the result as
-  a planning estimate, not the official grade.
+  a planning estimate, not the official grade. Scores must be finite numbers from 0 to 100
+  (a bad value is rejected and named). No letter is estimated when fewer than 10 scores
+  are counted or when every score is equal: the result has `estimate_available: false`,
+  `no_estimate_reason` (`class_too_small` or `zero_std_dev`) and still carries the mean
+  and standard deviation. `my_score` is added to the list unless the same value is
+  already in it; `my_score_included` in the result says which case applied
 - `check_course_conflicts` — scans one or more department codes
 - `get_personal_exam_calendar` — authenticated student's official final calendar
+
+### Table export (CSV)
+
+`export_table(dataset, semester, save=false)` returns one of the student's own tables as
+CSV text made for a Turkish Excel: UTF-8 with a byte order mark, `;` as the delimiter,
+decimal comma, `
+` line endings and Turkish headers. It reads through the same code
+as the matching tool and changes nothing at the university.
+
+| `dataset` | Columns | Source |
+| --- | --- | --- |
+| `term_grades` | Ders Kodu, Ders Adı, Kredi, Harf Notu | as `obs_calculate_gpa`; the term average is in `term_gpa` |
+| `all_grades` | Dönem, Ders Kodu, Ders Adı, Kredi, Harf Notu, Durum | the record of `obs_simulate_cumulative_gpa`; Durum is `Sayılıyor`, `Tekrar edildi`, `Ortalamaya girmez` or `Kredi bilinmiyor` |
+| `weekly_schedule` | Gün, Başlangıç, Bitiş, Ders Kodu, Ders Adı, CRN, Bina, Derslik | as `obs_get_schedule` |
+| `deadlines` | Ders Kodu, Ders, Ödev, Son Teslim (ISO), Son Teslim, Yüklendi | the stored tracking snapshot, every dated assignment; no sync is run |
+
+`semester` applies to `term_grades` and `weekly_schedule`; for the other two it is ignored
+and the result carries `semester_ignored`. `deadlines` reports `status`, `stale` and
+`snapshot_age_hours` like `get_upcoming_deadlines`; run `sync_all_courses` first when it is
+stale. `Yüklendi` is `Bilinmiyor` when the snapshot was taken without assignment details.
+
+The result has `columns`, `row_count`, `mime_type`, `suggested_filename` and the text in
+`csv`. Text over about 200 KB is cut at a row boundary (`truncated`, `total_row_count`).
+With `save=true` the complete file is written to `<state>/downloads/exports/` and `path`
+is returned instead of the text; an existing file is never replaced (`-2`, `-3`, ...).
+Titles come from university pages, so a cell starting with `=`, `+`, `-`, `@`, a tab or a
+carriage return is prefixed with `'` and cannot run as a formula. Because it can write a
+file, the tool is not served on the remote HTTP transport.
 
 ### Public OBS and campus tools (no credentials)
 
@@ -534,10 +609,32 @@ the published tool set.
     OBS updates it between calls. A CRN and query together select their
     intersection. Calls without the new options retain the full schedule.
 - `get_public_exam_schedule(department_code)` — official current final timetable
-- `get_academic_calendar(date_from, date_to, category, query)`
+- `get_academic_calendar(date_from, date_to, category, query)`: the whole current academic
+  year in Turkish and English (`description_tr`, `description`), with `terms` giving the
+  first and last day of classes per term. A query made only of exam words (`final`,
+  `sınav`, `bütünleme`) leaves out registration rows that contain the same word, such as
+  "Final Registration"; the result says so in `query_note`. With only one of `date_from`
+  and `date_to`, `coverage_warning` appears only when that date lies outside `coverage`
 - `list_degree_faculties` → `list_degree_programs` → `build_degree_plan`
-- `find_open_course_sections` — capacity minus enrolled, across up to 25 selected departments
-- `find_empty_classrooms` — coverage-limited estimate from selected schedules; does not include reservations
+- `find_open_course_sections(department_codes, program_type?, min_available_seats?, query?, program_code?)`:
+  sections with seats the student can take, across up to 25 selected departments. OBS
+  reserves part of a section's capacity for named programmes (`PROGRAM/quota/enrolled`
+  segments, "Diğer" is the general pool), so `available_seats` counts the general pool
+  only, or the programme's own remaining quota plus the general pool when `program_code`
+  (`CEN_LS` or `CEN`) is given. `total_free_seats` is capacity minus enrolled and
+  `reserved_free_seats` lists what is held for other programmes. Sections without a day
+  and time are listed last (`unscheduled: true`), "Ek Sınav" rows are left out, and an
+  empty result has `no_result_reason` (`query_matched_no_section`,
+  `matching_sections_full`, `free_seats_reserved_for_other_programs`, ...). `query`
+  ignores case, accents and spaces in the code (`mat210e` finds `MAT 210E`)
+- `find_empty_classrooms(department_codes, day, time, program_type?, building?)`:
+  coverage-limited estimate from selected schedules; does not include room reservations.
+  `day` takes Turkish or English names and abbreviations (`Salı`, `sali`, `Sal`,
+  `Tuesday`, `Tue`), `time` takes `10:00`, `9:45`, `10.00`, `0945` or `10`
+- Schedule rows: cells the OBS page leaves empty (`-`, `--`, `-/-`, `undeclared`) are
+  `null`. A section with no day and time has `unscheduled: true`, one without an announced
+  building or room `location_announced_later: true`. `reservation` is the page's text and
+  `reservations` its parsed segments; `section_kind` is `extra_exam` for "Ek Sınav" rows
 - Seat watch (local state, no login; see [tracking.md](tracking.md#seat-watch)). The server
   does not run in the background and sends no notifications: seats are read only when the
   check tool is called, by the user or by a scheduled task on the client
@@ -561,18 +658,27 @@ the published tool set.
   a disagreement is reported, never resolved silently in either direction, and a failed or
   missing lookup reports `available: false` without affecting the OBS-derived answer.
 - `search_itu_directory` — uses the official CSRF-protected directory form
-- `search_campus_locations` — official OBS building codes/names (not coordinates)
-- `get_shuttle_schedule` / `get_sports_facility_hours`
-- `get_itu_announcements` — İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation
+- `search_campus_locations`: official OBS building codes and names (not coordinates).
+  `locations` are buildings, `sub_locations` block or room codes inside a building (the
+  source lists `DZB` only that way), `pseudo_entries` rows that are not places (online,
+  to be announced). The source covers teaching buildings and sports areas only
+- `get_shuttle_schedule` / `get_sports_facility_hours`. Sports hours are `HH:MM` with
+  `closed: true` for a period the facility does not open, and a closure written into the
+  facility name on the page ("(Pazartesi Kapalı)") is returned as `closed_days`
+- `get_itu_announcements`: İTÜ, ÖDEK, İKM, SKS and Erasmus aggregation, newest first across
+  sources by `published_at_iso` (undated last). `empty_sources` names sources that answered
+  with no items, `source_errors` those that failed. When `limit` is smaller than what the
+  sources offer, each source first gets an equal share
 - `export_course_schedule_ics(crns, department_codes, program_type?, term_start?, term_end?)`:
   the weekly meetings of the given CRNs as iCalendar (RFC 5545) text, read from the public
   course schedule. Each meeting is a weekly recurring event between the first and last day
-  of classes. Pass those as `term_start` and `term_end` (`YYYY-MM-DD`). When one is omitted
-  the tool looks for "Beginning of ... Term" / "End of ... Term" on the academic calendar
-  page for the same academic year and level, but that page covers only the displayed month,
-  so most calls without dates return `status: "term_dates_required"`, `ics: null` and the
-  names of the missing parameters. No date is ever guessed. A meeting whose day or time is
-  an OBS placeholder (`-`, `--`, `-/-`) is listed in `skipped` with a reason and gets no
+  of classes. `term_start` and `term_end` (`YYYY-MM-DD`) are optional: when one is omitted
+  the tool takes it from the `terms` list of the academic calendar, which is read for the
+  whole academic year and states the first and last day of classes for the same academic
+  year and level. Only when the calendar does not state a date (a term the site no longer
+  or does not yet list) does the call return `status: "term_dates_required"`, `ics: null`
+  and the names of the missing parameters. No date is ever guessed. A meeting without a day
+  or time (an OBS placeholder such as `-`, `--`, `-/-`) is listed in `skipped` with a reason and gets no
   event; CRNs not found in the scanned departments are in `missing_crns`. Holidays and
   make-up classes are not removed from the recurrence
 - `export_exam_schedule_ics(course_codes)`: the current public final exam schedule, filtered
@@ -644,7 +750,7 @@ from 2016-2017 onward. OBS publishes only the active term, so these answer what 
 Every result carries a `coverage` field. An empty result means one of three different things
 — the term was never captured (`term_missing`), the branch is absent from that term's dump
 (`branch_absent_from_term`), or the filters matched nothing (`covered`) — and the tool always
-says which. Quota data refreshes daily and is not live; check OBS before registering.
+says which. Quota data is not live: `archive_fill_rate` reports the age of the last snapshot and whether the archive is scanning (it pauses outside registration and add/drop weeks); check OBS before registering.
 
 The dataset tools above use the same field with their own values, so "the archive never
 recorded this file" stays distinct from "nothing matched": `branch_grades_missing`,
@@ -702,11 +808,14 @@ Static reference tables (no network, no per-student state):
 Public data, fetched through the same clients the tools use (host allowlists, safe
 redirects, throttle and TTL caches all apply):
 
-- `itu://calendar/academic`: the academic calendar page as `get_academic_calendar` returns
-  it. It covers the displayed month only; check `coverage`
+- `itu://calendar/academic`: the academic calendar as `get_academic_calendar` returns it
+  with no argument: the whole current academic year is read, `terms` gives the first and
+  last day of classes, and the events listed are the recent and upcoming ones
+  (`default_window`); check `coverage`
 - `itu://archive/terms`: the terms the course archive holds, the current term slug and the
   known gaps
-- `itu://campus/buildings`: official OBS building codes and names
+- `itu://campus/buildings`: official OBS building codes and names (`locations`), with
+  in-building codes under `sub_locations` and non-places under `pseudo_entries`
 
 Resource templates:
 
@@ -717,7 +826,9 @@ Resource templates:
 - `itu://degree-plan/{program_code}`: the latest official undergraduate degree plan of an
   OBS program code such as `BLGE_LS`, with older versions under `available_plans`. The
   public form is keyed by faculty, so the faculty is found by reading each faculty's
-  program list (cached for an hour); the first read of a session is therefore slower
+  program list (cached for an hour); the first read of a session is therefore slower.
+  Courses are listed once, under `plan.semesters[].courses`; `ects` is a number, or `null`
+  with `ects_min`/`ects_max`/`ects_raw` when the plan gives a range
 
 Write the course code without a space (`itu://archive/catalog/BLG223E`); a percent-encoded
 space and lower case are accepted too. Every parameter is percent-decoded and validated

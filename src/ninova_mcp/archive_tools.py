@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .archive import GRADE_DISTRIBUTION_DEFAULT_TERMS, GRADE_DISTRIBUTION_MAX_TERMS
 from .archive_client import (
     ItuArchiveClient,
     ItuArchiveError,
@@ -51,34 +52,71 @@ def _canonical_course(course_code: str) -> tuple[str, str]:
     return branch, f"{branch} {number}"
 
 
+# What every archive tool says about its term argument.
+TERM_ARGUMENT_HELP = (
+    "Term: archive slug '2025-2026-guz', OBS term id 202610 (string or integer), or label "
+    "'2025-2026 Güz Dönemi' / '2025-2026 Fall'."
+)
+
+
+def term_given(term: Any) -> bool:
+    """An optional term argument that was actually supplied."""
+    return term is not None and str(term).strip() != ""
+
+
+def parse_archive_term(term: Any) -> str:
+    """Any accepted spelling of a term as a path-safe slug, or ``ItuArchiveError``."""
+    from .archive import parse_term
+
+    try:
+        return term_path_segment(parse_term(term))
+    except ValueError as exc:
+        raise ItuArchiveError(str(exc)) from exc
+
+
+def known_archive_term(archive: ItuArchiveClient, term: Any) -> tuple[str, dict[str, Any]]:
+    """Resolve a term argument against the archive index.
+
+    The one entry point for every archive tool that takes a term, so the slug,
+    the OBS term id and the label are accepted everywhere alike and an unknown
+    term is refused with the same message.
+    """
+    from .archive import resolve_term
+
+    try:
+        slug, entry = resolve_term(term, archive.get_index().get("terms") or [])
+    except ValueError as exc:
+        raise ItuArchiveError(str(exc)) from exc
+    return term_path_segment(slug), entry
+
+
 class ArchiveDatasetToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies ``archive``."""
 
     archive: ItuArchiveClient
 
-    def _archive_known_term(self, term: str) -> tuple[str, dict[str, Any]]:
-        """Validate a term slug and resolve it against the archive index."""
-        slug = term_path_segment(term)
-        index_terms = {
-            str(entry.get("slug")): entry
-            for entry in (self.archive.get_index().get("terms") or [])
-        }
-        if slug not in index_terms:
-            raise ItuArchiveError(
-                f"Dönem arşivde yok: {term!r}. archive_list_terms ile geçerli dönemleri görün."
-            )
-        return slug, index_terms[slug]
+    def _archive_known_term(self, term: str | int) -> tuple[str, dict[str, Any]]:
+        """Validate a term argument and resolve it against the archive index."""
+        return known_archive_term(self.archive, term)
 
     def archive_grade_distribution(
         self,
         course_code: str,
-        term: str | None = None,
+        term: str | int | None = None,
+        include_percentages: bool = False,
+        limit_terms: int = GRADE_DISTRIBUTION_DEFAULT_TERMS,
     ) -> dict[str, Any]:
-        """Letter grade counts and percentages for a course, term by term."""
+        """Letter grade counts for a course, most recent terms first.
+
+        Percentages are added only on request, and only the most recent
+        ``limit_terms`` terms are returned; ``total_term_count`` and
+        ``available_terms`` say what else there is.
+        """
         from .archive import grade_distribution
 
         branch, canonical = _canonical_course(course_code)
-        slug = term_path_segment(term) if term else None
+        slug = parse_archive_term(term) if term_given(term) else None
+        limit_terms = _clamp_limit(limit_terms, GRADE_DISTRIBUTION_MAX_TERMS)
         records = self.archive.get_grades(branch)
         if records is None:
             return {
@@ -86,6 +124,8 @@ class ArchiveDatasetToolsMixin:
                 "term_filter": slug,
                 "coverage": "branch_grades_missing",
                 "term_count": 0,
+                "total_term_count": 0,
+                "truncated": False,
                 "terms": [],
                 "coverage_note": (
                     f"{branch} branşı için arşivde not dağılımı dosyası hiç yok. Bu, dersin "
@@ -94,22 +134,17 @@ class ArchiveDatasetToolsMixin:
                 "untrusted_external_content": True,
             }
 
-        result = grade_distribution(records, canonical, term=slug)
-        result["note"] = (
-            "Yüzdeler, sayılan notların toplamına (counted_total) göre hesaplandı. Bir "
-            "dönemde görünmeyen not etiketi o dönem yayınlanmamıştır; sıfır sayılmamalı."
+        result = grade_distribution(
+            records, canonical, term=slug,
+            include_percentages=bool(include_percentages), limit_terms=limit_terms,
         )
+        # What the fields mean is in the tool description. Only notes that
+        # depend on this course's data are attached.
         if result["mismatch_term_count"]:
             result["total_mismatch_note"] = (
                 f"{result['mismatch_term_count']} dönemde yayınlanan toplam (total) ile not "
                 "sayılarının toplamı (counted_total) birbirini tutmuyor. İkisi de kaynakta "
                 "olduğu gibi verildi, düzeltilmedi."
-            )
-        if result["related_codes"]:
-            result["related_codes_note"] = (
-                "Aynı numarayı taşıyan diğer kodlar arşivde ayrı kayıtlı ve bu sonuca "
-                "katılmadı. same_counts_as alanı dolu olan dönemlerde arşiv birebir aynı "
-                "dağılımı o kodun altında da tutuyor; bu sayıları toplamayın."
             )
         first_term = result["branch_terms"][0] if result["branch_terms"] else None
         if result["coverage"] == "course_absent_from_grades":
@@ -196,14 +231,9 @@ class ArchiveDatasetToolsMixin:
             "unlock_count": len(unlocks),
             "unlocks": unlocks,
             "related_codes": related,
+            # What a flat list cannot say (Ve/Veya groups, minimum grades,
+            # the rest of the chain) is in the tool description.
             "rule_tool": PREREQUISITE_RULE_TOOL,
-            "caveat": (
-                "Bu liste yalnızca bir sonraki düzeydir: dersi ön şartlarında doğrudan anan "
-                "dersler. Zincirin devamı dahil değil. Ön şart kuralları Ve/Veya "
-                "seçenekleri ve en düşük harf notu içerir; bu liste onları göstermez, yani "
-                f"{canonical} dersini geçmek listedeki dersleri tek başına alınabilir yapmaz. "
-                f"Gerçek kural için ilgili ders adına {PREREQUISITE_RULE_TOOL} aracını çağırın."
-            ),
             "untrusted_external_content": True,
         }
         if not unlocks:
@@ -221,7 +251,7 @@ class ArchiveDatasetToolsMixin:
 
     def archive_search_sections(
         self,
-        term: str | None = None,
+        term: str | int | None = None,
         course_code: str | None = None,
         course_name: str | None = None,
         instructor: str | None = None,
@@ -244,10 +274,10 @@ class ArchiveDatasetToolsMixin:
             )
         limit = _clamp_limit(limit, SEARCH_SECTIONS_MAX_LIMIT)
 
-        resolved = term or self.archive.get_index().get("currentSlug")
+        resolved = term if term_given(term) else self.archive.get_index().get("currentSlug")
         if not resolved:
             raise ItuArchiveError("term çözümlenemedi; term parametresi verin.")
-        slug, term_entry = self._archive_known_term(str(resolved))
+        slug, term_entry = self._archive_known_term(resolved)
 
         rows = None if term_entry.get("missing") else self.archive.get_term_search(slug)
         try:
@@ -273,7 +303,7 @@ class ArchiveDatasetToolsMixin:
             "term": slug,
             "term_label": term_entry.get("label"),
             "term_source": term_entry.get("source"),
-            "term_defaulted": term is None,
+            "term_defaulted": not term_given(term),
             "filters": {key: value for key, value in filters.items() if value},
             "coverage": coverage,
             **found,
@@ -298,7 +328,7 @@ class ArchiveDatasetToolsMixin:
 
     def archive_exam_schedule(
         self,
-        term: str,
+        term: str | int,
         branch: str | None = None,
         course_code: str | None = None,
         limit: int = 100,
@@ -358,11 +388,6 @@ class ArchiveDatasetToolsMixin:
         from .archive import status_summary
 
         result = status_summary(self.archive.get_status())
-        result["note"] = (
-            "Yalnızca bilgi amaçlıdır. Arşiv, kayıt ve ekle-bırak haftaları dışında "
-            "taramayı bilerek durdurur; data_age_days değerinin büyük olması bir hata ya "
-            "da bozukluk göstergesi değildir."
-        )
         result["untrusted_external_content"] = True
         return result
 
@@ -373,15 +398,21 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
         "title": "Archive: Grade Distribution",
         "description": (
             "Letter grade counts for a course across the terms the archive has (from "
-            "2023-2024 on): per term the counts, published total, percentages, and the OBS "
-            "source URL. Only the exact code is used; a Turkish/English sibling such as "
-            "'BLG 212' vs 'BLG 212E' is listed under 'related_codes', never merged, and "
-            "'same_counts_as' marks terms where the archive stores identical numbers under "
-            "both codes (do not add them up). Grade labels are passed through as published, "
-            "including the '+' grades; a label absent from a term was not published and is "
-            "not zero. 'total_mismatch' flags terms where the published total differs from "
-            "the sum of the counts; both numbers are kept. Check 'coverage': "
-            "'branch_grades_missing' means no grades file was ever recorded for the branch."
+            "2023-2024 on): per term the counts ('grades'), the published total, and the OBS "
+            "source URL. Returns the most recent 6 terms by default: 'total_term_count' says "
+            "how many exist, 'available_terms' names them, 'truncated' says some were left "
+            "out; raise 'limit_terms' or pass 'term' for the rest. Percentages are not "
+            "returned unless 'include_percentages' is true; they are shares of the counted "
+            "grades ('counted_total'), so they add up to 100 even when the published total "
+            "disagrees. Only the exact code is used; a Turkish/English sibling such as "
+            "'BLG 212' vs 'BLG 212E' is listed under 'related_codes', kept apart and never "
+            "merged into this result, and 'same_counts_as' marks terms where the archive "
+            "stores identical numbers under both codes (do not add them up). Grade labels are "
+            "passed through as published, including the '+' grades; a label absent from a "
+            "term was not published and is not zero. 'total_mismatch' flags terms where the "
+            "published total differs from the sum of the counts; both numbers are kept. Check "
+            "'coverage': 'branch_grades_missing' means no grades file was ever recorded for "
+            "the branch."
         ),
         "inputSchema": {
             "type": "object",
@@ -391,8 +422,23 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
                     "description": "Exact course code, e.g. 'BLG 223E'.",
                 },
                 "term": {
-                    "type": "string",
-                    "description": "Only this term slug, e.g. '2023-2024-guz' (default: all).",
+                    "type": ["string", "integer"],
+                    "description": "Only this term (default: the most recent ones). " + TERM_ARGUMENT_HELP,
+                },
+                "include_percentages": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Also return each grade's share of the counted grades, per term. "
+                        "Off by default: the counts are enough to work them out."
+                    ),
+                },
+                "limit_terms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": GRADE_DISTRIBUTION_MAX_TERMS,
+                    "default": GRADE_DISTRIBUTION_DEFAULT_TERMS,
+                    "description": "How many of the most recent terms to return.",
                 },
             },
             "required": ["course_code"],
@@ -427,12 +473,13 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
         "title": "Archive: Course Unlocks",
         "description": (
             "Which courses list the given course as a prerequisite, from the archive's "
-            "reverse prerequisite index. This is the direct next level only, not the whole "
-            "chain. Prerequisite rules have AND/OR alternatives and minimum grades that "
-            "this flat list does not express, so passing the course does not by itself "
-            "make the listed courses takeable: call explain_course_eligibility on a listed "
-            "course for the real rule. 'coverage' is 'not_listed_as_prerequisite' when no "
-            "course names it."
+            "reverse prerequisite index. This is the direct next level only ('depth' is "
+            "'direct'), not the whole chain. Prerequisite rules have AND/OR (Ve/Veya) "
+            "alternatives and minimum letter grades that this flat list does not express, so "
+            "passing the course does not by itself make the listed courses takeable: call "
+            "the tool named in 'rule_tool' (explain_course_eligibility) on a listed course "
+            "for the real rule. 'coverage' is 'not_listed_as_prerequisite' when no course "
+            "names it."
         ),
         "inputSchema": {
             "type": "object",
@@ -455,14 +502,20 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
             "Matching is case-insensitive and Turkish-aware ('sahin' finds 'Şahin'). "
             "Defaults to the archive's current term. Use this when the branch is unknown "
             "or the question spans branches; archive_term_sections reads a single branch "
-            "in more detail. Returns 'match_count' and 'truncated' alongside 'coverage'."
+            "in more detail. Returns 'match_count' and 'truncated' alongside 'coverage'. "
+            "'enrolment_not_captured' means no section of the whole term has an enrolled "
+            "student in the dump (taken before registration opened): 'enrolled' and "
+            "'fill_ratio' are then null, unknown and not zero. 'capacity_not_captured' means "
+            "no section of the term has a capacity either: 'capacity' is null too. "
+            "'data_quality' names what is missing in one line. A single 0 in a term that was "
+            "captured is a real 0."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "term": {
-                    "type": "string",
-                    "description": "Term slug, e.g. '2025-2026-guz' (default: archive's current term).",
+                    "type": ["string", "integer"],
+                    "description": "Default: archive's current term. " + TERM_ARGUMENT_HELP,
                 },
                 "course_code": {
                     "type": "string",
@@ -472,7 +525,10 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
                 "instructor": {"type": "string", "description": "Instructor name fragment."},
                 "day": {
                     "type": "string",
-                    "description": "Day the section meets, e.g. 'Salı' or 'Tuesday'.",
+                    "description": (
+                        "Day the section meets, Turkish or English, full or abbreviated: "
+                        "'Salı', 'Sal', 'Tuesday', 'Tue'."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
@@ -497,7 +553,7 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "term": {"type": "string", "description": "Term slug, e.g. '2025-2026-yaz'."},
+                "term": {"type": ["string", "integer"], "description": TERM_ARGUMENT_HELP},
                 "branch": {"type": "string", "description": "Branch code, e.g. 'BLG'."},
                 "course_code": {
                     "type": "string",
@@ -520,8 +576,9 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
         "description": (
             "When the archive scraper last ran and last succeeded, its section count, "
             "whether the last run was partial, which branches failed, and the data age in "
-            "days. Informational only: the archive deliberately stops scraping outside "
-            "registration and add/drop weeks, so an old date is expected and is not an error."
+            "days ('data_age_days'). Informational only: the archive deliberately stops "
+            "scraping outside registration and add/drop weeks, so an old date or a large "
+            "data_age_days is expected and is not an error or a fault."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

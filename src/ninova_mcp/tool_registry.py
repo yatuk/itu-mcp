@@ -44,6 +44,8 @@ REMOTE_EXCLUDED_TOOLS = {
     # Changes the student's saved registration draft. Like submit_assignment
     # it stays on the local stdio transport, whatever the opt-in flag says.
     "obs_save_registration_draft",
+    # With save=true it writes a file on the host, like download_resource.
+    "export_table",
 }
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS
@@ -64,6 +66,8 @@ STATEFUL_TOOL_NAMES = {
     # so they are not advertised as free, repeatable reads.
     "obs_validate_registration_plan",
     "obs_get_elective_group",
+    # With save=true it creates a new local file on every call.
+    "export_table",
 }
 STATEFUL_TOOL_NAMES |= SEAT_WATCH_STATEFUL_TOOL_NAMES
 DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft"}
