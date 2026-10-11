@@ -131,6 +131,7 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "explain_course_eligibility",
             "plan_remaining_courses",
             "obs_simulate_cumulative_gpa",
+            "export_table",
         ),
     ),
     "public": (
