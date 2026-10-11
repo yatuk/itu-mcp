@@ -254,7 +254,11 @@ PLANNING_TOOLS: list[dict[str, Any]] = [
             "is reported, never silently resolved either way. 'archive_seasonality', when "
             "the archive has the course, flags courses that only open in one term of the "
             "year (e.g. eligible now, but only ever offered in Güz) — check it even when "
-            "eligibility alone looks fine."
+            "eligibility alone looks fine. With use_obs_history=true, prerequisites the student "
+            "is taking this term are listed in in_progress_prerequisites and "
+            "eligible_if_in_progress_passed says what the answer becomes once they are passed; "
+            "report that instead of a bare 'not eligible'. In missing_courses the alternatives of "
+            "one OR group are a single entry ('A VEYA B'): one of them is enough."
         ),
         "inputSchema": {
             "type": "object",

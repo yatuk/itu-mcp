@@ -307,34 +307,9 @@ class PlanningToolsMixin:
             os.getenv("NINOVA_USERNAME") and os.getenv("NINOVA_PASSWORD")
         )
 
-    def _courses_in_progress(self) -> tuple[list[dict[str, Any]], str | None]:
-        """Courses the student is taking now: ``(courses, note)``.
-
-        Registered courses of the latest term that have no letter grade yet,
-        in the shape ``gpa_simulation`` reads them (key, code, crns, name,
-        names, credit). An unreadable list gives no courses and a note, never
-        an exception.
-        """
-        from .gpa_simulation import _read_registered
-
-        try:
-            rows = self._registered_course_rows()
-        except Exception as exc:  # noqa: BLE001 - an optional lookup must never fail the tool
-            return [], f"Bu dönemin kayıtlı dersleri okunamadı ({type(exc).__name__}); devam eden dersler işaretlenmedi."
-        return _read_registered([row for row in rows if not str(row.get("harfNotu") or "").strip()]), None
-
     def _registered_course_rows(self) -> list[dict[str, Any]]:
         """Registered courses of the student's latest term, as OBS lists them."""
-        resolved = self.obs.resolve_semester(None)
-        payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
-        if not isinstance(payload, dict) or payload.get("statusCode") not in (None, 0):
-            raise ObsError("Kayıtlı ders listesi okunamadı.")
-        rows = payload.get("kayitSinifResultList")
-        if rows is None:
-            return []
-        if not isinstance(rows, list):
-            raise ObsError("Kayıtlı ders listesi beklenmeyen biçimde.")
-        return [row for row in rows if isinstance(row, dict)]
+        return registered_course_rows(self.obs)
 
     def _departments_of_crns(
         self, crns: list[str], program_type: str,
@@ -576,7 +551,13 @@ class PlanningToolsMixin:
             completed[normalized] = grade_part.strip().upper() or None
 
         obs_credits: float | None = None
+        # Courses registered this term without a grade yet: read only with the
+        # student's own history, and never a reason to fail.
+        taking_now: list[dict[str, Any]] = []
+        in_progress_status = "not_requested"
+        plan_credit: dict[str, float] = {}
         if use_obs_history:
+            from .gpa import plan_credit_table, plan_rows
             from .graduation import completed_course_history
 
             graduation = self.obs.get_graduation_remaining(self.obs.default_program_id())
@@ -585,6 +566,11 @@ class PlanningToolsMixin:
             obs_credits = info.get("metKrediTotal")
             if completed_credits is None:
                 completed_credits = obs_credits
+            taking_now, taking_note = courses_in_progress(self.obs)
+            in_progress_status = "unavailable" if taking_note else "read"
+            plan_credit = {
+                code: entry["credit"] for code, entry in plan_credit_table(plan_rows(info), None).items()
+            }
 
         rules = self.obs_public.get_branch_prerequisites(branch)
         rule = (rules.get("rules") or {}).get(canonical)
@@ -688,13 +674,39 @@ class PlanningToolsMixin:
             result["archive_seasonality"] = archive_seasonality_note()
             return result
 
-        verdict = evaluate_tree(rule.get("requirement_tree"), completed)
-        blockers: list[str] = []
-        if not verdict["satisfied"]:
+        tree = rule.get("requirement_tree")
+        verdict = evaluate_tree(tree, completed)
+        taking_keys = {course["key"] for course in taking_now}
+        unmet = unmet_requirements(tree, completed, taking_keys)
+        blockers: list[str] = [item["sentence"] for item in unmet]
+        if not verdict["satisfied"] and not blockers:
             blockers.append(verdict["reason"])
+        taking_prerequisites = sorted({
+            code for item in unmet
+            for code in (item["in_progress"] if "any_of" in item else [item["course"]] * bool(item["in_progress"]))
+        })
+
+        # Credits a pass this term would add: a course already completed adds none.
+        credits_in_progress: float | None = None
+        credits_in_progress_complete = True
+        if in_progress_status == "read":
+            adding = [course for course in taking_now if course["key"] not in completed]
+            sizes = [
+                course["credit"] if course["credit"] is not None else plan_credit.get(course["key"])
+                for course in adding
+            ]
+            credits_in_progress = round(math.fsum(size for size in sizes if size is not None), 2)
+            credits_in_progress_complete = all(size is not None for size in sizes)
+        credits_after: float | None = None
+        if credits_in_progress is not None and completed_credits is not None:
+            try:
+                credits_after = round(float(completed_credits) + credits_in_progress, 2)
+            except (TypeError, ValueError):
+                credits_after = None
 
         credit_requirement = rule.get("credit_requirement")
         credit_met: bool | None = None
+        credit_met_after: bool | None = None
         if credit_requirement is not None:
             if completed_credits is None:
                 credit_met = None
@@ -704,9 +716,15 @@ class PlanningToolsMixin:
                 )
             else:
                 credit_met = completed_credits >= credit_requirement
+                if credits_after is not None:
+                    credit_met_after = credits_after >= credit_requirement
+                    if not credit_met_after and not credits_in_progress_complete:
+                        credit_met_after = None  # a registered course without a readable credit
                 if not credit_met:
                     blockers.append(
-                        f"Kredi şartı {credit_requirement}, tamamlanan {completed_credits}."
+                        f"Kredi şartı {credit_requirement}, tamamlanan {completed_credits}"
+                        + (f"; bu dönem alınan {credits_in_progress:g} kredi geçilirse {credits_after:g} olur."
+                           if credits_after is not None and credits_in_progress else ".")
                     )
 
         eligible: bool | None
@@ -717,18 +735,57 @@ class PlanningToolsMixin:
         else:
             eligible = True
 
+        # What the answer becomes if every course taken now is passed. The
+        # verdict above is left as it is.
+        eligible_after: bool | None = None
+        after_note: str | None = None
+        if eligible is True:
+            eligible_after = True
+        elif in_progress_status == "read":
+            passed = {**completed, **dict.fromkeys(taking_prerequisites, "AA")}
+            tree_after = evaluate_tree(tree, passed)["satisfied"]
+            credit_after_ok = True if credit_requirement is None else credit_met_after
+            if tree_after is False or credit_after_ok is False:
+                eligible_after = False
+            elif tree_after is None or credit_after_ok is None:
+                eligible_after = None
+            else:
+                eligible_after = True
+            graded = [
+                f"{item['course']} için en az {item['min_grade']}"
+                for item in unmet if "course" in item and item["in_progress"] and item["min_grade"]
+            ]
+            if graded and eligible_after:
+                after_note = "Yalnızca geçmek yetmez: " + ", ".join(graded) + " gerekiyor."
+
+        missing_courses = [
+            " VEYA ".join(item["any_of"]) if "any_of" in item else item["course"]
+            for item in unmet if item["state"] != "unverified"
+        ]
+        parts = blockers or ["Tüm ön şartlar karşılanıyor."]
         result.update({
             "prerequisite_status": "has_prerequisites",
             "eligible": eligible,
-            "explanation": " ".join(blockers) if blockers else "Tüm ön şartlar karşılanıyor.",
-            "requirement": describe_tree(rule.get("requirement_tree")),
-            "requirement_tree": rule.get("requirement_tree"),
+            "explanation": " ".join(parts),
+            "explanation_parts": parts,
+            "requirement": describe_tree(tree),
+            "requirement_tree": tree,
             "minimum_grades": rule.get("minimum_grades"),
-            "missing_courses": verdict.get("missing", []),
+            "missing_courses": missing_courses,
+            "missing_requirements": [
+                {key: value for key, value in item.items() if key != "sentence"} for item in unmet
+            ],
             "unknown_courses": verdict.get("unknown", []),
             "credit_requirement": credit_requirement,
             "credit_requirement_met": credit_met,
+            "in_progress_status": in_progress_status,
+            "in_progress_prerequisites": taking_prerequisites,
+            "eligible_if_in_progress_passed": eligible_after,
+            "credits_in_progress": credits_in_progress,
+            "credits_if_in_progress_passed": credits_after,
         })
+        if after_note:
+            result["eligible_if_in_progress_passed_note"] = after_note
         result["cross_check"] = cross_check_against_secondary_source()
         result["archive_seasonality"] = archive_seasonality_note()
         return result
@@ -752,7 +809,7 @@ class PlanningToolsMixin:
         graduation = self.obs.get_graduation_remaining(pid)
         summary = summarize_graduation_plan(graduation)
         remaining = summary.get("remaining_required_courses") or []
-        registered, registered_note = self._courses_in_progress()
+        registered, registered_note = courses_in_progress(self.obs)
         matches, other_registered = match_courses_in_progress(remaining, registered)
 
         in_progress: list[dict[str, Any]] = []
@@ -824,6 +881,104 @@ class PlanningToolsMixin:
         if registered_note:
             result["registered_courses_note"] = registered_note
         return result
+
+
+def registered_course_rows(obs: Any) -> list[dict[str, Any]]:
+    """Registered courses of the student's latest term, as OBS lists them."""
+    resolved = obs.resolve_semester(None)
+    payload = obs.list_registered_courses(resolved["akademikDonemId"])
+    if not isinstance(payload, dict) or payload.get("statusCode") not in (None, 0):
+        raise ObsError("Kayıtlı ders listesi okunamadı.")
+    rows = payload.get("kayitSinifResultList")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise ObsError("Kayıtlı ders listesi beklenmeyen biçimde.")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def courses_in_progress(obs: Any) -> tuple[list[dict[str, Any]], str | None]:
+    """Courses the student is taking now: ``(courses, note)``.
+
+    Registered courses of the latest term that have no letter grade yet, in
+    the shape ``gpa_simulation`` reads them (key, code, crns, name, names,
+    credit). An unreadable list gives no courses and a note, never an
+    exception.
+    """
+    from .gpa_simulation import _read_registered
+
+    try:
+        rows = registered_course_rows(obs)
+    except Exception as exc:  # noqa: BLE001 - an optional lookup must never fail the tool
+        return [], f"Bu dönemin kayıtlı dersleri okunamadı ({type(exc).__name__}); devam eden dersler işaretlenmedi."
+    return _read_registered([row for row in rows if not str(row.get("harfNotu") or "").strip()]), None
+
+
+def unmet_requirements(
+    tree: Any, completed: dict[str, str | None], in_progress: set[str],
+) -> list[dict[str, Any]]:
+    """The unmet parts of a prerequisite tree, one entry per requirement.
+
+    A course the rule needs outright is one entry. The alternatives of an OR
+    group are one entry together, since any one of them is enough. Each entry
+    carries the sentence that explains it. ``state`` is ``not_taken``,
+    ``grade_too_low`` or ``unverified`` for a course, ``unmet`` or
+    ``unverified`` for a group.
+    """
+    from .archive import normalize_course_code
+    from .prerequisites import describe_tree, evaluate_tree, flatten_courses
+
+    if not isinstance(tree, dict):
+        return []
+    if tree.get("type") == "and" and isinstance(tree.get("operands"), list):
+        return [item for operand in tree["operands"] for item in unmet_requirements(operand, completed, in_progress)]
+    verdict = evaluate_tree(tree, completed)
+    if verdict["satisfied"] is True:
+        return []
+
+    def taking(node: Any) -> list[str]:
+        codes = []
+        for course in flatten_courses(node):
+            try:
+                code = normalize_course_code(str(course.get("code") or ""))
+            except ValueError:
+                continue
+            if code in in_progress and evaluate_tree(course, completed)["satisfied"] is not True:
+                codes.append(code)
+        return sorted(set(codes))
+
+    now = taking(tree)
+    now_text = "".join(f" {code} bu dönem alınıyor; henüz tamamlanmadı." for code in now)
+    if tree.get("type") == "course":
+        try:
+            code = normalize_course_code(str(tree.get("code") or ""))
+        except ValueError:
+            return [{"course": tree.get("code"), "min_grade": tree.get("min_grade"), "state": "unverified",
+                     "in_progress": False, "sentence": verdict["reason"]}]
+        minimum = tree.get("min_grade")
+        if verdict["satisfied"] is None:
+            state, sentence = "unverified", verdict["reason"]
+        elif code not in completed:
+            state = "not_taken"
+            needs = f" (en az {minimum} gerekiyor)" if minimum else ""
+            sentence = (
+                f"{code} bu dönem alınıyor; henüz tamamlanmadı{needs}." if now
+                else f"{code} alınmamış{needs}."
+            )
+        else:
+            state, sentence = "grade_too_low", verdict["reason"] + now_text
+        return [{"course": code, "min_grade": minimum, "state": state, "in_progress": bool(now), "sentence": sentence}]
+
+    options = [describe_tree(operand) for operand in tree.get("operands") or []]
+    options = [option for option in options if option]
+    listed = " VEYA ".join(options)
+    if verdict["satisfied"] is None:
+        state = "unverified"
+        sentence = f"Şu seçeneklerden birinin sağlandığı doğrulanamıyor (biri yeterli): {listed}.{now_text}"
+    else:
+        state = "unmet"
+        sentence = f"Şu seçeneklerden hiçbiri sağlanmıyor (biri yeterli): {listed}.{now_text}"
+    return [{"any_of": options, "state": state, "in_progress": now, "sentence": sentence}]
 
 
 def match_courses_in_progress(
