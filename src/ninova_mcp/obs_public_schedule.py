@@ -35,15 +35,17 @@ class ObsPublicSchedule(ObsPublicTransport):
 
     @classmethod
     def _normalize_program_type(cls, raw: str) -> str:
-        key = normalize_lookup_text(raw)
-        if key in cls.PROGRAM_TYPE_MAP:
-            return cls.PROGRAM_TYPE_MAP[key]
-        if raw.upper() in {"LS", "LU", "ÖL", "LUİ"}:
-            return raw.upper()
-        valid = ", ".join(sorted(set(cls.PROGRAM_TYPE_MAP.values())))
+        """The canonical programme type of an alias; case and Turkish marks do not matter."""
+        found = _folded_program_types(cls.PROGRAM_TYPE_MAP).get(_program_type_key(raw))
+        if found is not None:
+            return found
+        accepted = "; ".join(
+            f"{value} ({', '.join(alias for alias, target in cls.PROGRAM_TYPE_MAP.items() if target == value)})"
+            for value in dict.fromkeys(cls.PROGRAM_TYPE_MAP.values())
+        )
         raise ObsError(
-            f"Geçersiz program tipi: {raw!r}. Geçerli değerler: {valid} "
-            f"(veya 'Lisans', 'Lisansüstü', 'Önlisans')."
+            f"Geçersiz program tipi: {raw!r}. Kabul edilen değerler: {accepted}. "
+            "Büyük/küçük harf ve Türkçe karakter farkı önemsizdir."
         )
 
     def list_departments(self, program_type: str) -> list[dict[str, Any]]:
@@ -198,6 +200,30 @@ class ObsPublicSchedule(ObsPublicTransport):
         department_id = int(department["brans_kodu_id"])
         self._dept_cache[department_id] = department
         return department_id
+
+
+def _program_type_key(value: Any) -> str:
+    """The key an alias is looked up under: the same folding for the map and for the input."""
+    return normalize_lookup_text(value if isinstance(value, str) else "")
+
+
+_FOLDED_PROGRAM_TYPES: dict[int, tuple[dict[str, str], dict[str, str]]] = {}
+
+
+def _folded_program_types(aliases: dict[str, str]) -> dict[str, str]:
+    """``aliases`` with folded keys, plus every canonical value under its own folded key.
+
+    Built once per map and rebuilt only when the map's content changes, so a
+    key written with Turkish letters (``lisansüstü 2.öğretim``) is reachable.
+    """
+    cached = _FOLDED_PROGRAM_TYPES.get(id(aliases))
+    if cached is not None and cached[0] == aliases:
+        return cached[1]
+    folded = {_program_type_key(value): value for value in aliases.values()}
+    folded.update((_program_type_key(alias), value) for alias, value in aliases.items())
+    folded.pop("", None)
+    _FOLDED_PROGRAM_TYPES[id(aliases)] = (dict(aliases), folded)
+    return folded
 
 
 def _listed_department_id(depts: list[dict[str, Any]], department: str) -> int | None:

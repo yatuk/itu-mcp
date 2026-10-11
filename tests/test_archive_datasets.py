@@ -357,9 +357,10 @@ class GradeDistributionTests(unittest.TestCase):
             app.archive_grade_distribution("not a course")
         with self.assertRaises(ItuArchiveError):
             app.archive_grade_distribution("TST 101E", term="2023-2024")
-        with self.assertRaises(ItuArchiveError):
-            app.archive_grade_distribution("ÇEV 101")
         self.assertEqual(session.requested, [])
+        # A Turkish spelling of a branch is that branch, not a rejected code.
+        self.assertEqual(app.archive_grade_distribution("ÇEV 101")["course_code"], "CEV 101")
+        self.assertEqual(session.requested, ["/grades/CEV.json"])
 
     def test_pure_function_tolerates_junk_records(self) -> None:
         records = [None, "x", {"code": "TST 101E"}, {"code": "TST 101E", "total": None, "grades": {"AA": "çok"}}]

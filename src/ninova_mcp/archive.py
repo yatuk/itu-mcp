@@ -8,6 +8,7 @@ named fields and the summaries a student actually asks for.
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,11 +27,27 @@ _COURSE_ROW_FIELDS = ("term", "instructor", "capacity", "enrolled", "days")
 _INSTRUCTOR_ROW_FIELDS = ("term", "code", "name", "capacity", "enrolled")
 
 
+def canonical_branch(branch: str) -> str:
+    """A branch code in its one canonical spelling: upper case, without Turkish marks.
+
+    ``işl``, ``İŞL``, ``ISL`` and ``Işl`` are one branch, ``ISL``. Plain
+    ``str.upper`` keeps them apart (``işl`` becomes ``IŞL``), so a rule or an
+    archive file keyed by one spelling was not found under another. This is
+    the upper-cased form of the key the OBS branch index uses
+    (``parsing.normalize_lookup_text``), and the only form the archive accepts
+    as a path segment (2-4 ASCII letters).
+    """
+    text = str(branch or "").strip().translate({ord("ı"): "i", ord("İ"): "i"}).casefold()
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).upper()
+
+
 def split_course_code(course_code: str) -> tuple[str, str]:
     """Split ``"CEN 4901E"`` into ``("CEN", "4901E")``.
 
     Accepts 3- and 4-digit course numbers and one- or two-letter suffixes, so
-    capstone courses and lab variants resolve like any other course.
+    capstone courses and lab variants resolve like any other course. The
+    branch is returned in its canonical spelling (see ``canonical_branch``).
     """
     match = COURSE_CODE_PATTERN.fullmatch(course_code or "")
     if not match:
@@ -38,7 +55,7 @@ def split_course_code(course_code: str) -> tuple[str, str]:
             f"Ders kodu çözümlenemedi: {course_code!r}. 'BLG 223E' veya 'CEN 4901E' gibi olmalı."
         )
     branch, number, suffix = match.groups()
-    return branch.upper(), f"{number}{suffix}".upper()
+    return canonical_branch(branch), f"{number}{suffix}".upper()
 
 
 def normalize_course_code(course_code: str) -> str:
@@ -718,20 +735,23 @@ def same_course_other_branches(
     count per code but no term list, so a candidate carries no term range.
     Candidates are ranked by term count and capped; nothing is merged.
     """
+    # Imported here: gpa_common imports this module.
+    from .gpa_common import course_name_key
+
     own = COURSE_CODE_PATTERN.fullmatch(course_code or "")
-    name = _name_key(course_name)
+    name = course_name_key(course_name)
     if not own or not name:
         return []
-    branch = own.group(1).upper()
+    branch = canonical_branch(own.group(1))
     number = (own.group(2) + own.group(3)).upper()
     found: dict[str, dict[str, Any]] = {}
     for row in codes if isinstance(codes, list) else []:
         if not isinstance(row, list) or len(row) < 4:
             continue
         other = COURSE_CODE_PATTERN.fullmatch(str(row[0]))
-        if not other or other.group(1).upper() == branch:
+        if not other or canonical_branch(other.group(1)) == branch:
             continue
-        if (other.group(2) + other.group(3)).upper() != number or _name_key(row[1]) != name:
+        if (other.group(2) + other.group(3)).upper() != number or course_name_key(row[1]) != name:
             continue
         found.setdefault(str(row[0]), {
             "course_code": str(row[0]),

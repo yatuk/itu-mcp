@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .gpa import COUNTED_GRADES, LETTER_TO_GRADE, UNCOUNTED_GRADES
@@ -348,6 +348,10 @@ def _gpa(credits: float, points: float) -> float | None:
     return points / credits if credits > 0 else None
 
 
+# The undecided rows of one term and the credits they can carry together.
+_CreditCombinations = tuple[tuple[int, ...], tuple[tuple[float, ...], ...]]
+
+
 def _resolve_credits(
     attempts: list[_Attempt], official: dict[str, dict[str, Any]], open_terms: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[_Attempt], list[dict[str, Any]], list[int]]:
@@ -355,9 +359,21 @@ def _resolve_credits(
 
     The rule is ``gpa_common.decide_credits``, which the term tool follows too.
     """
+    return _resolve_credit_combinations(attempts, official, open_terms)[:3]
+
+
+def _resolve_credit_combinations(
+    attempts: list[_Attempt], official: dict[str, dict[str, Any]], open_terms: frozenset[str] | set[str] = frozenset(),
+) -> tuple[list[_Attempt], list[dict[str, Any]], list[int], list[_CreditCombinations]]:
+    """``_resolve_credits`` and, per term, the credit combinations its undecided rows can still take.
+
+    A combination the official term average rules out is not one of them;
+    without a verdict from that average every combination remains.
+    """
     attempts = list(attempts)
     choices: list[dict[str, Any]] = []
     undecided: list[int] = []
+    combinations: list[_CreditCombinations] = []
     by_term: dict[str, list[int]] = {}
     for index, attempt in enumerate(attempts):
         if attempt.alt_credit is not None:
@@ -369,10 +385,20 @@ def _resolve_credits(
             if a.term == term and i not in indexes and a.coefficient is not None and a.credit is not None
         ]
         options = [(attempts[i].credit or 0.0, attempts[i].alt_credit or 0.0) for i in indexes]
+        open_rows = [(pair, attempts[i].coefficient or 0.0) for pair, i in zip(options, indexes, strict=True)]
         decision = decide_credits(
-            fixed, [(pair, attempts[i].coefficient or 0.0) for pair, i in zip(options, indexes, strict=True)],
-            target, comparable=term not in open_terms, max_rows=_MAX_CREDIT_ROWS_PER_TERM,
+            fixed, open_rows, target, comparable=term not in open_terms, max_rows=_MAX_CREDIT_ROWS_PER_TERM,
         )
+        open_positions = [position for position, pick in enumerate(decision.decided) if pick is None]
+        if open_positions:
+            # A decided row has one value in every surviving combination, so it drops out.
+            combinations.append((
+                tuple(indexes[position] for position in open_positions),
+                tuple(dict.fromkeys(
+                    tuple(options[position][picks[position]] for position in open_positions)
+                    for picks in decision.combinations(open_rows)
+                )),
+            ))
         for index, pair, pick in zip(indexes, options, decision.decided, strict=True):
             attempt = attempts[index]
             choice = {
@@ -387,7 +413,37 @@ def _resolve_credits(
                 undecided.append(index)
                 choice.update(chosen=attempt.credit, decided=False, basis=_UNDECIDED_BASIS[decision.reason])
             choices.append(choice)
-    return attempts, choices, undecided
+    return attempts, choices, undecided, combinations
+
+
+def _range_assignments(
+    attempts: list[_Attempt], undecided: list[int], combinations: list[_CreditCombinations],
+) -> list[list[tuple[int, float | None]]]:
+    """Every credit assignment of the undecided rows that the GPA range covers.
+
+    The rows of one term vary together, through the combinations its official
+    average allows; terms vary independently of each other. Only the first
+    ``_MAX_RANGE_ROWS`` undecided rows are varied: a term's combinations are
+    then reduced to those rows, which can only widen the range, never exclude
+    a combination that is possible.
+    """
+    varied = set(undecided[:_MAX_RANGE_ROWS])
+    grouped = {index for indexes, _ in combinations for index in indexes}
+    per_term: list[list[list[tuple[int, float | None]]]] = []
+    for indexes, credit_sets in combinations:
+        kept = [position for position, index in enumerate(indexes) if index in varied]
+        if kept:
+            reduced = dict.fromkeys(tuple(credits[position] for position in kept) for credits in credit_sets)
+            per_term.append([
+                [(indexes[position], credit) for position, credit in zip(kept, credits, strict=True)]
+                for credits in reduced
+            ])
+    # A record built without combinations: each row varies on its own.
+    per_term.extend(
+        [[(index, attempts[index].credit)], [(index, attempts[index].alt_credit)]]
+        for index in undecided[:_MAX_RANGE_ROWS] if index not in grouped
+    )
+    return [[pair for part in parts for pair in part] for parts in itertools.product(*per_term)]
 
 
 @dataclass
@@ -401,6 +457,8 @@ class _Record:
     official_terms: list[dict[str, Any]]
     credit_choices: list[dict[str, Any]]
     undecided: list[int]
+    # Per term, the credits its undecided rows can carry together.
+    credit_combinations: list[_CreditCombinations] = field(default_factory=list)
 
 
 def rebuild_record(info: dict[str, Any], registration_status: Any) -> _Record:
@@ -412,9 +470,10 @@ def rebuild_record(info: dict[str, Any], registration_status: Any) -> _Record:
     official_terms, series_warning = _official_terms(registration_status, official_gpa)
     if series_warning:
         warnings.append(series_warning)
-    attempts, credit_choices, undecided = _resolve_credits(
+    attempts, credit_choices, undecided, combinations = _resolve_credit_combinations(
         attempts, {t["term"]: t for t in official_terms}, open_terms)
-    return _Record(attempts, plan_credits, warnings, official_gpa, official_terms, credit_choices, undecided)
+    return _Record(
+        attempts, plan_credits, warnings, official_gpa, official_terms, credit_choices, undecided, combinations)
 
 
 def _equivalence_candidates(attempts: list[_Attempt]) -> list[tuple[_Attempt, _Attempt]]:
@@ -852,11 +911,10 @@ def simulate_cumulative_gpa(
     projected_gpa = _gpa(*outcome["projected"])
     current_range = projected_range = None
     if undecided:
-        varied = undecided[:_MAX_RANGE_ROWS]
         currents, projections = [], []
-        for combo in itertools.product(*[(attempts[i].credit, attempts[i].alt_credit) for i in varied]):
+        for assignment in _range_assignments(attempts, undecided, record.credit_combinations):
             trial = list(attempts)
-            for index, credit in zip(varied, combo):
+            for index, credit in assignment:
                 trial[index] = replace(trial[index], credit=credit)
             alternative = _project(trial, groups, courses, grades, extras, plan_credits, term)
             currents.append(_gpa(*alternative["current"]))
@@ -869,7 +927,7 @@ def simulate_cumulative_gpa(
         )
         warnings.append(
             f"ambiguous_credit: the GPA weight of {codes} could not be decided from the official term "
-            "average; gpa uses kredisi and gpa_range covers both values."
+            "average; gpa uses kredisi and gpa_range covers the credit combinations that average allows."
         )
 
     if status == "mismatch":
