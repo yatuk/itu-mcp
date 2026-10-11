@@ -9,10 +9,9 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Callable
+from typing import Any, Callable
 from urllib.parse import urlparse
 
-from pydantic import Field, StrictBool
 
 from .client import NinovaAuthError, NinovaError
 from . import toolsets as _toolsets
@@ -20,10 +19,8 @@ from .archive_tools import ArchiveDatasetToolsMixin
 from .seat_watch import SeatWatchToolsMixin
 from .calendar_export import CalendarExportToolsMixin
 from .public_resources import PUBLIC_RESOURCE_URIS, RESOURCE_TEMPLATE_URIS, register_public_resources
-from .graduation import summarize_graduation_plan
 from .prompts import PROMPT_NAMES, PROMPTS
 from .resources import RESOURCE_URIS, RESOURCES
-from .obs_client import ObsError, redact_obs_profile
 from .parsing import (
     SnapshotReference,
     compare_snapshot_payloads,
@@ -54,7 +51,6 @@ from .parsing import (
     slugify,
     summarize_dashboard,
 )
-from .attendance_summary import summarize_obs_attendance
 from .text_extract import (
     DEFAULT_MAX_CHARS as TEXT_EXTRACT_DEFAULT_MAX_CHARS,
     extract_text_from_bytes,
@@ -69,6 +65,9 @@ from .tracking_coverage import coverage, enrollment_coverage, scope_coverage
 from .app_base import AppBase
 from .app_core import SessionToolsMixin
 from .app_mail import MailToolsMixin
+from .app_obs import ObsRecordToolsMixin
+from .app_registration import RegistrationToolsMixin
+from .app_portal import PortalToolsMixin
 from .app_public import PublicCatalogToolsMixin
 from .app_campus import CampusToolsMixin
 from .app_planning import PlanningToolsMixin
@@ -97,34 +96,18 @@ from .tool_registry import MAIL_TOOL_NAMES  # noqa: F401
 from .tool_registry import REMOTE_EXCLUDED_TOOLS  # noqa: F401
 from .tool_registry import REMOTE_TOOL_NAMES  # noqa: F401
 from .app_base import COURSES_CACHE_KEY, DEFAULT_COURSE_CACHE_TTL_SECONDS  # noqa: F401
+from .app_registration import RegistrationDraftCrns, _confirm_draft_write, obs_registration_writes_enabled  # noqa: F401
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-RegistrationDraftCrns = Annotated[
-    list[Annotated[str, Field(strict=True, pattern=r"^[0-9]{4,5}$")]],
-    Field(min_length=1, max_length=12, json_schema_extra={"uniqueItems": True}),
-]
-
-
-def obs_registration_writes_enabled() -> bool:
-    """Account writes require the operator's explicit, exact opt-in."""
-    return os.getenv("NINOVA_OBS_REGISTRATION_WRITES") == "1"
-
-
-def _confirm_draft_write(plan: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask the user about the exact draft change that is about to be sent."""
-    from .interaction import confirm_write, draft_confirmation_message
-
-    return confirm_write(draft_confirmation_message(
-        plan["term_code"], plan["requested_crns"], plan["previous_crns"],
-        plan["added_crns"], plan["removed_crns"],
-    ))
-
 
 
 class NinovaMcpApp(
     AppBase,
     SessionToolsMixin,
     MailToolsMixin,
+    ObsRecordToolsMixin,
+    RegistrationToolsMixin,
+    PortalToolsMixin,
     PublicCatalogToolsMixin,
     CampusToolsMixin,
     PlanningToolsMixin,
@@ -719,488 +702,6 @@ class NinovaMcpApp(
             "pages_crawled": len(pages),
             "pages": pages,
             "downloads": downloads[:500],
-        }
-
-    def obs_get_profile(self, include_sensitive: bool = False) -> dict[str, Any]:
-        payload = self.obs.get_profile()
-        if include_sensitive:
-            return payload
-        return redact_obs_profile(payload)
-
-    def obs_list_programs(self) -> dict[str, Any]:
-        return self.obs.list_programs()
-
-    def obs_list_semesters(self) -> dict[str, Any]:
-        return self.obs.list_semesters()
-
-    def obs_get_registration_status(self) -> dict[str, Any]:
-        from requests import RequestException
-        from .registration_status import summarize_registration_status
-
-        registration = self.obs.get_registration_status()
-        lesson_registration = self.obs.get_lesson_registration_status()
-        calendar = None
-        calendar_error = None
-        try:
-            calendar = self.obs_public.get_academic_calendar()
-        except (NinovaError, RequestException, ValueError):
-            calendar_error = "The public academic calendar is unavailable. Official OBS status is retained."
-        return {
-            "kayit_durumu": registration,
-            "ders_kayit_durumu": lesson_registration,
-            "summary": summarize_registration_status(registration, lesson_registration, calendar, calendar_error=calendar_error),
-        }
-
-    def obs_get_registration_draft(self) -> dict[str, Any]:
-        return self.obs.get_registration_draft()
-
-    def obs_save_registration_draft(
-        self, crns: RegistrationDraftCrns, confirm: StrictBool, allow_replace: StrictBool = False,
-    ) -> dict[str, Any]:
-        """Replace a saved draft only with explicitly confirmed CRNs."""
-        from .registration_draft import normalize_crns
-
-        if confirm is not True:
-            raise ObsError("Saving the OBS draft requires explicit confirmation (confirm=true).")
-        if not obs_registration_writes_enabled():
-            raise ObsError("OBS registration writes are disabled (NINOVA_OBS_REGISTRATION_WRITES=1 is required).")
-        selected = normalize_crns(crns)
-        # Draft reads are uncached. The client reconciles the attempted write
-        # against a fresh readback; retain its saved/rejected/uncertain result.
-        # With an MCP request (or NINOVA_REQUIRE_ELICITATION=1) the client asks
-        # the user through confirm_write just before the single POST.
-        from .interaction import current, elicitation_required
-
-        gate: dict[str, Any] = {}
-        if current() is not None or elicitation_required():
-            gate["confirm_write"] = _confirm_draft_write
-        return self.obs.save_registration_draft(selected, allow_replace=allow_replace is True, **gate)
-
-    def obs_get_elective_group(self, group_id: int) -> dict[str, Any]:
-        from .registration_tools import get_elective_group
-        return get_elective_group(self, group_id)
-
-    def obs_validate_registration_plan(self, crns: list[str]) -> dict[str, Any]:
-        from .registration_tools import validate_plan
-        return validate_plan(self, crns)
-
-    def obs_get_grade_distribution(
-        self, course_code: str, year: int | None = None, term_code: str | None = None,
-    ) -> dict[str, Any]:
-        from .grade_distribution import get_grade_distribution
-        return get_grade_distribution(self.obs_public, course_code, year, term_code)
-
-    def obs_get_advisor(self) -> dict[str, Any]:
-        return self.obs.get_advisor()
-
-    def obs_get_internships(self) -> dict[str, Any]:
-        return self.obs.get_internships()
-
-    def obs_get_contacts(self, include_sensitive: bool = False) -> dict[str, Any]:
-        payload = self.obs.get_contacts()
-        if include_sensitive:
-            return payload
-        return redact_obs_profile(payload)
-
-    def obs_list_registered_courses(self, semester: str | None = None) -> dict[str, Any]:
-        resolved = self.obs.resolve_semester(semester)
-        payload = self.obs.list_registered_courses(resolved["akademikDonemId"])
-        return {
-            "semester": resolved,
-            "count": len(payload.get("kayitSinifResultList") or []),
-            **payload,
-        }
-
-    def obs_get_course_grades(
-        self,
-        class_id: int | None = None,
-        semester: str | None = None,
-        course: str | None = None,
-        include_midterms: bool = True,
-        include_letter: bool = True,
-    ) -> dict[str, Any]:
-        resolved_class = self._resolve_obs_class(
-            class_id=class_id,
-            semester=semester,
-            course=course,
-        )
-        sid = resolved_class["sinifId"]
-        result: dict[str, Any] = {"class": resolved_class, "errors": []}
-        if include_letter:
-            try:
-                from .obs_grades import get_class_letter_grades
-
-                result["letter_grades"] = get_class_letter_grades(
-                    self.obs, resolved_class, semester=semester,
-                )
-            except ObsError as exc:
-                result["letter_grades"] = None
-                result["errors"].append({"scope": "letter_grades", "error": str(exc)})
-        if include_midterms:
-            try:
-                result["midterm_grades"] = self.obs.get_midterm_grades(sid)
-            except ObsError as exc:
-                result["midterm_grades"] = None
-                result["errors"].append({"scope": "midterm_grades", "error": str(exc)})
-        return result
-
-    def obs_get_attendance(
-        self,
-        class_id: int | None = None,
-        semester: str | None = None,
-        course: str | None = None,
-        include_summary: bool = True,
-        max_absence_ratio: float = 0.30,
-    ) -> dict[str, Any]:
-        resolved_class = self._resolve_obs_class(
-            class_id=class_id,
-            semester=semester,
-            course=course,
-        )
-        try:
-            attendance = self.obs.get_attendance(resolved_class["sinifId"])
-            error = None
-        except ObsError as exc:
-            attendance = None
-            error = str(exc)
-        result: dict[str, Any] = {
-            "class": resolved_class,
-            "attendance": attendance,
-            "error": error,
-        }
-        if include_summary:
-            result["summary"] = summarize_obs_attendance(
-                attendance,
-                max_absence_ratio=max_absence_ratio,
-                course=resolved_class,
-            )
-        return result
-
-    def obs_get_schedule(self, semester: str | None = None) -> dict[str, Any]:
-        resolved = self.obs.resolve_semester(semester)
-        return {
-            "semester": resolved,
-            "schedule": self.obs.get_schedule(resolved["akademikDonemId"]),
-            "final_calendar": self.obs.get_final_calendar(resolved["akademikDonemId"]),
-        }
-
-    def obs_get_graduation_remaining(self, program_id: int | None = None) -> dict[str, Any]:
-        pid = program_id if program_id is not None else self.obs.default_program_id()
-        graduation = self.obs.get_graduation_remaining(pid)
-        return {
-            "program_id": pid,
-            "summary": summarize_graduation_plan(graduation),
-            "graduation": graduation,
-            "academic_status": self.obs.get_academic_status(pid),
-            "debts": self.obs.get_debts(pid),
-        }
-
-    def obs_download_transcript(
-        self,
-        english: bool = False,
-        output_dir: str | None = None,
-    ) -> dict[str, Any]:
-        target = Path(output_dir or (self.state_dir / "downloads" / "obs")).expanduser()
-        return self.obs.save_transcript_pdf(target, english=english)
-
-    def _resolve_obs_class(
-        self,
-        *,
-        class_id: int | None,
-        semester: str | None,
-        course: str | None,
-    ) -> dict[str, Any]:
-        if class_id is not None:
-            return {"sinifId": class_id, "source": "class_id"}
-        if not course:
-            raise ObsError("Provide class_id, or course (+ optional semester).")
-        resolved_semester = self.obs.resolve_semester(semester)
-        payload = self.obs.list_registered_courses(resolved_semester["akademikDonemId"])
-        items = payload.get("kayitSinifResultList") or []
-        target = normalize_lookup_text(course)
-        matches = []
-        for item in items:
-            code = f"{item.get('bransKodu') or ''} {item.get('dersKodu') or ''}".strip()
-            blob = normalize_lookup_text(
-                " ".join(
-                    str(item.get(key) or "")
-                    for key in ("bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN", "crn")
-                )
-            )
-            if target == normalize_lookup_text(code) or target in blob:
-                matches.append(item)
-        if not matches:
-            options = ", ".join(
-                f"{i.get('bransKodu')} {i.get('dersKodu')} ({i.get('dersAdiTR')})"
-                for i in items[:12]
-            )
-            raise ObsError(f"OBS course not found: {course}. Available: {options}")
-        if len(matches) > 1:
-            options = ", ".join(
-                f"sinifId={i.get('sinifId')} {i.get('bransKodu')} {i.get('dersKodu')}"
-                for i in matches[:8]
-            )
-            raise ObsError(f"Ambiguous OBS course {course!r}. Matches: {options}")
-        chosen = matches[0]
-        chosen = {**chosen, "source": "course_lookup", "semester": resolved_semester}
-        return chosen
-
-    # ------------------------------------------------------------------
-    # OBS public schedule tools (no auth)
-    # ------------------------------------------------------------------
-
-    def obs_get_campus_card(self) -> dict[str, Any]:
-        """Read campus card balance and recent transactions from the İTÜ Portal."""
-        from .portal_data import campus_card
-
-        return campus_card(self._get_portal_json("GetBalance"))
-
-    def _get_portal_page(self) -> tuple[str, str]:
-        """Fetch the portal homepage once, cached for the request lifetime."""
-        cache_key = "portal_home"
-        cached = self._course_cache.get(cache_key)
-        if cached is not None:
-            return cached  # type: ignore[return-value]
-        html, url = self.client.get_portal_html("/apps/default/")
-        self._course_cache.set(cache_key, (html, url))
-        return html, url
-
-    def _get_portal_json(
-        self,
-        operation: str,
-        *,
-        params: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Call a fixed read-only Portal WebMethod after establishing SSO."""
-        allowed = {
-            "GetFoodMenu2",
-            "GetNotification",
-            "GetYardim",
-            "GetBalance",
-            "GetQuota",
-            "GetQuotaEski",
-        }
-        if operation not in allowed:
-            raise NinovaError(f"Portal operation not allowed: {operation}")
-        self._get_portal_page()
-        url = f"{self.client.PORTAL_BASE_URL}/apps/default/service/service.aspx/{operation}"
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{self.client.PORTAL_BASE_URL}/apps/default/",
-        }
-        self.client._throttle()
-        response = self.client._safe_request(
-            "GET",
-            url,
-            params=params,
-            headers=headers,
-            timeout=30,
-        )
-        if self.client._looks_like_login_page(response):
-            self.client.login(force=True)
-            self._course_cache.invalidate("portal_home")
-            self._get_portal_page()
-            self.client._throttle()
-            response = self.client._safe_request(
-                "GET",
-                url,
-                params=params,
-                headers=headers,
-                timeout=30,
-            )
-        if response.status_code >= 400:
-            raise NinovaError(
-                f"Portal {operation} isteği HTTP {response.status_code} ile başarısız oldu."
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise NinovaError(f"Portal {operation} JSON yanıtı ayrıştırılamadı.") from exc
-        data = payload.get("d") if isinstance(payload, dict) else None
-        if not isinstance(data, dict):
-            raise NinovaError(f"Portal {operation} beklenen 'd' nesnesini döndürmedi.")
-        return data
-
-    def obs_get_notifications(
-        self,
-        notification_id: str | None = None,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        """Read İTÜ Portal notifications (requires login)."""
-        from .parsing import clean_text, make_soup
-
-        try:
-            data = self._get_portal_json("GetNotification")
-        except (NinovaError, ValueError):
-            html, url = self._get_portal_page()
-            from .parsing import extract_notifications
-
-            fallback = extract_notifications(html, url)
-            notifications = fallback.get("notifications") or []
-            if notification_id:
-                target = next(
-                    (item for item in notifications if str(item.get("id") or item.get("notification_id") or "") == str(notification_id)),
-                    None,
-                )
-                if target is None:
-                    raise NinovaError(f"Portal bildirimi bulunamadı: {notification_id}")
-                return {"notification": target, "source": url, "detail_available": False, "untrusted_external_content": True}
-            fallback["notifications"] = notifications[: max(1, min(limit, 100))]
-            fallback["count"] = len(fallback["notifications"])
-            fallback["api_fallback"] = True
-            fallback["untrusted_external_content"] = True
-            return fallback
-        notifications = []
-        for item in data.get("NotificationInformationList") or []:
-            if not isinstance(item, dict):
-                continue
-            content_html = str(item.get("ContentText") or "")
-            notifications.append({
-                "id": str(item.get("ObjectId") or ""),
-                "title": clean_text(str(item.get("Title") or "")),
-                "content": clean_text(make_soup(content_html).get_text(" ", strip=True)),
-                "created_at": item.get("CreateDate"),
-                "age": item.get("BeforeCreateDate"),
-                "unread": item.get("IsRead") in {0, "0", False},
-            })
-        if notification_id:
-            target = next((item for item in notifications if item["id"] == str(notification_id)), None)
-            if target is None:
-                raise NinovaError(f"Portal bildirimi bulunamadı: {notification_id}")
-            return {"notification": target, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
-        notifications = notifications[: max(1, min(limit, 100))]
-        return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
-
-    def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
-        """Fetch and parse one ticket page. Callers decide ownership and redaction."""
-        from .help_tickets import help_url, parse_detail, ticket_url
-
-        cache_key = f"help_ticket:{identifier}"
-        cached = self._course_cache.get(cache_key)
-        if cached is not None:
-            return cached  # type: ignore[return-value]
-        from requests import RequestException
-
-        try:
-            html, response = self.client.get_html(ticket_url(identifier))
-        except RequestException as exc:
-            raise NinovaError("Help ticket HTTP read failed.") from exc
-        if help_url(response.url) is None:
-            raise NinovaError("Help ticket read did not reach the authenticated help desk.")
-        ticket = parse_detail(html, response.url, identifier)
-        if ticket.get("id") != identifier:
-            raise NinovaError(ticket.get("parse_warning") or "Help ticket was not found or is inaccessible.")
-        self._course_cache.set(cache_key, ticket)
-        return ticket
-
-    def _help_ticket_rows(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """The signed-in user's own ticket list, from the Portal widget."""
-        from .help_tickets import summary
-        from .parsing import extract_help_tickets
-
-        try:
-            data = self._get_portal_json("GetYardim")
-        except (NinovaError, ValueError):
-            data = {}
-        raw_items = data.get("YardimInformationList") or data.get("HelpInformationList") or []
-        tickets = [summary(item) for item in raw_items if isinstance(item, dict)]
-        if tickets:
-            return tickets, {"source": "portal.itu.edu.tr/GetYardim"}
-        html, url = self._get_portal_page()
-        payload = extract_help_tickets(html, url)
-        tickets = payload["tickets"]
-        payload["api_fallback"] = True
-        return tickets, payload
-
-    def get_help_ticket(self, ticket_id: str, include_sensitive: bool = False) -> dict[str, Any]:
-        """Read one of the user's own help tickets without mutations."""
-        from .help_tickets import redact_ticket, ticket_id as valid_id
-
-        identifier = valid_id(ticket_id)
-        if identifier is None:
-            raise NinovaError("Help ticket ID must contain only decimal digits (1–20 characters).")
-        # Ticket IDs are sequential. Only IDs from the user's own Portal list
-        # are read, so this tool cannot be pointed at someone else's ticket.
-        own_ids = {str(item["id"]) for item in self._help_ticket_rows()[0] if item.get("id")}
-        if identifier not in own_ids:
-            raise NinovaError(
-                "Help ticket ID is not in your own ticket list. "
-                "Call obs_get_help_tickets to see the IDs you can read."
-            )
-        ticket = redact_ticket(self._read_help_ticket(identifier), include_sensitive=bool(include_sensitive))
-        return {"ticket": ticket, "untrusted_external_content": True}
-
-    def obs_get_help_tickets(
-        self, query: str | None = None, limit: int = 20, include_details: bool = False,
-    ) -> dict[str, Any]:
-        """List help tickets. Detail pages are opened only when include_details is true."""
-        from .help_tickets import SUMMARY_FIELDS
-
-        tickets, payload = self._help_ticket_rows()
-        if query:
-            target = normalize_lookup_text(query)
-            tickets = [item for item in tickets if target in normalize_lookup_text(
-                " ".join(str(item.get(key) or "") for key in ("id", "title", "status")))]
-        payload["total_matching_count"] = len(tickets)
-        selected = tickets[:max(1, min(limit, 100))]
-        for item in selected:
-            if include_details and item["id"]:
-                try:
-                    detail = self._read_help_ticket(item["id"])
-                except (NinovaError, ValueError):
-                    item["detail_available"] = False
-                    item["detail_warning"] = "Help ticket details were unavailable. Portal fields are retained."
-                else:
-                    for key in SUMMARY_FIELDS:
-                        if detail.get(key) is not None:
-                            item[key] = detail[key]
-                    item["detail_available"] = True
-                    if detail.get("parse_warning"):
-                        item["detail_warning"] = detail["parse_warning"]
-            item["missing_fields"] = [key for key in SUMMARY_FIELDS if item.get(key) is None]
-        payload["tickets"] = selected
-        payload["count"] = len(selected)
-        payload["metadata_complete"] = all(not item["missing_fields"] for item in selected)
-        payload["untrusted_external_content"] = True
-        return payload
-
-    def obs_get_cloud_quota(self) -> dict[str, Any]:
-        """Read İTÜ Mail and İTÜ Bulut storage quota from the Portal (requires login)."""
-        from .portal_data import storage_quota
-
-        return storage_quota(self._get_portal_json)
-
-    def get_personal_exam_calendar(
-        self,
-        semester: str | None = None,
-        course: str | None = None,
-    ) -> dict[str, Any]:
-        """Read the authenticated student's OBS final calendar directly."""
-        resolved = self.obs.resolve_semester(semester)
-        semester_id = resolved["akademikDonemId"]
-        registered_payload = self.obs.list_registered_courses(semester_id)
-        registered = registered_payload.get("kayitSinifResultList") or []
-        final_calendar = self.obs.get_final_calendar(semester_id)
-        target = normalize_lookup_text(course) if course else ""
-        matched_courses = []
-        if target:
-            for item in registered:
-                blob = normalize_lookup_text(
-                    " ".join(str(item.get(key) or "") for key in ("bransKodu", "dersKodu", "dersAdiTR", "dersAdiEN", "crn"))
-                )
-                if target in blob:
-                    matched_courses.append(item)
-            if not matched_courses:
-                raise ObsError(f"Kayıtlı dersler arasında eşleşme bulunamadı: {course}")
-        return {
-            "semester": resolved,
-            "course_filter": course,
-            "matched_courses": matched_courses if target else registered,
-            "final_calendar": final_calendar,
-            "source": "obs.itu.edu.tr/api/ogrenci/Takvim/FinalTakvimi",
-            "untrusted_external_content": True,
         }
 
     def download_resource(
