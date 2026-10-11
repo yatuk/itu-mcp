@@ -17,7 +17,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from ninova_mcp import interaction
-from ninova_mcp.client import NinovaAuthError, NinovaError
+from ninova_mcp.assignment_upload import CHECK_NINOVA, LOGIN_PAGE_AFTER_POST
+from ninova_mcp.client import NinovaError
 from ninova_mcp.parsing import extract_assignment_upload_form, match_upload_slot
 from ninova_mcp.server import NinovaMcpApp
 
@@ -36,14 +37,15 @@ DIGEST = hashlib.sha256(CONTENT).hexdigest()
 PREVIEW_KEYS = ["dry_run", "course", "assignment", "upload_url", "form_url", "submit_label", "slot", "file"]
 REFUSED_KEYS = [*PREVIEW_KEYS, "ok", "uploaded", "status", "message", "confirmation"]
 RESULT_KEYS = [
-    "dry_run", "ok", "message", "course", "assignment", "upload_url", "response_url",
+    "dry_run", "ok", "status", "message", "course", "assignment", "upload_url", "response_url",
     "slot_before", "slot_after", "file", "requested_file_count", "uploaded_file_count",
 ]
 DRY_RUN_MESSAGE = (
     "Dry run only. Re-call submit_assignment with the same arguments "
     "and confirm=true to actually upload this file to Ninova."
 )
-NOT_SUCCESSFUL = "Upload POST completed but the slot still looks empty; check Ninova in a browser."
+ABROAD_SLOT = "slot 5 (Abroad Petition and Other Documents (Passport, Insurance,...etc))"
+NO_SLOTS = "the answer page could not be read as the upload page (it lists no upload slots)"
 ANY_FILE_SLOT = {"index": 1, "description": "Any", "field_name": "f1", "uploaded": False, "allowed_extensions": []}
 
 
@@ -454,7 +456,11 @@ class PostAndResultTests(UploadFlowCase):
         self.assertEqual(result["confirmation"]["method"], "elicitation")
         self.assertIs(result["dry_run"], False)
         self.assertIs(result["ok"], True)
-        self.assertEqual(result["message"], "Upload appears successful.")
+        self.assertEqual(result["status"], "uploaded")
+        self.assertEqual(result["message"], (
+            f"Upload confirmed for {ABROAD_SLOT}: it was empty before and holds a file now, "
+            "upload date 10 Temmuz 2026 12:00."
+        ))
         self.assertIsNone(result["course"])
         self.assertEqual(result["assignment"], {"url": UPLOAD_URL, "title": None})
         self.assertEqual(result["upload_url"], UPLOAD_URL)
@@ -502,7 +508,10 @@ class PostAndResultTests(UploadFlowCase):
         self.assertEqual(post.call_args.kwargs["files"], [("f1", ("notes.zzunknown", CONTENT, "application/octet-stream"))])
         # The page after the POST shows no slot: the result says so and keeps the slot that was chosen.
         self.assertIs(result["ok"], False)
-        self.assertEqual(result["message"], NOT_SUCCESSFUL)
+        self.assertEqual(result["status"], "not_confirmed")
+        self.assertEqual(
+            result["message"], f"Upload NOT confirmed. The POST completed, but {NO_SLOTS}. {CHECK_NINOVA}",
+        )
         self.assertEqual(result["slot_after"], {
             "index": 1, "description": "Any", "uploaded": None, "file_name": None, "status_text": None,
         })
@@ -511,48 +520,77 @@ class PostAndResultTests(UploadFlowCase):
         })
         self.assertEqual((result["requested_file_count"], result["uploaded_file_count"]), (0, 0))
 
-    def test_success_words_on_the_page_count_when_the_slot_is_not_found(self) -> None:
-        for body, expected in (
-            ("Dosyanızı başarıyla aldık", True), ("Ödevi gönderdiniz", True), ("Dosyayı yüklediniz", True),
-            ("Upload success", True), ("Bir hata oluştu", False),
-        ):
+    def test_success_words_on_the_page_never_make_a_success(self) -> None:
+        for body in ("Dosyanızı başarıyla aldık", "Ödevi gönderdiniz", "Dosyayı yüklediniz", "Upload success"):
             with self.subTest(body=body):
                 app, _ = self.app()
                 self.posted_page(app, f"<html><body><form><p>{body}</p></form></body></html>")
                 with patch("ninova_mcp.server.match_upload_slot", return_value=dict(ANY_FILE_SLOT)):
                     result = self.direct(app)
-                self.assertIs(result["ok"], expected)
-                self.assertEqual(result["message"], "Upload appears successful." if expected else NOT_SUCCESSFUL)
+                self.assertIs(result["ok"], False)
+                self.assertEqual(result["status"], "not_confirmed")
+                # The sentence is quoted as what was seen, and said not to count.
+                self.assertEqual(result["message"], (
+                    f"Upload NOT confirmed. The POST completed, but {NO_SLOTS}. The page does say {body!r}, "
+                    f"but that is not tied to this slot and is not taken as confirmation. {CHECK_NINOVA}"
+                ))
                 self.assertIsNone(result["slot_after"]["uploaded"])
+
+    def test_error_text_on_the_answer_page_is_a_failure(self) -> None:
+        app, _ = self.app()
+        self.posted_page(app, "<html><body><form><p>Bir hata oluştu</p></form></body></html>")
+        with patch("ninova_mcp.server.match_upload_slot", return_value=dict(ANY_FILE_SLOT)):
+            result = self.direct(app)
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            result["message"],
+            f"Upload failed. Ninova's answer page reports: 'Bir hata oluştu'. Also, {NO_SLOTS}.",
+        )
 
     def test_answer_without_a_form_reports_no_counts(self) -> None:
         app, _ = self.app()
         self.posted_page(app, "<html><body><p>Bir hata oluştu</p></body></html>")
         result = self.direct(app)
         self.assertIs(result["ok"], False)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("(No HTML form found on the upload page.)", result["message"])
         self.assertEqual(result["slot_after"]["index"], 5)
         self.assertEqual((result["requested_file_count"], result["uploaded_file_count"]), (None, None))
 
     def test_page_that_still_shows_the_slot_empty_after_the_post(self) -> None:
-        # Pinned as it is: the chosen slot is still empty, yet the other slots'
-        # "yüklediniz" text on the page makes the result report success.
+        # The chosen slot is still empty. The other slots say "yüklediniz", as
+        # they did before the POST, and that says nothing about this upload.
         app, _ = self.app()
         result = self.submit(app)
         self.assertIs(result["slot_after"]["uploaded"], False)
         self.assertEqual(result["slot_after"]["index"], 5)
-        self.assertIs(result["ok"], True)
-        self.assertEqual(result["message"], "Upload appears successful.")
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["status"], "not_confirmed")
+        self.assertEqual(result["message"], (
+            f"Upload NOT confirmed. The POST completed, but {ABROAD_SLOT} still shows no file "
+            f"({result['slot_after']['status_text']!r}). {CHECK_NINOVA}"
+        ))
+        self.assertIn("henüz göndermediniz", result["message"])
+        self.assertNotIn("yüklediniz", result["message"])
+        self.assertEqual((result["requested_file_count"], result["uploaded_file_count"]), (5, 4))
 
-    def test_login_page_after_the_post_is_an_auth_error(self) -> None:
+    def test_login_page_after_the_post_is_a_failure_and_is_not_parsed(self) -> None:
         app, _ = self.app()
         post = self.posted_page(app, "<html></html>")
         self.posted_is_login_page = True
         with patch(
             "ninova_mcp.app_ninova.extract_assignment_upload_form", wraps=extract_assignment_upload_form,
         ) as parse:
-            with self.assertRaises(NinovaAuthError) as caught:
-                self.direct(app)
-        self.assertEqual(str(caught.exception), "Session expired during assignment upload.")
+            result = self.direct(app)
+        self.assertEqual(list(result), RESULT_KEYS)
+        self.assertIs(result["ok"], False)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["message"], LOGIN_PAGE_AFTER_POST)
+        self.assertIn("login page", result["message"])
+        self.assertEqual(result["slot_after"]["index"], 5)
+        self.assertIsNone(result["slot_after"]["uploaded"])
+        self.assertEqual((result["requested_file_count"], result["uploaded_file_count"]), (None, None))
         post.assert_called_once()
         self.assertEqual(parse.call_count, 1)
 

@@ -122,16 +122,35 @@ class AssignmentUploadTargetTests(unittest.TestCase):
         self.with_assignments(untitled, *(assignment(f"Ödev 5{number}", 50 + number) for number in range(1, 10)))
         options = ", ".join([untitled["url"]] + [f"Ödev 5{number}" for number in range(1, 8)])
         self.refused(f"Ambiguous assignment 'odev/5'. Matches: {options}", course="ZZT 101", assignment="odev/5")
-        self.with_assignments({"title": None, "url": None}, {"title": "", "url": ""})
-        self.refused("Ambiguous assignment '  '. Matches: ?, ?", course="ZZT 101", assignment="  ")
 
-    def test_reference_without_letters_matches_only_items_without_a_title_or_url(self) -> None:
-        # Pinned as it is: a reference that normalizes to nothing picks an item whose title or URL is empty.
+    def test_blank_reference_is_a_missing_one_and_matches_nothing(self) -> None:
+        message = "Provide upload_url, or both course and assignment (assignment title / URL / partial name)."
         blank = {"title": None, "url": COURSE_URL + "/Odev/9"}
-        self.with_assignments(assignment("Rapor", 1), blank)
-        self.assertIs(self.resolve(course="ZZT 101", assignment="   ")["assignment"], blank)
-        self.with_assignments(assignment("Rapor", 1))
-        self.refused("Assignment not found:    . Available: Rapor", course="ZZT 101", assignment="   ")
+        for items in ([assignment("Rapor", 1), blank], [{"title": "", "url": ""}], [assignment("Rapor", 1)]):
+            self.with_assignments(*items)
+            for reference in ("   ", "\t\n", "\u00a0"):
+                with self.subTest(items=items, reference=reference):
+                    self.refused(message, course="ZZT 101", assignment=reference)
+        self.refused(message, course="   ", assignment="Rapor")
+        self.resolve_course.assert_not_called()
+        self.listing.assert_not_called()
+
+    def test_find_assignment_refuses_an_empty_reference_and_lists_what_exists(self) -> None:
+        from ninova_mcp.assignment_upload import find_assignment
+
+        items = [assignment("Rapor", 1), {"title": None, "url": COURSE_URL + "/Odev/9"}, {"title": "", "url": ""}]
+        for reference in ("", "   ", "\t", None):
+            with self.subTest(reference=reference):
+                with self.assertRaises(NinovaError) as caught:
+                    find_assignment(items, reference)
+                self.assertEqual(
+                    str(caught.exception),
+                    "Which assignment? The assignment reference is empty. Available: Rapor, ?, ?",
+                )
+        # A reference with text still never matches an item that has neither a title nor a URL.
+        with self.assertRaises(NinovaError) as caught:
+            find_assignment([{"title": None, "url": None}, {"title": "", "url": ""}], "/")
+        self.assertEqual(str(caught.exception), "Assignment not found: /. Available: ?, ?")
 
     def test_upload_link_comes_from_the_assignment_or_from_its_url(self) -> None:
         self.with_assignments(assignment("Rapor", 1, upload_url=COURSE_URL + "/Odev/77/OdevGonder"))
