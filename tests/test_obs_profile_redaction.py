@@ -7,9 +7,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from ninova_mcp.obs_client import redact_obs_profile
-
-REDACTED = "***REDACTED***"
+from ninova_mcp.obs_client import REDACTED, redact_obs_profile
 from ninova_mcp.server import NinovaMcpApp
 from ninova_mcp.tool_metadata.obs import OBS_TOOLS
 

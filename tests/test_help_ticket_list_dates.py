@@ -11,7 +11,7 @@ from ninova_mcp.help_tickets import summary
 from ninova_mcp.server import NinovaMcpApp
 from ninova_mcp.tool_metadata.portal import PORTAL_TOOLS
 
-from test_help_tickets import ID, URL, detail_html
+from test_help_tickets import URL, detail_html
 
 # Synthetic list row in the shape the Portal widget endpoint returns.
 ROW = {"URL": URL, "Title": "Example document request", "TicketStateName": "Yeni", "BeforeCreateDate": "09.03.2041"}
