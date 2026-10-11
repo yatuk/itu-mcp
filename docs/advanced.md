@@ -77,6 +77,7 @@ export NINOVA_MAX_DOWNLOAD_MB="200"                  # download_resource size li
 export NINOVA_EXTRA_SSO_HOSTS=""                     # extra exact itu.edu.tr hosts the sign-on redirect chain may pass through
 export NINOVA_OBS_BASE_URL="https://obs.itu.edu.tr"  # OBS student portal
 export NINOVA_OBS_JWT_TTL_SECONDS="1500"
+export NINOVA_OBS_STUDENT_NUMBER=""                  # student record to open when OBS shows its identity page; default: the only active one
 export NINOVA_OBS_PUBLIC_CACHE_TTL_SECONDS="3600"    # public catalog metadata
 export NINOVA_PUBLIC_SCHEDULE_CACHE_TTL_SECONDS="60" # capacity/schedule reads
 export NINOVA_ITU_PUBLIC_CACHE_TTL_SECONDS="300"     # directory/SKS/news pages

@@ -15,6 +15,14 @@ import requests
 
 from .client import NinovaAuthError, NinovaClient
 from .obs_errors import ObsError
+from .obs_identity import (
+    STUDENT_NUMBER_ENV,
+    choose_identity,
+    identity_options,
+    is_identity_page,
+    page_outline,
+    same_site,
+)
 
 DEFAULT_OBS_BASE_URL = "https://obs.itu.edu.tr"
 JWT_PATH = "/ogrenci/auth/jwt"
@@ -64,13 +72,34 @@ class ObsSessionCore:
         check here would keep reporting success after access has quietly died.
         """
         self.ninova.ensure_logged_in(verify=True)
-        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
+        self._open_student_home()
         token = self._get_jwt(force=True)
         return {
             "obs_base_url": self.base_url,
             "jwt_present": bool(token),
             "login_method": self.ninova.login_method,
         }
+
+    def _open_student_home(self) -> None:
+        """Open the student home, opening one student record first when OBS asks which.
+
+        An account with several records gets the "Kimlik Seçim" page here and
+        no JWT until one of them is opened.
+        """
+        response = self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
+        html = getattr(response, "text", None)
+        if not is_identity_page(html):
+            return
+        option = choose_identity(identity_options(html, response.url), os.getenv(STUDENT_NUMBER_ENV))
+        unreadable = (
+            "OBS kimlik seçim ekranı beklenen biçimde değil, kayıt açılamadı. Bu çıktıyı "
+            "https://github.com/yatuk/itu-mcp/issues adresine ekleyin (yazılar ve numaralar gizlenmiştir):\n"
+        )
+        if not option.href or not same_site(option.href, self.base_url):
+            raise ObsError(unreadable + page_outline(html))
+        chosen = self._safe_request("GET", option.href, timeout=30)
+        if is_identity_page(getattr(chosen, "text", None)):
+            raise ObsError(unreadable + page_outline(html))
 
     def _looks_like_obs_login_page(self, response: requests.Response) -> bool:
         """True if OBS answered with the İTÜ SSO login page instead of data.
@@ -100,7 +129,7 @@ class ObsSessionCore:
             return self._jwt
 
         self.ninova.ensure_logged_in()
-        self._safe_request("GET", self.base_url + STUDENT_HOME, timeout=30)
+        self._open_student_home()
         response = self._safe_request("GET", self.base_url + JWT_PATH, timeout=30)
         token = self._jwt_from_response(response)
         self._jwt = token
