@@ -6,19 +6,28 @@ course reference, walking a file directory and the course URL helpers.
 
 from __future__ import annotations
 
-import hashlib
-import mimetypes
-import os
 import re
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from .assignment_upload import (
+    DRY_RUN_MESSAGE,
+    LocalUpload,
+    UploadPage,
+    choose_upload_slot,
+    multipart_fields,
+    read_upload_once,
+    slot_after_upload,
+    text_reports_success,
+    upload_preview,
+    upload_result,
+    uploads_disabled,
+)
 from .client import NinovaAuthError, NinovaClient, NinovaError
 from .local_files import LocalFileError, resolve_upload_file
 from .tool_params import publish_include_raw
 from .parsing import (
-    extension_allowed,
     extract_announcement_detail,
     extract_announcements_list,
     extract_attendance,
@@ -383,45 +392,75 @@ class NinovaCourseToolsMixin:
 
         Safety: requires confirm=true. Without it, returns a dry-run preview only.
         Optional NINOVA_ALLOW_UPLOADS=0 disables uploads entirely.
+
+        The steps run in this order and none is skipped: switch, local file,
+        upload page, slot, preview, confirmation, POST. Nothing is requested
+        before the local file is accepted and read, and nothing is posted
+        before the user's answer.
         """
-        if os.getenv("NINOVA_ALLOW_UPLOADS", "1").strip().lower() in {"0", "false", "no", "off"}:
+        if uploads_disabled():
             raise NinovaError(
                 "Assignment uploads are disabled (NINOVA_ALLOW_UPLOADS=0)."
             )
-
-        try:
-            path = resolve_upload_file(file_path, state_dir=self.state_dir)
-        except LocalFileError as exc:
-            raise NinovaError(str(exc)) from exc
-        if not path.is_file():
-            raise NinovaError(f"File not found: {path}")
-        size = path.stat().st_size
-        if size <= 0:
-            raise NinovaError(f"File is empty: {path}")
-        if size > MAX_UPLOAD_BYTES:
-            raise NinovaError(
-                f"File too large ({size} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
-            )
-        # Read once, here. The size and hash shown to the user and the bytes
-        # that are sent all come from this one read, so a file that changes on
-        # disk after the user approved cannot change what is uploaded.
-        with path.open("rb") as handle:
-            file_bytes = handle.read(MAX_UPLOAD_BYTES + 1)
-        size = len(file_bytes)
-        if size <= 0:
-            raise NinovaError(f"File is empty: {path}")
-        if size > MAX_UPLOAD_BYTES:
-            raise NinovaError(
-                f"File too large (more than {MAX_UPLOAD_BYTES} bytes). Max is {MAX_UPLOAD_BYTES} bytes."
-            )
-        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        upload = self._read_local_upload(file_path)
 
         resolved_upload = self._resolve_assignment_upload_url(
             course=course,
             assignment=assignment,
             upload_url=upload_url,
         )
-        html, response = self.client.get_html(resolved_upload["upload_url"])
+        page = self._open_upload_page(resolved_upload["upload_url"])
+        slot = choose_upload_slot(
+            page.form,
+            upload.path.name,
+            slot_index=slot_index,
+            slot_description=slot_description,
+            allow_replace=allow_replace,
+            match_slot=match_upload_slot,
+        )
+
+        preview = upload_preview(resolved_upload, page, slot, upload, dry_run=not confirm)
+        if not confirm:
+            preview["message"] = DRY_RUN_MESSAGE
+            return preview
+
+        # Last gate before the upload: the user answers in the client itself.
+        # confirm=true from the model does not skip this.
+        from .interaction import confirm_write, public_confirmation, upload_confirmation_message
+
+        confirmation = confirm_write(upload_confirmation_message(
+            resolved_upload.get("course"), resolved_upload.get("assignment"), page.url,
+            slot, upload.path.name, str(upload.path), upload.size,
+            post_url=page.post_url, sha256_hex=upload.sha256,
+        ))
+        if confirmation is not None and confirmation["proceed"] is not True:
+            return {
+                **preview,
+                "dry_run": False,
+                "ok": False,
+                "uploaded": False,
+                "status": confirmation["status"],
+                "message": confirmation["note"],
+                "confirmation": public_confirmation(confirmation),
+            }
+
+        post_response, result_html = self._post_upload(page, slot, upload)
+        return {
+            **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
+            **self._read_upload_outcome(post_response, result_html, slot, preview),
+        }
+
+    def _read_local_upload(self, file_path: str) -> LocalUpload:
+        """Accept the local path, then read the file once. No request is made here."""
+        try:
+            path = resolve_upload_file(file_path, state_dir=self.state_dir)
+        except LocalFileError as exc:
+            raise NinovaError(str(exc)) from exc
+        return read_upload_once(path, MAX_UPLOAD_BYTES)
+
+    def _open_upload_page(self, upload_url: str) -> UploadPage:
+        """Read the upload page and pin it and its form's target to the same assignment."""
+        html, response = self.client.get_html(upload_url)
         page_ids = self._require_upload_page_url(response.url, "The upload page")
         form = extract_assignment_upload_form(html, response.url, base_url=self.client.base_url)
         if not form.get("ok"):
@@ -436,146 +475,38 @@ class NinovaCourseToolsMixin:
                 "The upload form's target belongs to a different assignment than the upload page. "
                 "Nothing was sent."
             )
+        return UploadPage(response.url, form, post_url)
 
-        try:
-            slot = match_upload_slot(
-                form.get("slots") or [],
-                slot_index=slot_index,
-                slot_description=slot_description,
-            )
-        except ValueError as exc:
-            raise NinovaError(str(exc)) from exc
-
-        if not slot.get("field_name"):
-            raise NinovaError(
-                f"Slot {slot.get('index')} has no file input field "
-                f"({slot.get('description')})."
-            )
-
-        if slot.get("uploaded") and not allow_replace:
-            raise NinovaError(
-                f"Slot {slot.get('index')} ({slot.get('description')}) already has an "
-                "uploaded file. Pass allow_replace=true to overwrite, or pick another slot."
-            )
-
-        if not extension_allowed(path.name, slot.get("allowed_extensions") or []):
-            raise NinovaError(
-                f"File extension of {path.name!r} is not allowed for this slot. "
-                f"Allowed: {slot.get('extensions') or 'any'}"
-            )
-
-        preview = {
-            "dry_run": not confirm,
-            "course": resolved_upload.get("course"),
-            "assignment": resolved_upload.get("assignment"),
-            "upload_url": response.url,
-            "form_url": post_url,
-            "submit_label": form.get("submit_label"),
-            "slot": {
-                "index": slot.get("index"),
-                "description": slot.get("description"),
-                "extensions": slot.get("extensions"),
-                "field_name": slot.get("field_name"),
-                "already_uploaded": slot.get("uploaded"),
-            },
-            "file": {
-                "path": str(path),
-                "name": path.name,
-                "size_bytes": size,
-                "sha256": file_sha256,
-            },
-        }
-
-        if not confirm:
-            preview["message"] = (
-                "Dry run only. Re-call submit_assignment with the same arguments "
-                "and confirm=true to actually upload this file to Ninova."
-            )
-            return preview
-
-        # Last gate before the upload: the user answers in the client itself.
-        # confirm=true from the model does not skip this.
-        from .interaction import confirm_write, public_confirmation, upload_confirmation_message
-
-        confirmation = confirm_write(upload_confirmation_message(
-            resolved_upload.get("course"), resolved_upload.get("assignment"), response.url,
-            slot, path.name, str(path), size,
-            post_url=post_url, sha256_hex=file_sha256,
-        ))
-        if confirmation is not None and confirmation["proceed"] is not True:
-            return {
-                **preview,
-                "dry_run": False,
-                "ok": False,
-                "uploaded": False,
-                "status": confirmation["status"],
-                "message": confirmation["note"],
-                "confirmation": public_confirmation(confirmation),
-            }
-
-        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        data = dict(form.get("hidden_fields") or {})
-        data["__EVENTTARGET"] = form["submit_event_target"]
-        data["__EVENTARGUMENT"] = data.get("__EVENTARGUMENT", "")
-        files = [
-            (
-                slot["field_name"],
-                (path.name, file_bytes, content_type),
-            )
-        ]
-
+    def _post_upload(self, page: UploadPage, slot: dict[str, Any], upload: LocalUpload) -> tuple[Any, str]:
+        """Post the bytes that were read to the checked form target; return the response and its HTML."""
+        data, files = multipart_fields(page.form, slot, upload)
         post_response = self.client.post_multipart(
-            post_url,
+            page.post_url,
             data=data,
             files=files,
-            referer=response.url,
+            referer=page.url,
         )
         result_html = self.client._decode_response(post_response)
         if self.client._looks_like_login_page(post_response, html=result_html):
             raise NinovaAuthError("Session expired during assignment upload.")
+        return post_response, result_html
 
+    def _read_upload_outcome(
+        self, post_response: Any, result_html: str, slot: dict[str, Any], preview: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report what the page answering the POST shows for the chosen slot."""
         after = extract_assignment_upload_form(
             result_html,
             post_response.url,
             base_url=self.client.base_url,
         )
-        after_slots = after.get("slots") or []
-        after_slot = next(
-            (item for item in after_slots if item.get("index") == slot.get("index")),
-            None,
-        )
+        after_slot = slot_after_upload(after, slot)
         success = bool(after_slot and after_slot.get("uploaded"))
         if not success:
             # Fallback: compare status text / page markers.
-            body = normalize_lookup_text(parse_html_page(post_response.url, result_html, self.client.base_url).get("text_excerpt") or "")
-            if any(token in body for token in ("yuklediniz", "gonderdiniz", "basari", "success")):
-                success = True
-
-        return {
-            **({"confirmation": public_confirmation(confirmation)} if confirmation is not None else {}),
-            "dry_run": False,
-            "ok": success,
-            "message": (
-                "Upload appears successful."
-                if success
-                else "Upload POST completed but the slot still looks empty; check Ninova in a browser."
-            ),
-            "course": resolved_upload.get("course"),
-            "assignment": resolved_upload.get("assignment"),
-            "upload_url": response.url,
-            "response_url": post_response.url,
-            "slot_before": preview["slot"],
-            "slot_after": {
-                "index": after_slot.get("index") if after_slot else slot.get("index"),
-                "description": (after_slot or slot).get("description"),
-                "uploaded": after_slot.get("uploaded") if after_slot else None,
-                "file_name": after_slot.get("file_name") if after_slot else None,
-                "status_text": after_slot.get("status_text") if after_slot else None,
-            },
-            "file": preview["file"],
-            "requested_file_count": after.get("requested_file_count"),
-            "uploaded_file_count": after.get("uploaded_file_count"),
-        }
+            page = parse_html_page(post_response.url, result_html, self.client.base_url)
+            success = text_reports_success(page.get("text_excerpt"))
+        return upload_result(preview, slot, after, after_slot, success=success, response_url=post_response.url)
 
     def _resolve_assignment_upload_url(
         self,
