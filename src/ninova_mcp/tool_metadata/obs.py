@@ -8,14 +8,14 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_profile",
         "title": "OBS Profile",
-        "description": "Read OBS personal/program profile. Sensitive fields are redacted. include_sensitive=true has an effect only when the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
+        "description": "Read OBS personal/program profile. The student's name and student number are shown. National ID and passport numbers, e-mail addresses, phone numbers, address fields, birth date and place, and parents' names are redacted, and redacted_fields names the hidden fields. include_sensitive=true has an effect only when the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "include_sensitive": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Include TCKN and similar sensitive fields. Ignored unless the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
+                    "description": "Include the redacted fields (ID numbers, e-mail, phone, address, birth data). Ignored unless the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
                 }
             },
             "additionalProperties": False,
@@ -64,7 +64,7 @@ OBS_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_contacts",
         "title": "OBS Contacts",
-        "description": "Read contact records from OBS (phones/emails redacted by default).",
+        "description": "Read contact records from OBS. Phone numbers, e-mail addresses and postal addresses are redacted by default, and redacted_fields names the hidden rows. include_sensitive=true has an effect only when the operator set NINOVA_ALLOW_SENSITIVE_OUTPUT.",
         "inputSchema": {
             "type": "object",
             "properties": {

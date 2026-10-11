@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import threading
 import time
 from datetime import UTC, datetime
@@ -354,33 +355,119 @@ class ObsClient:
         if semester is None:
             return items[-1]
         target_raw = _semester_lookup_text(semester)
-        target = normalize_lookup_text(target_raw)
-        target_compact = "".join(ch for ch in target if ch.isalnum())
         # An exact id or term code wins over any name fragment of another term.
         for item in items:
             if str(item.get("akademikDonemId")) == target_raw:
                 return item
             if str(item.get("donemKodu")) == target_raw:
                 return item
-        for item in items:
-            name = normalize_lookup_text(item.get("akademikDonemAdi"))
-            name_en = normalize_lookup_text(item.get("akademikDonemAdiEN"))
-            name_compact = "".join(ch for ch in name if ch.isalnum())
-            name_en_compact = "".join(ch for ch in name_en if ch.isalnum())
-            if target and (target in name or target in name_en):
-                return item
-            if target_compact and (
-                target_compact in name_compact or target_compact in name_en_compact
-            ):
-                return item
-            # token match: "2025-2026 guz" -> both tokens present (ü->u via normalize)
-            tokens = [tok for tok in target.replace("-", " ").split() if tok]
-            if tokens and all(tok in name or tok in name_en for tok in tokens):
-                return item
-        options = ", ".join(
-            f"{i.get('akademikDonemId')}:{i.get('akademikDonemAdi')}" for i in items[-8:]
+        return _resolve_semester_by_name(items, semester, target_raw)
+
+
+_SEASON_WORDS = {
+    "guz": "fall", "fall": "fall", "autumn": "fall",
+    "bahar": "spring", "spring": "spring",
+    "yaz": "summer", "summer": "summer",
+}
+# Words that describe a term without identifying one.
+_TERM_FILLER_WORDS = frozenset({
+    "donem", "donemi", "yariyil", "yariyili", "semester", "term", "ogretimi", "okulu", "school",
+})
+
+
+def _semester_tokens(value: Any) -> list[str]:
+    """Whole words and whole numbers of a term name, seasons in one spelling."""
+    text = normalize_lookup_text(str(value or ""))
+    return [_SEASON_WORDS.get(token, token) for token in re.findall(r"[0-9]+|[a-z]+", text)]
+
+
+def describe_semester(item: Any) -> str:
+    """Name a resolved term for a message: ``2040-2041 Bahar Dönemi (term code 204120)``."""
+    if not isinstance(item, dict):
+        return "unknown term"
+    name = clean_text(str(item.get("akademikDonemAdi") or item.get("akademikDonemAdiEN") or ""))
+    code = item.get("donemKodu")
+    if name and code:
+        return f"{name} (term code {code})"
+    if name:
+        return name
+    if code:
+        return f"term code {code}"
+    return f"term id {item.get('akademikDonemId')}"
+
+
+def _semester_recency(indexed: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+    position, item = indexed
+    code = str(item.get("donemKodu") or "")
+    return (int(code) if code.isdigit() else -1, position)
+
+
+def _resolve_semester_by_name(
+    items: list[dict[str, Any]], semester: Any, target_raw: str,
+) -> dict[str, Any]:
+    """Match a term name by whole words; never pick one of several silently.
+
+    A season on its own means the most recent term of that season, and the
+    result says so. Every other query has to identify exactly one term.
+    """
+    def listing(candidates: list[dict[str, Any]]) -> str:
+        return "; ".join(
+            f"{describe_semester(item)}, id {item.get('akademikDonemId')}" for item in candidates
+        )
+
+    wanted = [token for token in _semester_tokens(target_raw) if token not in _TERM_FILLER_WORDS]
+    names = [
+        (set(_semester_tokens(item.get("akademikDonemAdi"))) | set(_semester_tokens(item.get("akademikDonemAdiEN"))))
+        for item in items
+    ]
+    matches = [
+        (position, item) for position, item in enumerate(items)
+        if wanted and all(token in names[position] for token in wanted)
+    ]
+    found = [item for _, item in matches]
+    words = [token for token in wanted if not token.isdigit()]
+    numbers = [token for token in wanted if token.isdigit()]
+    if not words and len(numbers) == 1:
+        # A lone number is an id or a term code, both checked by the caller.
+        # As part of a name it would be a year, and one year spans two
+        # academic years, so it never selects a term on its own.
+        hint = f" Terms that mention {numbers[0]}: {listing(found[-8:])}." if found else ""
+        raise ObsError(
+            f"Semester not found: {semester}. A bare number must be a term code (e.g. 202610) "
+            f"or an OBS term id; a year alone does not identify a term.{hint}"
+        )
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        options = "; ".join(
+            f"{describe_semester(item)}, id {item.get('akademikDonemId')}" for item in items[-8:]
         )
         raise ObsError(f"Semester not found: {semester}. Examples: {options}")
+    if not numbers and len(words) == 1 and words[0] in _SEASON_WORDS.values():
+        ranked = sorted(matches, key=_semester_recency)
+        chosen = ranked[-1][1]
+        others = [item for _, item in ranked[:-1]]
+        return {
+            **chosen,
+            "resolution": {
+                "query": target_raw,
+                "rule": "most_recent_term_of_season",
+                "note": (
+                    f"'{target_raw}' names a season only. The most recent matching term was used: "
+                    f"{describe_semester(chosen)}. Pass a term code or a year range with the season "
+                    "(e.g. \"2024-2025 Bahar\") for another term."
+                ),
+                "other_candidates": [
+                    {"code": str(item.get("donemKodu") or ""), "id": item.get("akademikDonemId"),
+                     "name": item.get("akademikDonemAdi")}
+                    for item in reversed(others)
+                ][:8],
+            },
+        }
+    raise ObsError(
+        f"Semester '{semester}' is ambiguous. Use a term code or add the year range and season. "
+        f"Candidates: {listing(found[-8:])}"
+    )
 
 
 def _semester_lookup_text(semester: Any) -> str:
@@ -1272,24 +1359,89 @@ class ObsPublicClient:
         return self._cache.set(cache_key, result)
 
 
+REDACTED = "***REDACTED***"
+# Field names are matched without case or diacritics, so one pattern covers
+# kimlikNo, tcKimlikNo, ituEPosta, cepTelefonu, dogumTarihi and the like.
+_SENSITIVE_KEY = re.compile(
+    r"kimlikno|tckimlik|tckn|pasaport|passport"
+    r"|eposta|email|mail"
+    r"|telefon|phone|gsm|mobil|cepno|ceptel|tel(?:no)?$"
+    r"|adres|address|ikamet"
+    r"|dogum|birth"
+    r"|anaadi|anneadi|babaadi|mothername|fathername"
+)
+_SENSITIVE_CONTACT_TYPE = (
+    "telefon", "phone", "cep", "mobile", "gsm", "adres", "address", "ikamet",
+    "e-posta", "eposta", "e-mail", "email", "mail",
+)
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_REDACTION_NOTE = (
+    "The fields named in redacted_fields exist and are hidden. They are returned only when the "
+    "operator set NINOVA_ALLOW_SENSITIVE_OUTPUT and include_sensitive=true is passed."
+)
+
+
 def redact_obs_profile(payload: dict[str, Any]) -> dict[str, Any]:
-    """Remove highly sensitive personal fields from OBS profile payloads."""
+    """Hide personal fields in OBS profile and contact payloads.
+
+    Hidden: national and passport numbers, e-mail addresses, phone numbers,
+    addresses, birth date and place, parents' names. The student's own name
+    and student number stay visible. The result names what was hidden in
+    ``redacted_fields`` so a reader knows the fields exist.
+    """
     import copy
 
     data = copy.deepcopy(payload)
-    personal = data.get("kisiselBilgiler")
-    if isinstance(personal, dict):
-        for key in ("kimlikNo", "tcKimlikNo", "tckn", "pasaportNo"):
-            if key in personal and personal[key]:
-                personal[key] = "***REDACTED***"
-    contacts = data.get("iletisimBilgiList")
-    if isinstance(contacts, list):
-        for group in contacts:
-            for item in group.get("iletisimBilgiList") or []:
-                if not isinstance(item, dict):
-                    continue
-                tip = (item.get("iletisimTipiAdiTR") or item.get("iletisimTipiAdiEN") or "").casefold()
-                if any(token in tip for token in ("telefon", "phone", "cep", "mobile", "adres", "address")):
-                    if item.get("degeri"):
-                        item["degeri"] = "***REDACTED***"
+    if not isinstance(data, dict):
+        return data
+    hidden: list[str] = []
+
+    def note(name: str) -> None:
+        if name not in hidden:
+            hidden.append(name)
+
+    def scrub(node: Any, path: str) -> Any:
+        if isinstance(node, dict):
+            for key in list(node):
+                value = node[key]
+                here = f"{path}.{key}" if path else str(key)
+                if key == "iletisimBilgiList":
+                    node[key] = scrub_contacts(value)
+                elif _SENSITIVE_KEY.search(normalize_lookup_text(str(key))):
+                    if value not in (None, "", [], {}):
+                        node[key] = REDACTED
+                        note(here)
+                else:
+                    node[key] = scrub(value, here)
+            return node
+        if isinstance(node, list):
+            return [scrub(item, path) for item in node]
+        if isinstance(node, str) and _EMAIL.search(node):
+            note(path)
+            return _EMAIL.sub(REDACTED, node)
+        return node
+
+    def scrub_contacts(node: Any) -> Any:
+        if isinstance(node, list):
+            return [scrub_contacts(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        if "iletisimBilgiList" in node:
+            node["iletisimBilgiList"] = scrub_contacts(node["iletisimBilgiList"])
+            return node
+        label = str(node.get("iletisimTipiAdiTR") or node.get("iletisimTipiAdiEN") or "")
+        kind = label.casefold()
+        value = node.get("degeri")
+        if value and (
+            any(token in kind for token in _SENSITIVE_CONTACT_TYPE)
+            or (isinstance(value, str) and _EMAIL.search(value))
+        ):
+            node["degeri"] = REDACTED
+            note(f"iletisimBilgiList: {clean_text(label) or 'unlabelled'}")
+        return node
+
+    scrub(data, "")
+    data["redacted_fields"] = hidden
+    if hidden:
+        data["redaction_note"] = _REDACTION_NOTE
     return data

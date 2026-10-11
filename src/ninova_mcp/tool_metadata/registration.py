@@ -8,7 +8,7 @@ REGISTRATION_TOOLS: list[dict[str, Any]] = [
     {
         "name": "obs_get_registration_status",
         "title": "OBS Registration Status",
-        "description": "Read official OBS registration status, class/GPA provenance and published class registration windows. Personal holds and credit limits are reported only when verified.",
+        "description": "Read official OBS registration status, class/GPA provenance and published class registration windows. official_term_gpa belongs to the latest reported term, which can be a summer term; last_regular_term holds the latest fall or spring term with its GPA and cumulative GPA. Personal holds and credit limits are reported only when verified.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
@@ -17,6 +17,7 @@ REGISTRATION_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read the saved OBS registration draft with CRNs, course names, saved eligibility "
             "verdicts, restriction reasons, last check time and available draft meeting times. "
+            "Each meeting gives room (the door label) and room_type (e.g. Amfi, Derslik). "
             "Reads the active registration term. Does not save or recheck the draft. "
             "Saved eligibility is a snapshot; use obs_validate_registration_plan for a fresh check."
         ),

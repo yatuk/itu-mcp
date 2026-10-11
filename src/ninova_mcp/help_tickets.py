@@ -10,6 +10,13 @@ from .parsing import clean_text, make_soup, normalize_lookup_text
 
 HELP_BASE = "https://yardim.itu.edu.tr/"
 SUMMARY_FIELDS = ("id", "title", "unit", "category", "status", "created_at", "updated_at", "url", "has_reply")
+# The Portal list widget returns id, title, status and link. These come only
+# from the ticket page, so a null in a list row is not a parsing gap.
+LIST_VIEW_ABSENT_FIELDS = ("unit", "category", "created_at", "updated_at", "has_reply")
+LIST_DATE_NOTE = (
+    "The list endpoint returns one date per ticket and does not say whether it is the creation "
+    "or the last update. Read the ticket for created_at and updated_at."
+)
 _DATE = re.compile(r"\b\d{1,2}[./]\d{1,2}[./]\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?")
 
 
@@ -80,6 +87,10 @@ def summary(item: dict[str, Any]) -> dict[str, Any]:
     status = _text(_first(item, "status", "TicketStateName", "Status", "StatusName"))
     reply = _first(item, "has_reply", "HasReply")
     reply = reply if isinstance(reply, bool) else None
+    # The widget fills this slot (BeforeCreateDate) with a relative age such
+    # as "2 dk" or with an absolute date. Only the first is an age.
+    listed = _text(_first(item, "age", "BeforeCreateDate", "date"))
+    list_date = date_value(listed)
     result = {
         "id": identifier,
         "title": _text(_first(item, "title", "Title", "Subject")),
@@ -90,8 +101,12 @@ def summary(item: dict[str, Any]) -> dict[str, Any]:
         "updated_at": date_value(_first(item, "updated_at", "UpdateDate", "UpdatedAt")),
         "url": url or (ticket_url(identifier) if identifier else None),
         "has_reply": reply,
-        "age": _text(_first(item, "age", "BeforeCreateDate", "date")),
+        "age": None if list_date else listed,
+        "list_date": list_date,
+        "list_date_raw": listed if list_date else None,
     }
+    if list_date:
+        result["list_date_note"] = LIST_DATE_NOTE
     # Preserve legacy widget fields. Relative age is separate from exact dates.
     for key in ("date", "archived"):
         if key in item:

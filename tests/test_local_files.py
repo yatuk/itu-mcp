@@ -472,7 +472,8 @@ class SensitiveOutputTests(LocalFileCase):
                 rendered = json.dumps(result, ensure_ascii=False)
                 for value in SENSITIVE_VALUES:
                     self.assertNotIn(value, rendered)
-                self.assertIn("ornek@itu.edu.tr", rendered)
+                self.assertNotIn("ornek@itu.edu.tr", rendered)
+                self.assertIn("iletisimBilgiList: E-posta", result["redacted_fields"])
                 self.assertEqual(result["sensitive_output"], "disabled_by_operator")
                 self.assertIn("NINOVA_ALLOW_SENSITIVE_OUTPUT=1", result["sensitive_output_note"])
                 plain = tool()

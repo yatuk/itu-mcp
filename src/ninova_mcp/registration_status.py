@@ -53,6 +53,42 @@ def _term(row: dict[str, Any] | None) -> dict[str, Any] | None:
             "academic_term": identity[1] if identity else None}
 
 
+def _is_summer(row: dict[str, Any]) -> bool:
+    """Summer by the term name, or by the term code when the name has no season."""
+    term = _term(row) or {}
+    if term.get("academic_term"):
+        return term["academic_term"] == "summer"
+    labels = normalize_lookup_text(" ".join(str(row.get(field) or "") for field in ("akademikDonemAdi", "akademikDonemAdiEN")))
+    if re.search(r"\b(?:yaz|summer)\b", labels):
+        return True
+    if re.search(r"\b(?:guz|fall|autumn|bahar|spring)\b", labels):
+        return False
+    return str(row.get("akademikDonemKodu") or "").endswith("30")
+
+
+def _last_regular_term(rows: Any, latest: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
+    """The latest fall or spring term, so a summer term does not stand for "last term"."""
+    if latest is None or not isinstance(rows, list):
+        return None, "The term records could not be read."
+    regular = [row for row in rows if not _is_summer(row)]
+    if not regular:
+        return None, "No fall or spring term is reported; only summer terms are present."
+    code = max(str(row["akademikDonemKodu"]) for row in regular)
+    candidates = [row for row in regular if str(row["akademikDonemKodu"]) == code]
+    if any(row != candidates[0] for row in candidates[1:]):
+        return None, "The last regular term has conflicting records."
+    chosen = candidates[0]
+    term = _term(chosen) or {}
+    summary = {**term, "gpa": chosen.get("donemlikNotOrtalamasi"), "cumulative_gpa": chosen.get("genelNotOrtalamasi"),
+               "class_label": chosen.get("sinifSeviye") or None,
+               "reported_term_credit": chosen.get("verilenKredi"), "source_url": _STATUS_SOURCE}
+    note = None
+    if _is_summer(latest):
+        note = ("The latest reported term is a summer term, so official_term_gpa describes summer courses only. "
+                "last_regular_term holds the latest fall or spring term.")
+    return summary, note
+
+
 def _active(row: dict[str, Any]) -> bool | None:
     text = normalize_lookup_text(str(row.get("durum") or ""))
     if re.fullmatch(r"(?:aktif|active)(?: ogrenci| student)?", text):
@@ -140,6 +176,14 @@ def summarize_registration_status(
         activity = {_active(row) for row in (program, matching) if row is not None} - {None}
         is_active = next(iter(activity)) if len(activity) == 1 else None
         display_program = matching if overall and matching else program
+        # The University Overall row leaves its label blank. Show the first
+        # label that is present and name the endpoint it came from.
+        status_label, status_source = program.get("durum"), None
+        for candidate, source in ((program, _STATUS_SOURCE), (matching, _LESSON_SOURCE)):
+            if candidate is not None and str(candidate.get("durum") or "").strip():
+                status_label, status_source = candidate.get("durum"), source
+                break
+        regular_term, regular_note = _last_regular_term(program.get("kayitDurumuDonemList"), latest)
         program_labels = " ".join(str(display_program.get(field) or "") for field in ("akademikProgramAdi", "akademikProgramAdiEN"))
         graduate = bool(re.search(r"\b(?:lisansustu|yuksek lisans|master|masters|doctoral|doctorate|phd|doktora|hazirlik|preparatory)\b", normalize_lookup_text(program_labels)))
         window = reopening = None
@@ -168,7 +212,8 @@ def summarize_registration_status(
             "program_name_en": display_program.get("akademikProgramAdiEN"), "department": display_program.get("akademikBolumAdi"),
             "program_match_method": match_method,
             "academic_status_scope": "university_overall" if overall else "program",
-            "enrollment_status": program.get("durum"), "enrollment_status_code": program.get("durumKodu"), "active": is_active,
+            "enrollment_status": status_label, "enrollment_status_source": status_source,
+            "enrollment_status_code": program.get("durumKodu"), "active": is_active,
             "enrollment_status_evidence": [{"value": row.get("durum"), "source_url": source}
                 for row, source in ((program, _STATUS_SOURCE), (matching, _LESSON_SOURCE)) if row is not None],
             "class_level": level, "class_label": label or None,
@@ -178,6 +223,8 @@ def summarize_registration_status(
             "official_term_gpa": (latest or {}).get("donemlikNotOrtalamasi"),
             "official_cumulative_gpa": (latest or {}).get("genelNotOrtalamasi"),
             "reported_term_credit": {"value": (latest or {}).get("verilenKredi"), "source_field": "verilenKredi"},
+            "latest_term_is_summer": _is_summer(latest) if latest else None,
+            "last_regular_term": regular_term, "last_regular_term_note": regular_note,
             "course_registration_term": target_term,
             "registration_permission": {"status": (lesson_latest or {}).get("dersKayitDurumu"), "source_url": _LESSON_SOURCE,
                 "notice": "The reported permission is not evidence that every personal hold or CRN restriction is clear."},
