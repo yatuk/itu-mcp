@@ -20,6 +20,7 @@ from .operator_settings import (
     extra_directories,
 )
 from .parsing import sanitize_filename
+from .private_io import PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, ensure_private_dir
 
 MAX_FILENAME_CHARS = 180
 NEUTRAL_SUFFIX = ".download"
@@ -182,7 +183,11 @@ def resolve_output_dir(
     target = raw if raw else (default or downloads_dir(state_dir))
     extras = extra_directories(EXTRA_DOWNLOAD_DIRS_ENV)
     resolved = _confine(target, state_dir=state_dir, extras=extras, what="output_dir")
-    resolved.mkdir(parents=True, exist_ok=True)
+    own_downloads = downloads_dir(state_dir).resolve()
+    if _inside(resolved, own_downloads):
+        # Ours: owner-only. A directory the operator listed keeps its own mode.
+        ensure_private_dir(own_downloads)
+    resolved.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
     # Once more now that it exists: a link created in between must not win.
     return _confine(resolved, state_dir=state_dir, extras=extras, what="output_dir")
 
@@ -220,7 +225,8 @@ def create_new_file(directory: Path, name: str) -> tuple[Path, BinaryIO]:
 
     An existing name gets ``-2``, ``-3`` and so on before the extension. The
     file is opened in exclusive mode, so a file that appears in between is not
-    overwritten either.
+    overwritten either. It is created owner-only: course files and transcripts
+    are the user's, not every local account's.
     """
     stem, suffix = os.path.splitext(name)
     stem = stem or "download"
@@ -228,7 +234,8 @@ def create_new_file(directory: Path, name: str) -> tuple[Path, BinaryIO]:
     while True:
         candidate = directory / (name if counter == 1 else f"{stem}-{counter}{suffix}")
         try:
-            return candidate, candidate.open("xb")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            return candidate, os.fdopen(os.open(candidate, flags, PRIVATE_FILE_MODE), "wb")
         except FileExistsError:
             counter += 1
             if counter > 10_000:

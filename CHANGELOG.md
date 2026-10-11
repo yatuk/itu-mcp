@@ -47,7 +47,8 @@
 - Metin çıkarmada 25 MiB üstü dosyalar okunmuyor, PDF'lerde ilk 50 sayfa okunuyor ve sonuç bunu
   belirtiyor. Kapatılmamış `<script>` etiketleri artık işlemi yavaşlatmıyor
 - Oturum çerezleri, takip durumu ve kontenjan izleme dosyaları Linux ve macOS'ta `0600`, durum
-  klasörü `0700` izniyle yazılıyor. Windows'ta koruma kullanıcı profili klasörünün erişim
+  klasörü `0700` izniyle yazılıyor. Sayfa anlık görüntüleri, indirilen dosyalar ve indirme
+  klasörü için de aynısı geçerli. Windows'ta koruma kullanıcı profili klasörünün erişim
   listesinden gelir
 
 #### Ödev yükleme ve hassas bilgi
@@ -101,7 +102,7 @@
 
 - GitHub Actions adımları commit SHA'sına sabitlendi, iş izinleri daraltıldı. `mcp-publisher` ve
   pakete giren CPython çalışma zamanı sabit sürümden indirilip SHA-256 ile doğrulanıyor
-- Bağımlılık alt sınırları yükseltildi: `pypdf>=6.14.2`, `starlette>=1.3.1`, `requests>=2.33.0`,
+- Bağımlılık alt sınırları yükseltildi: `pypdf>=6.19.0`, `starlette>=1.3.1`, `requests>=2.33.0`,
   `mcp>=1.28.1`, `lxml>=6.1.0`
 - Depodaki `mcp-publisher` ikili dosyaları ve `scripts/_probe_onsart.py` kaldırıldı
 

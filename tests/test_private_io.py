@@ -227,3 +227,35 @@ class PosixModeTests(_TempCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DownloadAndSnapshotFileTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="itu-private-files-")))
+
+    def test_new_download_file_is_exclusive_and_numbered(self) -> None:
+        from ninova_mcp.local_files import create_new_file
+
+        first, handle = create_new_file(self.root, "notes.pdf")
+        handle.write(b"one")
+        handle.close()
+        second, handle = create_new_file(self.root, "notes.pdf")
+        handle.close()
+        self.assertEqual(first.read_bytes(), b"one")
+        self.assertEqual(second.name, "notes-2.pdf")
+
+    @unittest.skipUnless(POSIX, "POSIX permission bits; Windows relies on the profile directory ACL")
+    def test_download_file_and_directory_are_owner_only(self) -> None:
+        from ninova_mcp.local_files import create_new_file, resolve_output_dir
+
+        state = self.root / "state"
+        previous = os.umask(0o022)
+        try:
+            target = resolve_output_dir("course", state_dir=state)
+            path, handle = create_new_file(target, "notes.pdf")
+            handle.close()
+        finally:
+            os.umask(previous)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((state / "downloads").stat().st_mode), 0o700)

@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .client import NinovaClient, NinovaError
+from .private_io import write_private_text
 from .local_files import (
     LocalFileError,
     create_new_file,
@@ -325,10 +326,10 @@ class PageFileToolsMixin:
         page_data = parse_html_page(response.url, html, base_url=self.client.base_url)
         payload = make_snapshot_payload(page_data, label=label)
         snapshot_path = self._snapshot_path(page_data["url"], label=label)
-        # Write-then-rename: a crash mid-write must not leave a truncated
-        # file that a later diff_snapshot scan would trip over.
-        tmp_path = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
-        tmp_path.write_text(
+        # Owner-only, and written then renamed: a crash mid-write must not leave
+        # a truncated file that a later diff_snapshot scan would trip over.
+        write_private_text(
+            snapshot_path,
             json.dumps(
                 {
                     "captured_at": datetime.now(tz=UTC).isoformat(),
@@ -337,9 +338,7 @@ class PageFileToolsMixin:
                 ensure_ascii=False,
                 indent=2,
             ),
-            encoding="utf-8",
         )
-        tmp_path.replace(snapshot_path)
         return {
             "snapshot_path": str(snapshot_path),
             "url": page_data["url"],

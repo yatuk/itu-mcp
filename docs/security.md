@@ -303,7 +303,7 @@ File permissions:
   cannot read it, administrators can. If you move the state directory with
   `NINOVA_STATE_DIR`, it gets the access rules of the place you chose. The server
   does not change Windows ACLs.
-- Page snapshots and files saved by `download_resource` are written with the
-  default permissions of the process on every platform. Inside the default state
-  directory they are covered by its `0700` mode on Linux and macOS, once a
-  session, tracking or seat-watch file has been written there.
+- Page snapshots and files saved by `download_resource` are written `0600` on
+  Linux and macOS, and the state, snapshot and downloads directories are `0700`
+  from startup. A directory listed in `NINOVA_EXTRA_DOWNLOAD_DIRS` keeps its own
+  mode; the files written into it are still `0600`.

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from .cache import TtlCache, parse_ttl_seconds
 from .compact import maybe_compact
+from .private_io import ensure_private_dir
 
 if TYPE_CHECKING:
     from .archive_client import ItuArchiveClient
@@ -78,7 +79,8 @@ class AppBase:
         self.state_dir = Path(state_root)
         self.snapshot_dir = self.state_dir / "snapshots"
         self.tracking_state_path = self.state_dir / "tracking-state.json"
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.state_dir)
+        ensure_private_dir(self.snapshot_dir)
         course_ttl = parse_ttl_seconds(
             os.getenv("NINOVA_COURSE_CACHE_TTL_SECONDS"),
             DEFAULT_COURSE_CACHE_TTL_SECONDS,
