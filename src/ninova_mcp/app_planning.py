@@ -92,9 +92,12 @@ class PlanningToolsMixin:
         ambiguity = reconcile_credit_candidates(courses, reference.get("gpa"))
         projection, unmatched_keys = resolve_projection_keys(projected_grades, courses)
         result = calculate_gpa(courses, projected_grades=projection or None)
+        # A credit the official average fixed is no longer one of two possible values.
+        open_codes = {course["code"] for course in courses if "credit_choice" not in course}
         attach_official_reference(
             result, reference, projection=bool(projected_grades),
-            ambiguous_credits=ambiguity["courses"] if ambiguity else [],
+            ambiguous_credits=[entry for entry in ambiguity["courses"] if entry["code"] in open_codes]
+            if ambiguity else [],
         )
         result["semester"] = term_reference(resolved)
         result["attempts_status"] = "from_graduation_plan" if graduation_info else "unavailable"
@@ -147,7 +150,7 @@ class PlanningToolsMixin:
 
         grades: dict[str, set[str]] = {}
         for row in plan_rows(info):
-            if row["term"] == str(donem_kodu) and row["code"] and row["grade"]:
+            if row["term"] == str(donem_kodu).strip() and row["code"] and row["grade"]:
                 grades.setdefault(row["code"], set()).add(row["grade"])
         return {code: next(iter(values)) for code, values in grades.items() if len(values) == 1}
 

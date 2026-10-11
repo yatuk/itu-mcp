@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .archive import normalize_course_code
 from .client import NinovaError
-from .gpa import _name_key, _positive_credit, attempt_notes, parse_credit
+from .gpa import _positive_credit, attempt_notes
+from .gpa_common import course_key, course_name_key, parse_credit, recorded_grade
 from .gpa_reference import official_term_reference
 from .grading import LETTER_TO_GRADE, normalize_grade
 
@@ -41,12 +41,13 @@ def _credit_with_plan_fallback(item: dict[str, Any], plan: dict[str, Any]) -> tu
     is kept when it is a positive number; otherwise the degree-plan credit is
     used and named as the source. A course's credit does not depend on the
     attempt, so a plan row of another term is accepted when this term has none.
+    A plan credit of 0 is a real zero-credit course, not a missing credit.
     """
     credit = item.get("kredi")
     if _positive_credit(credit) is not None:
         return credit, "registration", False
     fallback = plan.get("credit")
-    if not fallback:
+    if fallback is None:
         return credit, "registration", True
     return fallback, "degree_plan_other_term" if plan["scope"] == "other_term" else "degree_plan", False
 
@@ -64,7 +65,7 @@ def _grade_with_plan_fallback(
     risk picking the wrong attempt's grade.
     """
     grade = item.get("harfNotu")
-    if not grade:
+    if not recorded_grade(grade):  # nothing, or a value that is not text: no grade yet
         fallback = plan_grades.get(code_key)  # type: ignore[arg-type]
         if fallback:
             return fallback, "degree_plan"
@@ -85,10 +86,8 @@ def term_course(
     ``gpa.plan_rows`` of the same graduation payload.
     """
     code = f"{item.get('bransKodu', '')} {item.get('dersKodu', '')}".strip()
-    try:
-        code_key = normalize_course_code(code)
-    except ValueError:
-        code_key = None
+    # The key the plan rows carry, so a code OBS spells unusually still finds its row.
+    code_key = course_key(code) or None
     plan_entry = credit_table.get(code_key) or {}  # type: ignore[arg-type]
     credit, credit_source, credit_missing = _credit_with_plan_fallback(item, plan_entry)
     grade, grade_source = _grade_with_plan_fallback(item, plan_grades, code_key)
@@ -113,8 +112,8 @@ def term_course(
             course["credit_candidates"] = sorted({credit, counted})
     attempts = attempt_notes(
         plan, code=code_key, term_code=term_code,
-        names={_name_key(item.get(field)) for field in ("dersAdiTR", "dersAdiEN")},
-        credits={value for value in (parse_credit(credit), counted) if value},
+        names={course_name_key(item.get(field)) for field in ("dersAdiTR", "dersAdiEN")},
+        credits={value for value in (parse_credit(credit), counted) if value is not None},
     )
     if attempts:
         course["attempts"] = attempts

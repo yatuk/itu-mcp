@@ -24,26 +24,46 @@ from __future__ import annotations
 
 import itertools
 import math
-import re
-import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .gpa import COUNTED_GRADES, LETTER_TO_GRADE, UNCOUNTED_GRADES, course_key, parse_credit
-from .gpa import finite_number as _number
+from .gpa import COUNTED_GRADES, LETTER_TO_GRADE, UNCOUNTED_GRADES
 from .gpa import letter_grade_argument as _grade_argument
-from .grading import FAILING_GRADES, normalize_grade
+
+# What this tool and the term average decide alike lives in gpa_common.
+from .gpa_common import (
+    AVERAGE_TOLERANCE,
+    MAX_AMBIGUOUS_CREDIT_ROWS,
+    conflicting_attempts,
+    course_key,
+    decide_credits,
+    parse_credit,
+    plan_records,
+    projection_target,
+    term_number,
+)
+from .gpa_common import course_name_key as _name_key
+from .gpa_common import finite_number as _number
+from .gpa_common import reproduces_official as _matches
+from .gpa_common import round_average as _round2
+from .grading import FAILING_GRADES
 
 GRADED = COUNTED_GRADES
 UNGRADED = UNCOUNTED_GRADES
 _FAILING = frozenset(grade for grade in FAILING_GRADES if LETTER_TO_GRADE.get(grade) is not None)
 _EXTRA_KEYS = frozenset({"code", "grade", "credit", "replaces"})
 _AFTER_EVERYTHING = 10**9
-# Two-decimal official values: accept either rounding of an exact half.
-_TOLERANCE = 0.005 + 1e-9
 _MAX_EQUIVALENCE_CANDIDATES = 8
-_MAX_CREDIT_ROWS_PER_TERM = 6
+_MAX_CREDIT_ROWS_PER_TERM = MAX_AMBIGUOUS_CREDIT_ROWS
 _MAX_RANGE_ROWS = 4
+# Why the official term average did not fix a credit, by gpa_common.CreditDecision.reason.
+_UNDECIDED_BASIS = {
+    "no_official_average": "no official term average to compare with",
+    "too_many_candidates": "too many courses of the term carry two credit values to test them",
+    "not_comparable": "a grade or a credit of the term is not known, so its average cannot be rebuilt",
+    "none_reproduces": "neither credit reproduces the official term average",
+    "several_reproduce": "both credits reproduce the official term average",
+}
 
 NOTE = (
     "Estimate computed from the student's own OBS record under the stated assumptions "
@@ -61,6 +81,8 @@ class _Attempt:
     grade: str
     credit: float | None
     alt_credit: float | None = None
+    # The value the official average ruled out; the course name can still be known under it.
+    other_credit: float | None = None
     source: str = "plan"
     rank: int = 1
     term_order: int | None = None
@@ -75,28 +97,12 @@ class _Attempt:
 
 
 def _term_key(term: Any) -> int:
-    text = str(term or "").strip()
-    return int(text) if text.isdigit() else 0
-
-
-def _name_key(value: Any) -> str:
-    """Case, accent, punctuation and whitespace insensitive course name."""
-    text = str(value or "").translate({ord("ı"): "i", ord("İ"): "i"}).casefold()
-    text = unicodedata.normalize("NFKD", text.replace("&", " and "))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+    """Where a term sorts: a term without a numeric code sorts like an undated record."""
+    return term_number(term) or 0
 
 
 def _same(left: float | None, right: float | None) -> bool:
     return left is not None and right is not None and abs(left - right) < 1e-9
-
-
-def _matches(calculated: float | None, official: float) -> bool:
-    return calculated is not None and abs(calculated - official) <= _TOLERANCE
-
-
-def _round2(value: float | None) -> float | None:
-    return None if value is None else round(value + 1e-9, 2)
 
 
 def _clean(value: float) -> float:
@@ -195,50 +201,50 @@ def _graduation_info(payload: Any) -> dict[str, Any]:
     return payload if "checkMetMezuniyetList" in payload or "unusedSinifOgrenciList" in payload else {}
 
 
-def _row_credit(row: dict[str, Any]) -> float | None:
-    credit = parse_credit(row.get("kredisiDec"))
-    return credit if credit is not None else parse_credit(row.get("kredisi"))
+def _read_record(info: dict[str, Any]) -> tuple[list[_Attempt], dict[str, set[float]], list[str], set[str]]:
+    """Graded attempts, the credit values seen per course code, warnings, and open terms.
 
-
-def _read_record(info: dict[str, Any]) -> tuple[list[_Attempt], dict[str, set[float]], list[str]]:
-    """Graded attempts, the credit values seen per course code, and warnings."""
+    The rows are read by ``gpa_common.plan_records``, which the term tool
+    reads too. An open term has a course whose grade or credit is not known,
+    so its official average cannot be compared with the attempts read here.
+    """
+    records = [row for row in plan_records(info) if row["code"]]
+    conflicts = conflicting_attempts(records)
     attempts: list[_Attempt] = []
     plan_credits: dict[str, set[float]] = {}
     seen: set[tuple[str, str]] = set()
     without_credit: list[str] = []
-    for bucket, source, rank in (("checkMetMezuniyetList", "plan", 1), ("unusedSinifOgrenciList", "unused", 0)):
-        rows = info.get(bucket)
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            code = str(row.get("bransKodu") or "").strip()
-            if not code:
-                continue
-            key = course_key(code)
-            credit = _row_credit(row)
-            if credit is not None:
-                plan_credits.setdefault(key, set()).add(credit)
-            grade = normalize_grade(row.get("harfNotu"))
-            if not grade:
-                continue
-            term = str(row.get("donem") or "").strip()
-            if term and (key, term) in seen:
-                continue
+    conflicting: list[str] = []
+    open_terms: set[str] = set()
+    for row in records:
+        key, term, grade, credit = row["code"], row["term"], row["grade"], row["credit"]
+        if credit is not None:
+            plan_credits.setdefault(key, set()).add(credit)
+        if (key, term) in conflicts:
+            open_terms.add(term)
+            if (key, term) not in seen:
+                conflicting.append(f"{row['label']} ({term})")
             seen.add((key, term))
-            alt = None
-            if source == "plan" and LETTER_TO_GRADE.get(grade) is not None:
-                counted = parse_credit(row.get("sayilanKredi"))
-                if counted is not None and counted > 0:
-                    if credit is None:
-                        credit = counted
-                    elif not _same(counted, credit):
-                        alt = counted
-            if credit is None and LETTER_TO_GRADE.get(grade) is not None:
-                without_credit.append(f"{code} ({term or 'no term'})")
-            attempts.append(_Attempt(
-                key=key, code=code, name=str(row.get("dersAdi") or "").strip(), term=term,
-                grade=grade, credit=credit, alt_credit=alt, source=source, rank=rank,
-            ))
+            continue
+        if not grade:
+            open_terms.add(term)
+            continue
+        if term and (key, term) in seen:
+            continue
+        seen.add((key, term))
+        alt = None
+        if grade not in LETTER_TO_GRADE:
+            open_terms.add(term)
+        elif LETTER_TO_GRADE[grade] is not None:
+            if credit is None:
+                open_terms.add(term)
+                without_credit.append(f"{row['label']} ({term or 'no term'})")
+            elif row["met"] and row["counted_credit"] is not None and not _same(row["counted_credit"], credit):
+                alt = row["counted_credit"]
+        attempts.append(_Attempt(
+            key=key, code=row["label"], name=row["title"], term=term, grade=grade, credit=credit,
+            alt_credit=alt, source="unused" if row["unused"] else "plan", rank=0 if row["unused"] else 1,
+        ))
     attempts.sort(key=lambda a: (a.term_key, a.rank))
     warnings = []
     if without_credit:
@@ -246,7 +252,12 @@ def _read_record(info: dict[str, Any]) -> tuple[list[_Attempt], dict[str, set[fl
             "attempt_without_credit: graded attempts with no readable credit were left out: "
             + ", ".join(without_credit)
         )
-    return attempts, plan_credits, warnings
+    if conflicting:
+        warnings.append(
+            "conflicting_attempts: the record states two grades or two credits for one course in one "
+            "term; these attempts were left out: " + ", ".join(conflicting)
+        )
+    return attempts, plan_credits, warnings, open_terms - {""}
 
 
 def _official_terms(payload: Any, official_gpa: float | None) -> tuple[list[dict[str, Any]], str | None]:
@@ -338,9 +349,12 @@ def _gpa(credits: float, points: float) -> float | None:
 
 
 def _resolve_credits(
-    attempts: list[_Attempt], official: dict[str, dict[str, Any]],
+    attempts: list[_Attempt], official: dict[str, dict[str, Any]], open_terms: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[_Attempt], list[dict[str, Any]], list[int]]:
-    """Pick between ``kredisi`` and ``sayilanKredi`` with the official term average."""
+    """Pick between ``kredisi`` and ``sayilanKredi`` with the official term average.
+
+    The rule is ``gpa_common.decide_credits``, which the term tool follows too.
+    """
     attempts = list(attempts)
     choices: list[dict[str, Any]] = []
     undecided: list[int] = []
@@ -349,40 +363,58 @@ def _resolve_credits(
         if attempt.alt_credit is not None:
             by_term.setdefault(attempt.term, []).append(index)
     for term, indexes in by_term.items():
-        target = (official.get(term) or {}).get("term_gpa")
-        in_term = [i for i, a in enumerate(attempts)
-                   if a.term == term and a.coefficient is not None and a.credit is not None]
-        fitting: list[tuple[float | None, ...]] = []
-        if target is not None and term and len(indexes) <= _MAX_CREDIT_ROWS_PER_TERM:
-            options = [(attempts[i].credit, attempts[i].alt_credit) for i in indexes]
-            for combo in itertools.product(*options):
-                picked = dict(zip(indexes, combo))
-                weights = [(picked.get(i, attempts[i].credit) or 0.0, attempts[i].coefficient or 0.0) for i in in_term]
-                credits = math.fsum(c for c, _ in weights)
-                if credits > 0 and _matches(math.fsum(c * k for c, k in weights) / credits, target):
-                    fitting.append(combo)
-        for position, index in enumerate(indexes):
+        target = (official.get(term) or {}).get("term_gpa") if term else None
+        fixed = [
+            (a.credit, a.coefficient) for i, a in enumerate(attempts)
+            if a.term == term and i not in indexes and a.coefficient is not None and a.credit is not None
+        ]
+        options = [(attempts[i].credit or 0.0, attempts[i].alt_credit or 0.0) for i in indexes]
+        decision = decide_credits(
+            fixed, [(pair, attempts[i].coefficient or 0.0) for pair, i in zip(options, indexes, strict=True)],
+            target, comparable=term not in open_terms, max_rows=_MAX_CREDIT_ROWS_PER_TERM,
+        )
+        for index, pair, pick in zip(indexes, options, decision.decided, strict=True):
             attempt = attempts[index]
-            values = {combo[position] for combo in fitting}
             choice = {
                 "code": attempt.code, "term": term or None, "grade": attempt.grade,
                 "kredisi": attempt.credit, "sayilanKredi": attempt.alt_credit,
             }
-            if len(values) == 1:
-                chosen = values.pop()
-                attempts[index] = replace(attempt, credit=chosen, alt_credit=None)
-                choice.update(chosen=chosen, decided=True,
+            if pick is not None:
+                attempts[index] = replace(attempt, credit=pair[pick], alt_credit=None, other_credit=pair[1 - pick])
+                choice.update(chosen=pair[pick], decided=True,
                               basis=f"only this credit reproduces the official term average {target} of {term}")
             else:
                 undecided.append(index)
-                reason = (
-                    "no official term average to compare with" if target is None or not term
-                    else "both credits reproduce the official term average" if fitting
-                    else "neither credit reproduces the official term average"
-                )
-                choice.update(chosen=attempt.credit, decided=False, basis=reason)
+                choice.update(chosen=attempt.credit, decided=False, basis=_UNDECIDED_BASIS[decision.reason])
             choices.append(choice)
     return attempts, choices, undecided
+
+
+@dataclass
+class _Record:
+    """The student's record with its credits settled: what the projection starts from."""
+
+    attempts: list[_Attempt]
+    plan_credits: dict[str, set[float]]
+    warnings: list[str]
+    official_gpa: float | None
+    official_terms: list[dict[str, Any]]
+    credit_choices: list[dict[str, Any]]
+    undecided: list[int]
+
+
+def rebuild_record(info: dict[str, Any], registration_status: Any) -> _Record:
+    """Read the unwrapped graduation payload and settle the credits term by term."""
+    official_gpa = _number(info.get("gpa"))
+    attempts, plan_credits, warnings, open_terms = _read_record(info)
+    if not any(a.coefficient is not None for a in attempts) and official_gpa == 0:
+        official_gpa = None  # nothing graded yet: 0 is a placeholder, not an average
+    official_terms, series_warning = _official_terms(registration_status, official_gpa)
+    if series_warning:
+        warnings.append(series_warning)
+    attempts, credit_choices, undecided = _resolve_credits(
+        attempts, {t["term"]: t for t in official_terms}, open_terms)
+    return _Record(attempts, plan_credits, warnings, official_gpa, official_terms, credit_choices, undecided)
 
 
 def _equivalence_candidates(attempts: list[_Attempt]) -> list[tuple[_Attempt, _Attempt]]:
@@ -403,7 +435,7 @@ def _equivalence_candidates(attempts: list[_Attempt]) -> list[tuple[_Attempt, _A
             later = [
                 a for a in others
                 if a.term_key > last.term_key and _name_key(a.name) == name
-                and (_same(a.credit, last.credit) or _same(a.alt_credit, last.credit))
+                and any(_same(value, last.credit) for value in (a.credit, a.alt_credit, a.other_credit))
             ]
             if later:
                 pairs.append((last, later[0]))
@@ -425,7 +457,7 @@ def _check(
         calculated = _gpa(*_sum(_state(attempts, groups, upto=key)))
         if official == 0 and (
             key not in with_attempts or calculated is None
-            or (not term["credits"] and calculated > _TOLERANCE)
+            or (not term["credits"] and calculated > AVERAGE_TOLERANCE)
         ):
             continue  # a term OBS lists before its grades are final: 0 is a placeholder
         rows.append({"term": term["term"], "official": official,
@@ -638,11 +670,15 @@ def _assign_grades(
 ) -> tuple[dict[str, str], list[dict[str, Any]], dict[str, Any] | None]:
     """Projected grade per registered course, the remaining extras, and unmatched keys."""
     by_key = {course["key"]: course for course in courses}
-    by_crn = {crn: course for course in courses for crn in course["crns"]}
+    courses_of_crn: dict[str, set[str]] = {}
+    for course in courses:
+        for crn in course["crns"]:
+            courses_of_crn.setdefault(crn, set()).add(course["key"])
     grades: dict[str, str] = {}
     unmatched: list[str] = []
     for raw, grade in arguments["grades"].items():
-        course = by_crn.get(raw) or by_key.get(course_key(raw))
+        # The same key rule as the term tool: gpa_common.projection_target.
+        course = by_key.get(projection_target(raw, courses_of_crn, set(by_key)) or "")
         if course is None:
             unmatched.append(raw)
         elif grades.setdefault(course["key"], grade) != grade:
@@ -754,17 +790,12 @@ def simulate_cumulative_gpa(
     term = str(term_code).strip() if term_code is not None and not isinstance(term_code, bool) else None
     info = _graduation_info(graduation)
     plan = info.get("dersPlaniVM")
-    official_gpa = _number(info.get("gpa"))
     required = _number(plan.get("gerekliMinGPA")) if isinstance(plan, dict) else None
 
-    attempts, plan_credits, warnings = _read_record(info)
-    if not any(a.coefficient is not None for a in attempts) and official_gpa == 0:
-        official_gpa = None  # nothing graded yet: 0 is a placeholder, not an average
-    official_terms, series_warning = _official_terms(registration_status, official_gpa)
-    if series_warning:
-        warnings.append(series_warning)
-
-    attempts, credit_choices, undecided = _resolve_credits(attempts, {t["term"]: t for t in official_terms})
+    record = rebuild_record(info, registration_status)
+    attempts, plan_credits, warnings = record.attempts, record.plan_credits, record.warnings
+    official_gpa, official_terms = record.official_gpa, record.official_terms
+    credit_choices, undecided = record.credit_choices, record.undecided
     pairs = _equivalence_candidates(attempts)
     if len(pairs) > _MAX_EQUIVALENCE_CANDIDATES:
         warnings.append(
