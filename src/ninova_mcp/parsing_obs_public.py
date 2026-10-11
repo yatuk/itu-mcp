@@ -149,27 +149,21 @@ def _prerequisite_entry(row: Any, headers: list[str]) -> dict[str, Any] | None:
     return None
 
 
+def _first_field(entry: dict[str, Any], *keys: str) -> str | None:
+    """The cleaned value of the first of ``keys`` that the entry has a value for."""
+    for key in keys:
+        if entry.get(key):
+            return clean_text(entry[key])
+    return None
+
+
 def _prerequisite_record(entry: dict[str, Any]) -> dict[str, Any]:
     # Normalise common field names
-    code = (
-        entry.get("Ders Kodu")
-        or entry.get("On Sart Ders Kodu")
-        or entry.get("DersKodu")
-        or ""
-    )
-    name = (
-        entry.get("Ders Adı")
-        or entry.get("Ders Adi")
-        or entry.get("On Sart Ders Adı")
-        or ""
-    )
-    group = entry.get("Grup No") or entry.get("Grup") or None
-    prereq_type = entry.get("Tip") or entry.get("Tür") or entry.get("Tur") or None
     return {
-        "code": clean_text(code) if code else None,
-        "name": clean_text(name) if name else None,
-        "group": clean_text(group) if group else None,
-        "type": clean_text(prereq_type) if prereq_type else None,
+        "code": _first_field(entry, "Ders Kodu", "On Sart Ders Kodu", "DersKodu"),
+        "name": _first_field(entry, "Ders Adı", "Ders Adi", "On Sart Ders Adı"),
+        "group": _first_field(entry, "Grup No", "Grup"),
+        "type": _first_field(entry, "Tip", "Tür", "Tur"),
         "_raw": entry,
     }
 
