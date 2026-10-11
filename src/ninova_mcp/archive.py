@@ -1049,7 +1049,12 @@ def related_course_codes(course_code: str, known_codes: Any) -> list[str]:
     return sorted(set(related))
 
 
-def _grade_term_entry(record: dict[str, Any]) -> dict[str, Any]:
+# How many terms a grade distribution returns unless the caller asks for more.
+GRADE_DISTRIBUTION_DEFAULT_TERMS = 6
+GRADE_DISTRIBUTION_MAX_TERMS = 30
+
+
+def _grade_term_entry(record: dict[str, Any], *, include_percentages: bool = False) -> dict[str, Any]:
     raw = record.get("grades")
     grades = dict(raw) if isinstance(raw, dict) else {}
     counted = sum(value for value in grades.values() if _is_count(value))
@@ -1062,15 +1067,16 @@ def _grade_term_entry(record: dict[str, Any]) -> dict[str, Any]:
         "counted_total": counted,
         "total_mismatch": not _is_count(total) or total != counted,
         "grades": grades,
+    }
+    if include_percentages:
         # Shares of the counted grades, so they add up to 100 even when the
-        # published total disagrees with the counts.
-        "percentages": {
+        # published total disagrees with the counts. No counted grade, no share.
+        entry["percentages"] = {
             label: round(value * 100 / counted, 1)
             for label, value in grades.items()
             if _is_count(value)
-        } if counted > 0 else {},
-        "source_url": record.get("sourceUrl"),
-    }
+        } if counted > 0 else {}
+    entry["source_url"] = record.get("sourceUrl")
     if entry["total_mismatch"] and _is_count(total):
         entry["total_difference"] = total - counted
     return entry
@@ -1081,12 +1087,17 @@ def grade_distribution(
     course_code: str,
     *,
     term: str | None = None,
+    include_percentages: bool = False,
+    limit_terms: int | None = None,
 ) -> dict[str, Any]:
     """Shape one course's letter grade records out of a branch grades file.
 
     Only records whose code matches exactly are used. Grade labels are passed
     through as published (including the ``+`` grades and anything unexpected
     like ``BL``); a label missing from a term is left missing, not zero-filled.
+    Counts are always returned; ``include_percentages`` adds the shares.
+    ``limit_terms`` keeps the most recent terms only: ``total_term_count``
+    says how many there are and ``available_terms`` names all of them.
     """
     target = _code_key(course_code)
     by_code: dict[str, list[dict[str, Any]]] = {}
@@ -1099,7 +1110,7 @@ def grade_distribution(
 
     entries = []
     for record in own:
-        entry = _grade_term_entry(record)
+        entry = _grade_term_entry(record, include_percentages=include_percentages)
         # The archive has been seen to store the very same OBS distribution
         # under both language variants. Say so, so nobody adds them together.
         twins = sorted({
@@ -1126,11 +1137,17 @@ def grade_distribution(
     else:
         coverage = "covered"
 
+    total_terms = len(entries)
+    if limit_terms is not None:
+        entries = entries[:max(1, limit_terms)]
+
     return {
         "course_code": course_code,
         "term_filter": term,
         "coverage": coverage,
         "term_count": len(entries),
+        "total_term_count": total_terms,
+        "truncated": total_terms > len(entries),
         "available_terms": available,
         "mismatch_term_count": sum(1 for e in entries if e["total_mismatch"]),
         "terms": entries,

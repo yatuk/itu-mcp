@@ -278,10 +278,6 @@ class ArchiveHistoryToolsMixin:
             "terms": terms,
             "missing_terms": [t.get("slug") for t in terms if isinstance(t, dict) and t.get("missing")],
             "coverage_may_differ": outliers,
-            "note": (
-                "Arşiv, OBS'nin yalnızca aktif dönemi yayınlaması nedeniyle tutuluyor. "
-                "Aktif dönem OBS'den, geçmiş dönemler tarihsel dökümlerden geliyor."
-            ),
             "untrusted_external_content": True,
         }
         if outliers:
