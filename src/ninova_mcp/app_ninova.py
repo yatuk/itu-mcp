@@ -111,14 +111,6 @@ class NinovaCourseToolsMixin:
             result["parse_warning"] = dashboard["parse_warning"]
         return result
 
-    @staticmethod
-    def _looks_like_authenticated_dashboard(page_data: dict[str, Any], html: str) -> bool:
-        text = normalize_lookup_text(page_data.get("text_excerpt") or page_data.get("text") or "")
-        if "kampus" in text or "dersler" in text or "hos geldiniz" in text:
-            return True
-        lower_html = html.casefold()
-        return "/sinif/" in lower_html or "kampus1" in lower_html
-
     def get_course_announcements(
         self,
         course: str,

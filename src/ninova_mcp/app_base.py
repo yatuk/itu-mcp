@@ -83,7 +83,10 @@ class AppBase:
             os.getenv("NINOVA_COURSE_CACHE_TTL_SECONDS"),
             DEFAULT_COURSE_CACHE_TTL_SECONDS,
         )
-        self._course_cache: TtlCache[list[dict[str, Any]]] = TtlCache(course_ttl)
+        # Named after its first use, but this is the app's general TTL cache.
+        # Besides the course list it holds the Portal homepage ("portal_home")
+        # and parsed help tickets ("help_ticket:<id>"), all with the same TTL.
+        self._course_cache: TtlCache[Any] = TtlCache(course_ttl)
         self._course_cache_ttl_seconds = course_ttl
 
     @property

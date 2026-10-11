@@ -1,10 +1,11 @@
-"""İTÜ Portal tools: campus card, notifications, help tickets and storage quota.
+"""İTÜ Portal tools: campus card, cafeteria menu, notifications, help tickets and storage quota.
 
-The Portal helpers here are also used by the cafeteria menu in ``app_campus``.
+All of them need a login: each one goes through the Portal SSO session.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from .client import NinovaClient, NinovaError
@@ -12,7 +13,7 @@ from .parsing import normalize_lookup_text
 
 
 class PortalToolsMixin:
-    """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and the course cache."""
+    """Tool methods mixed into ``NinovaMcpApp``, which supplies ``client`` and ``_course_cache``."""
 
     client: NinovaClient
 
@@ -23,7 +24,13 @@ class PortalToolsMixin:
         return campus_card(self._get_portal_json("GetBalance"))
 
     def _get_portal_page(self) -> tuple[str, str]:
-        """Fetch the portal homepage once, cached for the request lifetime."""
+        """Fetch the Portal homepage, reusing a copy from the app's TTL cache.
+
+        The page is stored in ``_course_cache`` under ``portal_home``. That
+        cache lives as long as the app, not one request: an entry expires
+        after ``NINOVA_COURSE_CACHE_TTL_SECONDS`` (60 seconds by default) or
+        when ``invalidate_caches`` runs.
+        """
         cache_key = "portal_home"
         cached = self._course_cache.get(cache_key)
         if cached is not None:
@@ -90,6 +97,67 @@ class PortalToolsMixin:
             raise NinovaError(f"Portal {operation} beklenen 'd' nesnesini döndürmedi.")
         return data
 
+    def get_cafeteria_menu(
+        self,
+        date: str | None = None,
+        meal: str | None = None,
+        vegan: bool = False,
+    ) -> dict[str, Any]:
+        """Read a dated lunch/dinner menu from the authenticated İTÜ Portal."""
+        if date:
+            parsed_date = None
+            for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+                try:
+                    parsed_date = datetime.strptime(date, fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed_date is None:
+                raise NinovaError("date, YYYY-MM-DD veya DD.MM.YYYY biçiminde olmalı.")
+        else:
+            parsed_date = datetime.now()
+        date_value = parsed_date.strftime("%d.%m.%Y")
+        meal_key = normalize_lookup_text(meal or ("dinner" if datetime.now().hour >= 14 else "lunch"))
+        meal_map = {"lunch": "ogle", "ogle": "ogle", "dinner": "aksam", "aksam": "aksam"}
+        if meal_key not in meal_map:
+            raise NinovaError("meal, lunch/öğle veya dinner/akşam olmalı.")
+        period = meal_map[meal_key]
+        ogun_key = f"itu-{period}-yemegi-{'vegan' if vegan else 'genel'}"
+        data = self._get_portal_json(
+            "GetFoodMenu2",
+            params={
+                "notIncludeKey": "'ana-yemek'" if vegan else "'vejeteryan'",
+                "ogunKey": f"'{ogun_key}'",
+                "date": f"'{date_value}'",
+            },
+        )
+        foods = []
+        for item in data.get("FoodList") or []:
+            if not isinstance(item, dict):
+                continue
+            foods.append({
+                "id": item.get("ObjectId"),
+                "name": item.get("FoodName"),
+                "type": item.get("FoodType"),
+                "kcal": item.get("TotalWeight"),
+                "allergens": [
+                    {"name": effect.get("SideEffectName"), "name_en": effect.get("SideEffectNameEN")}
+                    for effect in (item.get("FoodSideEffectInformationList") or [])
+                    if isinstance(effect, dict)
+                ],
+            })
+        return {
+            "date": date_value,
+            "meal": "lunch" if period == "ogle" else "dinner",
+            "vegan": vegan,
+            "status_code": data.get("StatusCode"),
+            "count": len(foods),
+            "items": foods,
+            "menu_total_kcal": data.get("MenuTotalKcal"),
+            "source": "portal.itu.edu.tr/GetFoodMenu2",
+            "untrusted_external_content": True,
+        }
+
     def obs_get_notifications(
         self,
         notification_id: str | None = None,
@@ -141,7 +209,12 @@ class PortalToolsMixin:
         return {"count": len(notifications), "notifications": notifications, "source": "portal.itu.edu.tr/GetNotification", "untrusted_external_content": True}
 
     def _read_help_ticket(self, identifier: str) -> dict[str, Any]:
-        """Fetch and parse one ticket page. Callers decide ownership and redaction."""
+        """Fetch and parse one ticket page. Callers decide ownership and redaction.
+
+        A parsed ticket is kept in ``_course_cache`` under ``help_ticket:<id>``
+        for the same TTL as the course list, so a repeated read within that
+        window does not open the page again.
+        """
         from .help_tickets import help_url, parse_detail, ticket_url
 
         cache_key = f"help_ticket:{identifier}"

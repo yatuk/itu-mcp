@@ -10,9 +10,10 @@ environment variables let a user publish only the groups they need:
 With neither set, every group is on. The ``core`` group is always on so a
 user can still diagnose their setup. Unknown group names fail at startup.
 
-This module must not import ``server`` (``server`` imports it). The mapping
-below is checked against ``server.TOOLS`` by ``tests/test_toolsets.py``: a
-tool that is added without a group makes that test fail.
+This module must not import ``server``, ``server_build`` or ``cli`` (they
+import it). The mapping below is checked against ``TOOLS`` from
+``tool_registry`` by ``tests/test_toolsets.py``: a tool that is added without
+a group makes that test fail.
 """
 
 from __future__ import annotations
@@ -107,9 +108,10 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "portal": (
-        "Portal: campus card, notifications, help tickets, cloud and mail quota",
+        "Portal (login): campus card, cafeteria menu, notifications, help tickets, cloud and mail quota",
         (
             "obs_get_campus_card",
+            "get_cafeteria_menu",
             "obs_get_notifications",
             "obs_get_help_tickets",
             "get_help_ticket",
@@ -150,9 +152,8 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "campus": (
-        "Campus life: cafeteria, shuttle, directory, buildings, sports, announcements",
+        "Campus life, no login: shuttle, directory, buildings, sports, announcements",
         (
-            "get_cafeteria_menu",
             "search_itu_directory",
             "get_shuttle_schedule",
             "search_campus_locations",

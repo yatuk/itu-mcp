@@ -69,6 +69,30 @@ class RemoteToolAllowlistTests(unittest.TestCase):
             os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS")
             self.assertNotIn("obs_save_registration_draft", _selected_remote_tool_names())
 
+    def test_registration_write_stays_out_if_it_leaves_the_excluded_set(self) -> None:
+        from ninova_mcp import remote
+        from ninova_mcp.server import LOCAL_TOOL_NAMES, REMOTE_EXCLUDED_TOOLS
+
+        # Simulate someone removing the tool from REMOTE_EXCLUDED_TOOLS: the
+        # remote list is derived from that set when tool_registry is imported.
+        excluded = REMOTE_EXCLUDED_TOOLS - OBS_REGISTRATION_WRITE_TOOL_NAMES
+        leaked = [name for name in LOCAL_TOOL_NAMES if name not in excluded]
+        self.assertIn("obs_save_registration_draft", leaked)
+        with patch.object(remote, "REMOTE_TOOL_NAMES", leaked), patch.dict(os.environ, {}, clear=False):
+            for key in ("NINOVA_REMOTE_ALLOWED_TOOLS", "NINOVA_TOOLSETS", "NINOVA_DISABLED_TOOLSETS"):
+                os.environ.pop(key, None)
+            for value in (None, "", "0", "false"):
+                with self.subTest(value=value):
+                    if value is None:
+                        os.environ.pop("NINOVA_OBS_REGISTRATION_WRITES", None)
+                    else:
+                        os.environ["NINOVA_OBS_REGISTRATION_WRITES"] = value
+                    self.assertNotIn("obs_save_registration_draft", _selected_remote_tool_names())
+                    os.environ["NINOVA_REMOTE_ALLOWED_TOOLS"] = "obs_save_registration_draft"
+                    with self.assertRaisesRegex(RuntimeError, "remote-excluded"):
+                        _selected_remote_tool_names()
+                    os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS")
+
 
 if __name__ == "__main__":
     unittest.main()

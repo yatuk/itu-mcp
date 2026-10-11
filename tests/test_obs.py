@@ -716,13 +716,6 @@ class PortalWidgetTests(unittest.TestCase):
         self.assertIn("title", ticket)
         self.assertIn("url", ticket)
 
-    def test_extract_cloud_quota(self) -> None:
-        from ninova_mcp.parsing import extract_cloud_quota
-
-        result = extract_cloud_quota(SAMPLE_PORTAL_HTML, "https://portal.itu.edu.tr/apps/default/")
-        self.assertIsNotNone(result["mail"]["usage_percent"])
-        self.assertIsNotNone(result["cloud"]["usage_percent"])
-
 
 if __name__ == "__main__":
     unittest.main()

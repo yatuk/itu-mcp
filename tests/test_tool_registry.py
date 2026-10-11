@@ -124,6 +124,21 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertFalse(destructive.readOnlyHint)
         self.assertTrue(destructive.destructiveHint)
 
+    def test_tool_without_metadata_is_refused_before_anything_is_registered(self) -> None:
+        class FakeMcp:
+            def __init__(self) -> None:
+                self.registered: list[str] = []
+
+            def add_tool(self, fn: object, **kwargs: object) -> None:
+                del fn
+                self.registered.append(str(kwargs["name"]))
+
+        fake = FakeMcp()
+        # invalidate_caches is a real app method, but it is not a tool.
+        with self.assertRaisesRegex(ValueError, "no metadata in TOOLS: invalidate_caches"):
+            register_tools(fake, NinovaMcpApp(), ["auth_status", "invalidate_caches"])
+        self.assertEqual(fake.registered, [])
+
     def test_attachment_tool_uses_mixed_mcp_content(self) -> None:
         class FakeMcp:
             def __init__(self) -> None:

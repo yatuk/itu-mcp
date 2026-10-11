@@ -51,6 +51,11 @@ def _split_csv_env(name: str) -> list[str]:
 
 
 def _selected_remote_tool_names() -> list[str]:
+    # REMOTE_TOOL_NAMES already leaves out REMOTE_EXCLUDED_TOOLS, and the draft
+    # write tool is in that set, so today it never reaches the second condition
+    # below. That condition is kept on purpose as a second check: if the tool
+    # is ever dropped from REMOTE_EXCLUDED_TOOLS by mistake, it is still not
+    # served over HTTP unless the operator set NINOVA_OBS_REGISTRATION_WRITES.
     available = [
         name
         for name in REMOTE_TOOL_NAMES

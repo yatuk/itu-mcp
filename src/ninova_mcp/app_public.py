@@ -306,12 +306,14 @@ class PublicCatalogToolsMixin:
         brans_kodu: str,
         ders_no: str,
     ) -> dict[str, Any]:
-        """Read prerequisite details from a course's public OBS info page.
+        """Read one course's prerequisite rule from the official branch prerequisite table.
 
         ``brans_kodu``: department code, e.g. ``"BLG"``.
         ``ders_no``: course number, e.g. ``"223E"``.
 
-        No login required — reads the public ``/public/DersBilgi`` page.
+        No login required. The rule comes from the public OBS prerequisite
+        table of the branch (``ObsPublicClient.get_branch_prerequisites``),
+        not from the course's ``/public/DersBilgi`` page.
         """
         return self.obs_public.get_prerequisite_detail(brans_kodu, ders_no)
 
