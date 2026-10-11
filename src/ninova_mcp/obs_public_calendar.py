@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .client import DEFAULT_HEADERS
 from .obs_errors import ObsError
@@ -33,31 +34,18 @@ class ObsPublicCalendar(ObsPublicTransport):
         read is named in ``coverage_warning`` and ``missing_academic_years``.
         Every page is cached per language and year.
         """
-        from datetime import date as _date
-
-        from .academic_calendar import TIMEZONE, academic_years_for_range, combine_calendars, merge_calendar_languages
-        from zoneinfo import ZoneInfo
+        from .academic_calendar import TIMEZONE, combine_calendars
 
         current = self._calendar_page("en", None)
         if current.get("coverage", {}).get("scope") != "academic_year" or not current.get("academic_year"):
             # No year list on the page: only what the page itself shows is known.
             return current
         today = datetime.now(ZoneInfo(TIMEZONE)).date()
-        try:
-            start = _date.fromisoformat(date_from) if date_from else None
-            end = _date.fromisoformat(date_to) if date_to else None
-        except ValueError:
-            start = end = None
-        wanted = [current["academic_year"]]
-        if start or end:
-            first, last = start or min(end, today), end or max(start, today)  # type: ignore[type-var]
-            wanted = academic_years_for_range(first, last) if first <= last else wanted
+        wanted = _academic_years_asked_for(current["academic_year"], date_from, date_to, today)
         warnings: list[str] = []
         chosen = wanted
         if len(wanted) > self.MAX_CALENDAR_ACADEMIC_YEARS:
-            def distance(label: str) -> int:
-                return abs((_date(int(label[:4]) + 1, 2, 1) - today).days)
-            chosen = sorted(sorted(wanted, key=distance)[: self.MAX_CALENDAR_ACADEMIC_YEARS])
+            chosen = _nearest_academic_years(wanted, today, self.MAX_CALENDAR_ACADEMIC_YEARS)
             warnings.append(
                 f"The requested dates span {len(wanted)} academic years; at most {self.MAX_CALENDAR_ACADEMIC_YEARS} "
                 f"are read per call. Not read: {', '.join(y for y in wanted if y not in chosen)}."
@@ -65,30 +53,47 @@ class ObsPublicCalendar(ObsPublicTransport):
         ids = {item["academic_year"]: item["id"] for item in current.get("available_academic_years") or []}
         pages: list[dict[str, Any]] = []
         for label in chosen:
-            if label == current["academic_year"]:
-                english = current
-                year_id = None
-            elif label in ids:
-                year_id = ids[label]
-                try:
-                    english = self._calendar_page("en", year_id)
-                except ObsError as exc:
-                    warnings.append(f"The {label} calendar could not be read: {exc}")
-                    continue
-                if english.get("academic_year") != label:
-                    warnings.append(f"The site did not return the {label} calendar.")
-                    continue
-            else:
-                warnings.append(f"The {label} academic year is not offered by the calendar page (older years are in its archive).")
-                continue
-            try:
-                turkish = self._calendar_page("tr", year_id)
-            except ObsError:
-                turkish = {}  # reported through "languages" and "language_note"
-            if turkish.get("academic_year") == label:
-                english = merge_calendar_languages(english, turkish)
-            pages.append(english)
+            found = self._english_year_page(label, current, ids, warnings)
+            if found is not None:
+                english, year_id = found
+                pages.append(self._with_turkish_text(english, label, year_id))
         return combine_calendars(pages, warnings=warnings, requested_years=wanted, today=today)
+
+    def _english_year_page(
+        self, label: str, current: dict[str, Any], ids: dict[str, str], warnings: list[str],
+    ) -> tuple[dict[str, Any], str | None] | None:
+        """The English page of one academic year and the site's id for it.
+
+        The year the site shows by default is the page already read, under no
+        id. A year that cannot be used is reported in ``warnings`` and skipped.
+        """
+        if label == current["academic_year"]:
+            return current, None
+        if label not in ids:
+            warnings.append(f"The {label} academic year is not offered by the calendar page (older years are in its archive).")
+            return None
+        year_id = ids[label]
+        try:
+            english = self._calendar_page("en", year_id)
+        except ObsError as exc:
+            warnings.append(f"The {label} calendar could not be read: {exc}")
+            return None
+        if english.get("academic_year") != label:
+            warnings.append(f"The site did not return the {label} calendar.")
+            return None
+        return english, year_id
+
+    def _with_turkish_text(self, english: dict[str, Any], label: str, year_id: str | None) -> dict[str, Any]:
+        """Add the Turkish descriptions of the same year when its page can be read."""
+        from .academic_calendar import merge_calendar_languages
+
+        try:
+            turkish = self._calendar_page("tr", year_id)
+        except ObsError:
+            turkish = {}  # reported through "languages" and "language_note"
+        if turkish.get("academic_year") == label:
+            return merge_calendar_languages(english, turkish)
+        return english
 
     def _calendar_page(self, language: str, year_id: str | None) -> dict[str, Any]:
         from .parsing import extract_academic_calendar
@@ -114,3 +119,31 @@ class ObsPublicCalendar(ObsPublicTransport):
             resp.encoding = resp.apparent_encoding or resp.encoding
         result = extract_academic_calendar(resp.text, resp.url)
         return self._cache.set(cache_key, result)
+
+
+def _academic_years_asked_for(
+    current_year: str, date_from: str | None, date_to: str | None, today: date,
+) -> list[str]:
+    """Academic years a date range falls in; the current one without usable dates.
+
+    An open end of the range is today, or the given date when today lies on
+    its wrong side. One unreadable date discards both.
+    """
+    from .academic_calendar import academic_years_for_range
+
+    try:
+        start = date.fromisoformat(date_from) if date_from else None
+        end = date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        start = end = None
+    if not (start or end):
+        return [current_year]
+    first, last = start or min(end, today), end or max(start, today)  # type: ignore[type-var]
+    return academic_years_for_range(first, last) if first <= last else [current_year]
+
+
+def _nearest_academic_years(wanted: list[str], today: date, limit: int) -> list[str]:
+    """The ``limit`` academic years closest to today, in calendar order."""
+    def distance(label: str) -> int:
+        return abs((date(int(label[:4]) + 1, 2, 1) - today).days)
+    return sorted(sorted(wanted, key=distance)[:limit])
