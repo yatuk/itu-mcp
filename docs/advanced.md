@@ -359,6 +359,19 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 
 Many list/overview tools accept `compact=true` to shrink long fields (or set `NINOVA_COMPACT_DEFAULT=1`).
 
+### Reduced results and `include_raw`
+
+Tools that pass OBS data on return the answer in reduced form by default:
+
+- the envelope of a successful OBS answer (`statusCode`, `resultCode`, `resultMessage`) is left out; a failed answer keeps it, and so does a result code that says more than "success";
+- a label OBS sends in Turkish and English is given once, in Turkish (course titles keep both when they differ);
+- a term or course the result already states is not repeated on every row;
+- a summary is returned without the payload it was built from.
+
+A reduced result carries a short `raw_available` field. Passing `include_raw=true` returns what was left out: `graduation` in `obs_get_graduation_remaining`, `kayit_durumu` and `ders_kayit_durumu` in `obs_get_registration_status`, `schedule` in `obs_get_schedule`, the completed-course history and rule tree in `explain_course_eligibility`, `links` and `page.headings` in `get_dashboard`, and the unreduced rows in the other `obs_*` record tools.
+
+`include_raw` and `compact` are independent. `include_raw` decides what a result holds; `compact` then shortens long texts and lists of whatever it holds.
+
 ### Assignment upload safety
 
 - `submit_assignment` without `confirm=true` only returns a preview (no network POST of the file).
