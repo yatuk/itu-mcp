@@ -756,16 +756,29 @@ SEARCH_ROW_FIELDS = (
 )
 _SEARCH_ROW_REQUIRED = 8
 
-# Folded day names as they appear in ``when``, plus the English names people type.
+# Folded day names as they appear in ``when``, plus the English names and the
+# usual Turkish and English abbreviations people type.
 _DAY_ALIASES = {
-    "pazartesi": "pazartesi", "monday": "pazartesi",
-    "sali": "sali", "tuesday": "sali",
-    "carsamba": "carsamba", "wednesday": "carsamba",
-    "persembe": "persembe", "thursday": "persembe",
-    "cuma": "cuma", "friday": "cuma",
-    "cumartesi": "cumartesi", "saturday": "cumartesi",
-    "pazar": "pazar", "sunday": "pazar",
+    "pazartesi": "pazartesi", "pzt": "pazartesi", "pts": "pazartesi",
+    "monday": "pazartesi", "mon": "pazartesi",
+    "sali": "sali", "sal": "sali",
+    "tuesday": "sali", "tue": "sali", "tues": "sali",
+    "carsamba": "carsamba", "car": "carsamba", "crs": "carsamba",
+    "wednesday": "carsamba", "wed": "carsamba",
+    "persembe": "persembe", "per": "persembe", "prs": "persembe",
+    "thursday": "persembe", "thu": "persembe", "thur": "persembe", "thurs": "persembe",
+    "cuma": "cuma", "cum": "cuma",
+    "friday": "cuma", "fri": "cuma",
+    "cumartesi": "cumartesi", "cmt": "cumartesi", "cts": "cumartesi",
+    "saturday": "cumartesi", "sat": "cumartesi",
+    "pazar": "pazar", "paz": "pazar",
+    "sunday": "pazar", "sun": "pazar",
 }
+DAY_FORMS_HELP = (
+    "Türkçe: Pazartesi, Salı, Çarşamba, Perşembe, Cuma, Cumartesi, Pazar (kısaltma: Pzt, Sal, "
+    "Çar, Per, Cum, Cmt, Paz). English: Monday, Tuesday, Wednesday, Thursday, Friday, "
+    "Saturday, Sunday (short: Mon, Tue, Wed, Thu, Fri, Sat, Sun)."
+)
 
 
 def _code_key(course_code: Any) -> str:
@@ -1050,15 +1063,12 @@ def catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_day(day: str) -> str:
-    """Resolve a Turkish or English day name to its folded Turkish form."""
+    """Resolve a Turkish or English day name or abbreviation to its folded Turkish form."""
     from .parsing import normalize_lookup_text
 
-    key = _DAY_ALIASES.get(normalize_lookup_text(day))
+    key = _DAY_ALIASES.get(normalize_lookup_text(day).rstrip("."))
     if key is None:
-        raise ValueError(
-            f"Gün çözümlenemedi: {day!r}. Pazartesi, Salı, Çarşamba, Perşembe, Cuma, "
-            "Cumartesi veya Pazar olmalı."
-        )
+        raise ValueError(f"Gün çözümlenemedi: {day!r}. {DAY_FORMS_HELP}")
     return key
 
 

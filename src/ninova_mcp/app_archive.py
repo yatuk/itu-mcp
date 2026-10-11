@@ -8,7 +8,35 @@ from __future__ import annotations
 
 from typing import Any
 
-from .archive_client import ItuArchiveClient, ItuArchiveError
+from .archive_client import ItuArchiveClient, ItuArchiveError, branch_path_segment
+
+# One request per branch, so a multi-branch call is bounded.
+MAX_TERM_SECTION_BRANCHES = 10
+
+
+def split_branch_codes(branch: Any) -> list[str]:
+    """Read ``"BLG, MAT"`` as a list of branch codes, naming every bad one."""
+    parts = [part for part in str(branch or "").replace(";", ",").replace(",", " ").split() if part]
+    codes: list[str] = []
+    invalid: list[str] = []
+    for part in parts:
+        try:
+            code = branch_path_segment(part)
+        except ItuArchiveError:
+            invalid.append(part)
+            continue
+        if code not in codes:
+            codes.append(code)
+    if invalid:
+        raise ItuArchiveError(
+            f"Branş kodu geçersiz: {', '.join(repr(part) for part in invalid)}. Her kod 'BLG' gibi "
+            "2-4 harf olmalı; birden çok branş virgülle ayrılır ('BLG, MAT')."
+        )
+    if len(codes) > MAX_TERM_SECTION_BRANCHES:
+        raise ItuArchiveError(
+            f"Tek çağrıda en fazla {MAX_TERM_SECTION_BRANCHES} branş okunabilir; {len(codes)} verildi."
+        )
+    return codes
 
 
 class ArchiveHistoryToolsMixin:
@@ -343,54 +371,78 @@ class ArchiveHistoryToolsMixin:
                 raise ItuArchiveError(str(exc)) from exc
             target_code = f"{code_branch} {code_number}"
             branch = branch or code_branch
-        if not branch:
+        branches = split_branch_codes(branch)
+        if not branches:
             raise ItuArchiveError("branch veya course_code verilmeli.")
-
-        coverage, term_entry, meta, sections = self._resolve_archive_term_branch(term, branch)
-        captured = self._archive_enrolment_captured(meta, sections)
+        label = ", ".join(branches)
 
         matched = []
-        for section in sections:
-            if target_code and _norm(section.get("code")) != _norm(target_code):
-                continue
-            if instructor and _norm(instructor) not in _norm(section.get("instructor")):
-                continue
-            matched.append(summarize_section(section, enrolment_captured=captured))
+        per_branch: dict[str, str] = {}
+        section_total = 0
+        not_captured = False
+        term_entry: dict[str, Any] = {}
+        meta: dict[str, Any] = {}
+        for code in branches:
+            coverage, term_entry, meta, sections = self._resolve_archive_term_branch(term, code)
+            captured = self._archive_enrolment_captured(meta, sections)
+            per_branch[code] = coverage
+            section_total += len(sections)
+            not_captured = not_captured or (bool(sections) and not captured)
+            for section in sections:
+                if target_code and _norm(section.get("code")) != _norm(target_code):
+                    continue
+                if instructor and _norm(instructor) not in _norm(section.get("instructor")):
+                    continue
+                matched.append(summarize_section(section, enrolment_captured=captured))
 
-        coverage_notes = {
-            "term_missing": (
-                f"{term} hiçbir kaynakta yok; bu dönem için şube verisi bulunmuyor. "
-                "Sonucun boş olması 'ders açılmadı' demek değildir."
-            ),
-            "branch_absent_from_term": (
-                f"{branch.upper()} branşı {term} dökümünde hiç yok ({meta.get('sections')} şube "
-                "kaydedilmiş). Bu branşın o dönem açılmadığı anlamına gelmez; döküm eksik olabilir."
-            ),
-            "covered": None,
-        }
+        # Every code the dump does not hold is named, not just the first.
+        unknown = [code for code, coverage in per_branch.items() if coverage == "branch_absent_from_term"]
+        states = set(per_branch.values())
+        coverage = next(iter(states)) if len(states) == 1 else "partly_covered"
+        term_branches = sorted(
+            str(item.get("code")).upper() for item in (meta.get("branches") or []) if item.get("code")
+        )
 
         result = {
             "term": term,
             "term_label": term_entry.get("label"),
             "term_source": term_entry.get("source"),
-            "branch": branch.upper(),
+            "branch": label,
+            "branches": branches,
             "course_code": target_code,
             "instructor_filter": instructor,
             "coverage": coverage,
-            "branch_section_count": len(sections),
+            "branch_section_count": section_total,
             "match_count": len(matched),
-            "enrolment_not_captured": bool(sections) and not captured,
+            "enrolment_not_captured": not_captured,
             "sections": matched[:limit],
             "truncated": len(matched) > limit,
             "untrusted_external_content": True,
         }
         self._attach_enrolment_note(result)
-        note = coverage_notes[coverage]
-        if note:
-            result["coverage_note"] = note
+        if len(branches) > 1:
+            result["branch_coverage"] = per_branch
+        if coverage == "term_missing":
+            result["coverage_note"] = (
+                f"{term} hiçbir kaynakta yok; bu dönem için şube verisi bulunmuyor. "
+                "Sonucun boş olması 'ders açılmadı' demek değildir."
+            )
+        elif unknown:
+            result["unknown_branches"] = unknown
+            # The complete list, with its size: never a silently cut sample.
+            result["term_branch_count"] = len(term_branches)
+            result["term_branches"] = term_branches
+            result["coverage_note"] = (
+                f"{', '.join(unknown)}: {term} dökümünde hiç yok ({meta.get('sections')} şube "
+                f"kaydedilmiş, {len(term_branches)} branş). Bu, branşın o dönem açılmadığı anlamına "
+                "gelmez; döküm eksik olabilir ya da kod yanlış olabilir. Dökümdeki branş kodlarının "
+                "tamamı term_branches alanında."
+            )
+            if coverage == "partly_covered" and not matched:
+                result["coverage_note"] += " Dökümde bulunan branşlarda filtreye uyan şube yok."
         elif not matched:
             result["coverage_note"] = (
-                f"{branch.upper()} {term} dökümünde var ({len(sections)} şube) ama filtreye "
+                f"{label} {term} dökümünde var ({section_total} şube) ama filtreye "
                 "uyan şube yok."
             )
         return result

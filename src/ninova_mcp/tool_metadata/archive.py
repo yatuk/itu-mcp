@@ -113,7 +113,13 @@ ARCHIVE_HISTORY_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "term": {"type": ["string", "integer"], "description": _TERM},
-                "branch": {"type": "string", "description": "Branch code, e.g. 'BLG'."},
+                "branch": {
+                    "type": "string",
+                    "description": (
+                        "Branch code, e.g. 'BLG'; several separated by commas ('BLG, MAT', at most "
+                        "10). Codes the term's dump does not hold are all named in unknown_branches."
+                    ),
+                },
                 "course_code": {"type": "string", "description": "Course code; implies its branch."},
                 "instructor": {"type": "string", "description": "Instructor name fragment."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},

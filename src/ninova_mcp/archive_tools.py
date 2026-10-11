@@ -505,7 +505,10 @@ ARCHIVE_DATASET_TOOLS: list[dict[str, Any]] = [
                 "instructor": {"type": "string", "description": "Instructor name fragment."},
                 "day": {
                     "type": "string",
-                    "description": "Day the section meets, e.g. 'Salı' or 'Tuesday'.",
+                    "description": (
+                        "Day the section meets, Turkish or English, full or abbreviated: "
+                        "'Salı', 'Sal', 'Tuesday', 'Tue'."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
