@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .app_base import COURSES_CACHE_KEY
+from .cache import parse_ttl_seconds
 from .client import NinovaClient
 from .parsing import (
     extract_announcements_list,
@@ -21,16 +25,32 @@ from .parsing import (
     slugify,
 )
 from .tracking import (
+    DEFAULT_TRACKING_MAX_AGE_SECONDS,
     TRACKING_STATE_VERSION,
+    course_reference,
     diff_course_snapshots,
     has_complete_baseline,
     load_tracking_state,
     merge_course_snapshot,
     merge_updates,
     save_tracking_state,
+    scope_observation,
+    snapshot_freshness,
     utc_now_iso,
 )
 from .tracking_coverage import coverage, scope_coverage
+
+# After an automatic refresh, successful or not, the next one waits this long.
+# A course page that keeps failing, or a login that keeps being refused, must
+# not turn every deadline question into another crawl.
+AUTO_REFRESH_COOLDOWN_SECONDS = 600.0
+
+
+def tracking_max_age_seconds() -> float:
+    """Age after which the stored snapshot is stale (``NINOVA_TRACKING_MAX_AGE_SECONDS``)."""
+    return parse_ttl_seconds(
+        os.getenv("NINOVA_TRACKING_MAX_AGE_SECONDS"), DEFAULT_TRACKING_MAX_AGE_SECONDS,
+    )
 
 
 class TrackingToolsMixin:
@@ -44,7 +64,7 @@ class TrackingToolsMixin:
 
     def get_course_overview(
         self,
-        course: str,
+        course: str | int,
         refresh: bool = False,
         file_max_depth: int = 3,
         include_assignment_details: bool = False,
@@ -57,6 +77,23 @@ class TrackingToolsMixin:
             if existing:
                 snapshot = existing["snapshot"]
                 snapshot["source"] = "tracked_state"
+                freshness = snapshot_freshness(
+                    {"last_sync_at": existing.get("synced_at") or snapshot.get("captured_at"), "courses": {}},
+                    max_age_seconds=tracking_max_age_seconds(),
+                )
+                snapshot["synced_at"] = freshness["last_sync_at"]
+                snapshot["snapshot_age_hours"] = freshness["snapshot_age_hours"]
+                snapshot["stale_after_hours"] = freshness["stale_after_hours"]
+                snapshot["stale"] = freshness["stale"]
+                if freshness["stale"]:
+                    snapshot["stale_note"] = (
+                        "This is a stored snapshot older than the staleness limit, not the current "
+                        "state of the course. Call again with refresh=true for live data."
+                    )
+                if resolved.get("matched_by"):
+                    snapshot["course"] = {**snapshot.get("course", {}), **{
+                        key: resolved[key] for key in ("matched_by", "requested") if key in resolved
+                    }}
                 return self._out(snapshot, compact=compact)
 
         snapshot = self._collect_course_snapshot(
@@ -205,7 +242,7 @@ class TrackingToolsMixin:
     def get_updates(
         self,
         limit: int = 100,
-        course: str | None = None,
+        course: str | int | None = None,
         entity_type: str | None = None,
     ) -> dict[str, Any]:
         state = self._load_tracking_state_document()
@@ -223,29 +260,97 @@ class TrackingToolsMixin:
                 if normalize_lookup_text(item.get("entity_type")) == target
             ]
 
+        total = len(updates)
         updates = updates[: max(1, min(limit, 500))]
-        return {
+        freshness = snapshot_freshness(state, max_age_seconds=tracking_max_age_seconds())
+        result: dict[str, Any] = {
+            "status": freshness["status"],
+            "stale": freshness["stale"],
+            "snapshot_age_hours": freshness["snapshot_age_hours"],
+            "stale_after_hours": freshness["stale_after_hours"],
             "last_sync_at": state["last_sync_at"],
             "count": len(updates),
+            "total_count": total,
             "updates": updates,
         }
+        if freshness["stale_courses"]:
+            result["stale_courses"] = freshness["stale_courses"]
+        if freshness["status"] == "no_snapshot":
+            result["message"] = (
+                "No sync has been stored yet, so there is no change history. "
+                "Call sync_all_courses first; an empty list here is not an answer."
+            )
+        elif freshness["stale"]:
+            result["message"] = (
+                "The change history ends at the last sync and that sync is older than the staleness "
+                "limit (see snapshot_age_hours and stale_courses). Nothing after it is listed. "
+                "Call sync_all_courses to detect newer changes; do not report these as recent."
+            )
+        return result
 
     def get_upcoming_deadlines(
         self,
         days: int = 14,
         refresh: bool = False,
     ) -> dict[str, Any]:
-        if refresh or not self.tracking_state_path.exists():
-            self.sync_all_courses()
-
+        max_age = tracking_max_age_seconds()
         state = self._load_tracking_state_document()
+        freshness = snapshot_freshness(state, max_age_seconds=max_age)
+        course_set = self._tracked_course_set_check(state)
+        if refresh:
+            reason: str | None = "requested"
+        elif freshness["status"] == "no_snapshot":
+            reason = "no_snapshot"
+        elif freshness["stale"]:
+            reason = "stale_snapshot"
+        elif course_set.get("differs"):
+            reason = "course_list_changed"
+        else:
+            reason = None
+
+        refresh_info: dict[str, Any] | None = None
+        if reason is not None:
+            refresh_info = {"attempted": False, "reason": reason, "ok": False}
+            last_attempt = getattr(self, "_tracking_auto_refresh_at", None)
+            if not refresh and last_attempt is not None and time.monotonic() - last_attempt < AUTO_REFRESH_COOLDOWN_SECONDS:
+                refresh_info["skipped"] = "recent_automatic_refresh"
+                refresh_info["retry_after_seconds"] = AUTO_REFRESH_COOLDOWN_SECONDS
+            else:
+                refresh_info["attempted"] = True
+                if not refresh:
+                    self._tracking_auto_refresh_at = time.monotonic()
+                try:
+                    # An automatic refresh reads everything except the file
+                    # inventories, which deadlines do not need and which are
+                    # most of a crawl. The stored inventories are kept.
+                    synced = self.sync_all_courses() if refresh else self.sync_all_courses(include_files=False)
+                except Exception as exc:
+                    refresh_info["error"] = str(exc) or type(exc).__name__
+                else:
+                    refresh_info["ok"] = True
+                    refresh_info["full_sync"] = bool(refresh)
+                    refresh_info["course_count"] = synced.get("course_count")
+                    refresh_info["error_count"] = len(synced.get("errors") or [])
+                state = self._load_tracking_state_document()
+                freshness = snapshot_freshness(state, max_age_seconds=max_age)
+                course_set = self._tracked_course_set_check(state)
+
         deadline_items: list[dict[str, Any]] = []
+        incomplete_courses: list[dict[str, Any]] = []
         now = datetime.now(tz=UTC)
         upper_bound = now.timestamp() + max(1, min(days, 180)) * 86400
 
         for course_entry in state["courses"].values():
             course = course_entry["course"]
             assignments = course_entry["snapshot"]["overview"]["assignments"]
+            observed = scope_observation(course_entry["snapshot"], "assignments")
+            if observed.get("status") != "complete":
+                incomplete_courses.append({
+                    **course_reference(course),
+                    "assignments_status": observed.get("status"),
+                    "reason": observed.get("reason"),
+                    "last_complete_at": observed.get("last_complete_at"),
+                })
             for assignment in assignments:
                 submission_end_iso = assignment.get("submission_end_iso") or ninova_datetime_iso(
                     assignment.get("submission_end")
@@ -271,11 +376,91 @@ class TrackingToolsMixin:
                 )
 
         deadline_items.sort(key=lambda item: item["submission_end_iso"])
-        return {
+        enrollment_status = (state.get("enrollment_coverage") or {}).get("status") or "unknown"
+        course_set_differs = bool(course_set.pop("differs", False))
+        problems: list[str] = []
+        if freshness["status"] == "no_snapshot":
+            status = "no_snapshot"
+            problems.append("No snapshot of the courses could be stored.")
+        elif freshness["stale"] or course_set_differs:
+            status = "stale_snapshot"
+            if freshness["snapshot_stale"]:
+                problems.append(
+                    f"The snapshot is {freshness['snapshot_age_hours']} hours old "
+                    f"(limit {freshness['stale_after_hours']})."
+                )
+            if freshness["stale_courses"]:
+                problems.append(
+                    f"{len(freshness['stale_courses'])} course(s) were not read by the last sync (stale_courses)."
+                )
+            if course_set_differs:
+                problems.append("The snapshot covers other courses than the current course list (course_set_check).")
+        elif incomplete_courses or enrollment_status != "complete":
+            status = "incomplete_snapshot"
+            if incomplete_courses:
+                problems.append(
+                    f"The assignment list of {len(incomplete_courses)} course(s) was not read completely "
+                    "(incomplete_courses)."
+                )
+            if enrollment_status != "complete":
+                problems.append("The course list of the last sync could not be verified as complete.")
+        else:
+            status = "ok"
+
+        result: dict[str, Any] = {
+            "status": status,
+            "stale": status in {"no_snapshot", "stale_snapshot"},
+            "snapshot_age_hours": freshness["snapshot_age_hours"],
+            "stale_after_hours": freshness["stale_after_hours"],
             "last_sync_at": state["last_sync_at"],
+            "refreshed": bool(refresh_info and refresh_info["ok"]),
             "days": max(1, min(days, 180)),
             "count": len(deadline_items),
             "deadlines": deadline_items,
+            "courses_covered": [
+                {**course_reference(entry["course"]), "synced_at": entry.get("synced_at")}
+                for entry in state["courses"].values()
+            ],
+            "enrollment_coverage": enrollment_status,
+            "course_set_check": course_set,
+        }
+        if refresh_info is not None:
+            result["refresh"] = refresh_info
+        if freshness["stale_courses"]:
+            result["stale_courses"] = freshness["stale_courses"]
+        if incomplete_courses:
+            result["incomplete_courses"] = incomplete_courses
+        if status != "ok":
+            if refresh_info and refresh_info.get("error"):
+                problems.append(f"The refresh failed: {refresh_info['error']}")
+            result["message"] = (
+                " ".join(problems)
+                + " This list may miss deadlines: an empty or short list is NOT a statement that nothing is due."
+                + " Call again with refresh=true, or tell the user the deadlines could not be verified."
+            )
+        return result
+
+    def _tracked_course_set_check(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Compare the tracked courses with the cached course list, without a request.
+
+        The tracking state does not record a term, so a snapshot of last term's
+        courses is only detectable against a course list. The in-memory one is
+        used when it is there; nothing is fetched for this check.
+        """
+        cache = getattr(self, "_course_cache", None)
+        cached = cache.get(COURSES_CACHE_KEY) if cache is not None else None
+        if cached is None:
+            return {"checked": False, "reason": "course_list_not_cached"}
+        current = {course["url"]: course for course in cached}
+        tracked = {url: entry.get("course") or {"url": url} for url, entry in state["courses"].items()}
+        missing = [course_reference(course) for url, course in current.items() if url not in tracked]
+        extra = [course_reference(course) for url, course in tracked.items() if url not in current]
+        return {
+            "checked": True,
+            "source": "cached_course_list",
+            "missing_from_snapshot": missing,
+            "not_in_course_list": extra,
+            "differs": bool(missing or extra),
         }
 
     def _load_tracking_state_document(self) -> dict[str, Any]:
