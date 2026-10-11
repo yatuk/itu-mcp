@@ -68,14 +68,33 @@ PUBLIC_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_academic_calendar",
         "title": "Academic Calendar",
-        "description": "Read the İTÜ academic calendar — semester dates, exams, holidays, registration periods (public, no login).",
+        "description": (
+            "Read the official İTÜ academic calendar (public, no login): term start and end, "
+            "course registration, add-drop and withdrawal periods, final and make-up exams, "
+            "breaks. Covers the whole current academic year, not only this month; with "
+            "date_from/date_to the academic years those dates fall in are read (at most 2 per "
+            "call, and only years the site still lists). Each event has an English 'description' "
+            "and a Turkish 'description_tr'; query matches either language, ignoring case and "
+            "Turkish accents (e.g. 'dersten çekilme', 'ekle bırak', 'final'). 'terms' gives the "
+            "first and last day of classes per term. With no argument only recent and upcoming "
+            "events are listed (see 'default_window'). Check 'coverage' and 'coverage_warning' "
+            "before concluding that nothing is scheduled. Official public holidays are not on "
+            "this calendar."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "Inclusive ISO date, YYYY-MM-DD."},
                 "date_to": {"type": "string", "description": "Inclusive ISO date, YYYY-MM-DD."},
-                "category": {"type": "string", "enum": ["exam", "registration", "holiday", "semester", "other"]},
-                "query": {"type": "string"},
+                "category": {
+                    "type": "string",
+                    "enum": ["exam", "registration", "holiday", "semester", "other"],
+                    "description": (
+                        "exam: exams and grade entry deadlines. registration: course registration, "
+                        "add-drop, withdrawal. holiday: breaks. semester: first and last day of a term."
+                    ),
+                },
+                "query": {"type": "string", "description": "Words to look for, Turkish or English."},
             },
             "additionalProperties": False,
         },

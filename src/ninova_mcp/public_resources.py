@@ -174,8 +174,9 @@ PUBLIC_RESOURCES: list[dict[str, Any]] = [
         "title": "İTÜ Akademik Takvim",
         "description": (
             "Official İTÜ academic calendar events (registration, exams, holidays, term "
-            "dates) as published on the calendar page. Covers the displayed month only; "
-            "see 'coverage'. Public, no login."
+            "dates) as published on the calendar page, in English and Turkish. Lists recent "
+            "and upcoming events of the current academic year; see 'default_window' and "
+            "'coverage'. Public, no login."
         ),
         "builder": academic_calendar,
     },
