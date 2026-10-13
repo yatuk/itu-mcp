@@ -24,7 +24,7 @@ from ninova_mcp.prerequisites import (
     extract_branch_prerequisites,
     parse_prerequisite_expression,
 )
-from ninova_mcp.server import LOCAL_TOOL_NAMES, NinovaMcpApp
+from ninova_mcp.server import NinovaMcpApp
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -388,27 +388,6 @@ class GraduationSummaryTests(unittest.TestCase):
 
     def test_failed_attempts_surfaced(self) -> None:
         self.assertEqual(self.summary["failed_or_unused_attempts"][0]["course_code"], "MAT 210E")
-
-
-class ArchiveToolRegistrationTests(unittest.TestCase):
-    ARCHIVE_TOOLS = [
-        "archive_list_terms",
-        "archive_course_history",
-        "archive_who_taught",
-        "archive_instructor_courses",
-        "archive_term_sections",
-        "archive_fill_rate",
-        "archive_search_courses",
-        "archive_list_branches",
-        "archive_compare_terms",
-        "plan_remaining_courses",
-    ]
-
-    def test_tools_are_registered_and_implemented(self) -> None:
-        app = NinovaMcpApp()
-        for name in self.ARCHIVE_TOOLS:
-            self.assertIn(name, LOCAL_TOOL_NAMES)
-            self.assertTrue(callable(getattr(app, name)))
 
 
 class ArchiveToolBehaviourTests(unittest.TestCase):

@@ -1,16 +1,8 @@
-"""Validates the whole TOOLS registry at once, not just hand-picked subsets.
+"""Check required public tools, shared metadata and callable app methods.
 
-Existing test files each spot-check a handful of tool names against
-LOCAL_TOOL_NAMES/hasattr — none of them iterate the full registry, and none
-check that a tool's declared inputSchema actually matches its method's real
-signature. This file exists to catch exactly the kind of drift a manual edit
-can introduce silently: a schema that lists a parameter the method doesn't
-have, a required parameter the schema forgot to mark required, or a stale
-tool entry left behind after its method was renamed or removed.
-
-No JSON-Schema library dependency is added — the shape this codebase's
-schemas actually use (flat "object" with "properties"/"required") is simple
-enough to check by hand.
+The independent tool catalogue also catches a tool removed from both the
+registry and implementation. Signature and registration checks validate the
+shared MCP contract.
 """
 
 from __future__ import annotations
@@ -25,6 +17,61 @@ from ninova_mcp.server import (
     NinovaMcpApp,
     register_tools,
 )
+
+# Fixed public expectations remain independent of the production registry.
+EXPECTED_TOOL_GROUPS = {
+    "obs": (
+        "obs_auth_status",
+        "obs_get_profile",
+        "obs_list_registered_courses",
+        "obs_get_course_grades",
+        "obs_download_transcript",
+    ),
+    "public_obs": (
+        "obs_search_courses",
+        "obs_get_course_prerequisites",
+    ),
+    "schedule": (
+        "get_public_course_schedule",
+        "get_public_course_prerequisites",
+    ),
+    "public_services": (
+        "build_degree_plan",
+        "calculate_target_gpa",
+        "explain_course_eligibility",
+        "find_empty_classrooms",
+        "find_open_course_sections",
+        "get_itu_announcements",
+        "get_personal_exam_calendar",
+        "get_public_exam_schedule",
+        "get_shuttle_schedule",
+        "get_sports_facility_hours",
+        "library_check_availability",
+        "library_get_account",
+        "library_get_item",
+        "library_list_loans",
+        "library_renew_loan",
+        "library_reserve_item",
+        "library_search",
+        "list_degree_faculties",
+        "list_degree_programs",
+        "search_campus_locations",
+        "search_itu_directory",
+    ),
+    "archive": (
+        "archive_list_terms",
+        "archive_course_history",
+        "archive_who_taught",
+        "archive_instructor_courses",
+        "archive_term_sections",
+        "archive_fill_rate",
+        "archive_search_courses",
+        "archive_list_branches",
+        "archive_compare_terms",
+        "plan_remaining_courses",
+    ),
+}
+
 
 _EMPTY = inspect.Parameter.empty
 _VARARGS_KINDS = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
@@ -88,7 +135,16 @@ class ToolMetadataShapeTests(unittest.TestCase):
 
 
 class ToolRegistrationTests(unittest.TestCase):
-    """Every declared tool must resolve to a real, callable NinovaMcpApp method."""
+    """Required tool names and real app methods must remain available."""
+
+    def test_expected_tool_groups_remain_registered_and_callable(self) -> None:
+        app = NinovaMcpApp()
+        registered = set(LOCAL_TOOL_NAMES)
+        for group, names in EXPECTED_TOOL_GROUPS.items():
+            for name in names:
+                with self.subTest(group=group, tool=name):
+                    self.assertIn(name, registered)
+                    self.assertTrue(callable(getattr(app, name)))
 
     def test_every_tool_name_is_a_callable_app_method(self) -> None:
         app = NinovaMcpApp()

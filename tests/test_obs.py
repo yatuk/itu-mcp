@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from ninova_mcp.client import NinovaAuthError
 from ninova_mcp.obs_client import ObsClient, ObsError, redact_obs_profile
-from ninova_mcp.server import NinovaMcpApp, LOCAL_TOOL_NAMES
+from ninova_mcp.server import NinovaMcpApp
 
 
 class ObsRedactTests(unittest.TestCase):
@@ -193,19 +193,6 @@ class RefreshSessionClearsObsJwtTests(unittest.TestCase):
                     app.refresh_session()
                 self.assertIsNone(app._obs._jwt)
                 self.assertIsNone(app._obs._jwt_obtained_at)
-
-
-class ObsToolsRegisteredTests(unittest.TestCase):
-    def test_obs_tools_present(self) -> None:
-        for name in (
-            "obs_auth_status",
-            "obs_get_profile",
-            "obs_list_registered_courses",
-            "obs_get_course_grades",
-            "obs_download_transcript",
-        ):
-            self.assertIn(name, LOCAL_TOOL_NAMES)
-            self.assertTrue(hasattr(NinovaMcpApp, name))
 
 
 class ObsAttendanceSummaryTests(unittest.TestCase):
@@ -400,12 +387,6 @@ class ObsPublicToolsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.app = NinovaMcpApp()
 
-    def test_tools_registered(self) -> None:
-        self.assertIn("obs_search_courses", LOCAL_TOOL_NAMES)
-        self.assertIn("obs_get_course_prerequisites", LOCAL_TOOL_NAMES)
-        self.assertTrue(hasattr(NinovaMcpApp, "obs_search_courses"))
-        self.assertTrue(hasattr(NinovaMcpApp, "obs_get_course_prerequisites"))
-
     def test_search_courses(self) -> None:
         from ninova_mcp.obs_client import ObsPublicClient
 
@@ -597,12 +578,6 @@ class ObsPublicScheduleTests(unittest.TestCase):
         with patch.object(client, "_get_html", side_effect=fake_get_html):
             with self.assertRaises(ObsError):
                 client.get_course_schedule_by_crn("LS", "BLG", "99999")
-
-    def test_schedule_tools_registered(self) -> None:
-        self.assertIn("get_public_course_schedule", LOCAL_TOOL_NAMES)
-        self.assertIn("get_public_course_prerequisites", LOCAL_TOOL_NAMES)
-        self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_schedule"))
-        self.assertTrue(hasattr(NinovaMcpApp, "get_public_course_prerequisites"))
 
 
 SAMPLE_PORTAL_HTML = """<html><body>
