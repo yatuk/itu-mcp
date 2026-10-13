@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import imaplib
 import io
 import os
@@ -29,6 +30,56 @@ MAX_MIME_HEADER_BYTES = 64 * 1024
 MAX_PDF_PAGES = 50
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_IMAGE_DIMENSION = 12_000
+
+# Conventional names are used only when LIST does not advertise a \\Sent role.
+_SENT_NAMES = (
+    "Sent", "sent-mail", "Sent Items", "Sent Messages", "INBOX.Sent", "INBOX/Sent",
+    "Gönderilmiş Öğeler", "Gönderilenler", "Gönderilmiş",
+)
+
+
+def _imap_utf7(value: str) -> str:
+    """Encode a conventional Unicode mailbox name for IMAP4rev1 matching."""
+    return re.sub(
+        r"[^\x20-\x7e]+|&",
+        lambda m: "&-" if m[0] == "&" else "&" + base64.b64encode(
+            m[0].encode("utf-16-be")
+        ).decode("ascii").rstrip("=").replace("/", ",") + "-",
+        value,
+    )
+
+
+def _listed_mailbox(row: Any) -> tuple[set[bytes], bytes] | None:
+    """Read LIST flags and the wire name, including quoted and literal names."""
+    prefix = row[0] if isinstance(row, tuple) and row else row
+    if not isinstance(prefix, bytes):
+        return None
+    match = re.fullmatch(rb'\(([^)]*)\)\s+(?:NIL|"(?:[^"\\]|\\.)*")\s+(.+)', prefix)
+    if not match:
+        return None
+    flags = {flag.lower() for flag in match[1].split()}
+    name = match[2]
+    if re.fullmatch(rb"\{\d+\}", name):
+        if not isinstance(row, tuple) or len(row) < 2 or not isinstance(row[1], bytes):
+            return None
+        name = row[1]
+        if len(name) != int(match[2][1:-1]):
+            return None
+    elif name.startswith(b'"'):
+        if not re.fullmatch(rb'"(?:[^"\\]|\\.)*"', name):
+            return None
+        name = re.sub(rb"\\(.)", rb"\1", name[1:-1])
+    if not name or any(char in name for char in (b"\r", b"\n", b"\x00")):
+        return None
+    return flags, name
+
+
+def _mailbox_role(value: str) -> str:
+    role = str(value).strip().upper()
+    if role not in {"INBOX", "SENT"}:
+        raise ItuMailError("mailbox must be INBOX or SENT. UIDs belong to their listed mailbox.")
+    return role
+
 
 _ALLOWED_ATTACHMENT_TYPES = {
     "application/pdf": {".pdf"},
@@ -388,7 +439,7 @@ def _extract_pdf_text(data: bytes, *, max_chars: int) -> dict[str, Any]:
 
 
 class ItuMailClient:
-    """Small, read-only IMAPS client for an İTÜ inbox.
+    """Small, read-only IMAPS client for İTÜ inbox and sent messages.
 
     Connections are intentionally short lived. Every mailbox selection uses
     ``readonly=True`` and every body fetch uses ``BODY.PEEK`` so listing or
@@ -484,6 +535,36 @@ class ItuMailClient:
             return 0
 
     @staticmethod
+    def _select_mailbox(connection: Any, mailbox: str) -> None:
+        if mailbox == "INBOX":
+            ItuMailClient._select_inbox(connection)
+            return
+        status, data = connection.list('""', '"*"')
+        if status != "OK":
+            raise ItuMailError("İTÜ Mail could not discover the sent mailbox.")
+        entries = [parsed for row in data or [] if (parsed := _listed_mailbox(row))
+                   and b"\\noselect" not in parsed[0]]
+        configured = (os.getenv("NINOVA_MAIL_SENT_MAILBOX") or "").strip()
+        if configured:
+            names = {_imap_utf7(configured).encode("ascii"), configured.encode("utf-8")}
+            candidates = {name for _, name in entries if name in names}
+        else:
+            candidates = {name for flags, name in entries if b"\\sent" in flags}
+            if not candidates:
+                names = {_imap_utf7(name).encode("ascii").lower() for name in _SENT_NAMES}
+                candidates = {name for _, name in entries if name.lower() in names}
+        if len(candidates) != 1:
+            raise ItuMailError(
+                "The sent mailbox is missing or ambiguous. Set NINOVA_MAIL_SENT_MAILBOX "
+                "to the existing sent folder name. The inbox was not used as a substitute."
+            )
+        name = candidates.pop()
+        quoted = b'"' + name.replace(b"\\", b"\\\\").replace(b'"', b'\\"') + b'"'
+        status, _ = connection.select(quoted, readonly=True)
+        if status != "OK":
+            raise ItuMailError("Could not open the İTÜ Mail sent mailbox in read-only mode.")
+
+    @staticmethod
     def _search_uids(
         connection: Any,
         *,
@@ -496,7 +577,7 @@ class ItuMailClient:
             criteria.extend(["SINCE", _format_imap_search_date(since)])
         status, data = connection.uid("SEARCH", None, *criteria)
         if status != "OK":
-            raise ItuMailError("İTÜ Mail could not search the inbox.")
+            raise ItuMailError("İTÜ Mail could not search the selected mailbox.")
         raw = (data or [b""])[0] or b""
         return [item.decode("ascii") for item in raw.split() if item.isdigit()]
 
@@ -522,10 +603,23 @@ class ItuMailClient:
         since_days: int = 14,
         limit: int = 20,
     ) -> dict[str, Any]:
+        return self._list_messages(
+            mailbox="INBOX", unread_only=unread_only, since_days=since_days, limit=limit,
+        )
+
+    def list_sent(self, *, since_days: int = 14, limit: int = 20) -> dict[str, Any]:
+        """List saved sent-message headers, newest UID first, without reading bodies."""
+        return self._list_messages(
+            mailbox="SENT", unread_only=False, since_days=since_days, limit=limit,
+        )
+
+    def _list_messages(
+        self, *, mailbox: str, unread_only: bool, since_days: int, limit: int,
+    ) -> dict[str, Any]:
         since_days = max(0, min(int(since_days), 3650))
         limit = max(1, min(int(limit), MAX_LIST_LIMIT))
         with self._connection() as connection:
-            self._select_inbox(connection)
+            self._select_mailbox(connection, mailbox)
             uids = self._search_uids(
                 connection,
                 unread_only=bool(unread_only),
@@ -548,6 +642,7 @@ class ItuMailClient:
                 messages.append(
                     {
                         "uid": str(_metadata_number(metadata, b"UID") or uid),
+                        "mailbox": mailbox,
                         **_message_headers(message),
                         "size_bytes": _metadata_number(metadata, b"RFC822.SIZE"),
                         "unread": "\\Seen" not in flags,
@@ -555,7 +650,7 @@ class ItuMailClient:
                 )
 
         return {
-            "mailbox": "INBOX",
+            "mailbox": mailbox,
             "read_only": True,
             "unread_only": bool(unread_only),
             "since_days": since_days,
@@ -564,14 +659,17 @@ class ItuMailClient:
             "messages": messages,
         }
 
-    def get_message(self, uid: str, *, max_chars: int = 12_000) -> dict[str, Any]:
+    def get_message(
+        self, uid: str, *, max_chars: int = 12_000, mailbox: str = "INBOX",
+    ) -> dict[str, Any]:
+        mailbox = _mailbox_role(mailbox)
         uid = str(uid).strip()
         if not re.fullmatch(r"[1-9][0-9]{0,19}", uid):
-            raise ItuMailError("Message UID must be a positive integer returned by mail_list_inbox.")
+            raise ItuMailError("Message UID must be a positive integer returned by a mail listing.")
         max_chars = max(1_000, min(int(max_chars), MAX_BODY_CHARS))
 
         with self._connection() as connection:
-            self._select_inbox(connection)
+            self._select_mailbox(connection, mailbox)
             status, data = connection.uid(
                 "FETCH",
                 uid,
@@ -589,7 +687,7 @@ class ItuMailClient:
         declared_size = _metadata_number(metadata, b"RFC822.SIZE")
         flags = _metadata_flags(metadata)
         return {
-            "mailbox": "INBOX",
+            "mailbox": mailbox,
             "read_only": True,
             "uid": str(_metadata_number(metadata, b"UID") or uid),
             **_message_headers(message),
@@ -603,7 +701,8 @@ class ItuMailClient:
             "attachment_notice": (
                 "Attachment contents are not returned by this tool. A PDF/JPEG/PNG item marked "
                 "supported_for_safe_read can be inspected explicitly with mail_get_attachment "
-                "using its part_id. Files are parsed or rendered in memory and never executed."
+                "using its part_id and the same mailbox. Files are parsed or rendered in memory "
+                "and never executed."
             ),
         }
 
@@ -613,19 +712,21 @@ class ItuMailClient:
         part_id: str,
         *,
         max_chars: int = 50_000,
+        mailbox: str = "INBOX",
     ) -> dict[str, Any]:
         """Fetch one explicitly selected safe attachment without changing Seen state."""
 
+        mailbox = _mailbox_role(mailbox)
         uid = str(uid).strip()
         part_id = str(part_id).strip()
         if not re.fullmatch(r"[1-9][0-9]{0,19}", uid):
-            raise ItuMailError("Message UID must be a positive integer returned by mail_list_inbox.")
+            raise ItuMailError("Message UID must be a positive integer returned by a mail listing.")
         if not re.fullmatch(r"[1-9][0-9]{0,3}(?:\.[1-9][0-9]{0,3}){0,9}", part_id):
             raise ItuMailError("Attachment part_id must be returned by mail_get_message.")
         max_chars = max(1_000, min(int(max_chars), MAX_BODY_CHARS))
 
         with self._connection() as connection:
-            self._select_inbox(connection)
+            self._select_mailbox(connection, mailbox)
             status, header_data = connection.uid(
                 "FETCH",
                 uid,
@@ -665,7 +766,7 @@ class ItuMailClient:
 
         filename, content_type, image_dimensions = _validate_attachment_identity(part, data)
         result: dict[str, Any] = {
-            "mailbox": "INBOX",
+            "mailbox": mailbox,
             "read_only": True,
             "uid": uid,
             "part_id": part_id,

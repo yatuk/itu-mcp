@@ -1,4 +1,4 @@
-"""Read-only İTÜ Mail tools: inbox headers, one message, one attachment."""
+"""Read-only İTÜ Mail tools: inbox and sent headers, one message, one attachment."""
 
 from __future__ import annotations
 
@@ -30,18 +30,25 @@ class MailToolsMixin:
             limit=limit,
         )
 
-    def mail_get_message(self, uid: str, max_chars: int = 12_000) -> dict[str, Any]:
-        """Read one inbox message by IMAP UID without downloading attachments."""
-        return self.mail.get_message(uid, max_chars=max_chars)
+    def mail_list_sent(self, since_days: int = 14, limit: int = 20) -> dict[str, Any]:
+        """List saved sent-message headers without changing message flags."""
+        return self.mail.list_sent(since_days=since_days, limit=limit)
+
+    def mail_get_message(
+        self, uid: str, max_chars: int = 12_000, mailbox: str = "INBOX",
+    ) -> dict[str, Any]:
+        """Read one message using the UID and mailbox returned by its listing."""
+        return self.mail.get_message(uid, max_chars=max_chars, mailbox=mailbox)
 
     def mail_get_attachment(
         self,
         uid: str,
         part_id: str,
         max_chars: int = 50_000,
+        mailbox: str = "INBOX",
     ) -> Any:
         """Inspect one allowlisted PDF/JPEG/PNG attachment without executing it."""
-        result = self.mail.get_attachment(uid, part_id, max_chars=max_chars)
+        result = self.mail.get_attachment(uid, part_id, max_chars=max_chars, mailbox=mailbox)
         if result.get("kind") != "image":
             return result
 

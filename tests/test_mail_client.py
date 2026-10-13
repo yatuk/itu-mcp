@@ -97,6 +97,15 @@ class FakeImap:
         self.uid_calls: list[tuple[object, ...]] = []
         self.logged_out = False
         self.messages = {"101": _message_bytes("101"), "102": _message_bytes("102")}
+        self.sent_messages = {"101": _message_bytes("sent-101"), "102": _message_bytes("sent-102")}
+        self.list_rows = [b'(\\HasNoChildren \\Sent) "/" "Sent Items"']
+        self.list_status = "OK"
+        self.select_status = "OK"
+        self.selected_sent = False
+
+    def list(self, reference: str, pattern: str):
+        self.assert_list_args = (reference, pattern)
+        return self.list_status, self.list_rows
 
     def login(self, username: str, password: str):
         self.login_args = (username, password)
@@ -106,7 +115,8 @@ class FakeImap:
 
     def select(self, mailbox: str, readonly: bool = False):
         self.select_calls.append((mailbox, readonly))
-        return "OK", [b"2"]
+        self.selected_sent = mailbox != "INBOX"
+        return self.select_status, [b"2"]
 
     def uid(self, command: str, *args: object):
         self.uid_calls.append((command, *args))
@@ -118,7 +128,7 @@ class FakeImap:
 
         uid = str(args[0])
         query = str(args[1])
-        raw = self.messages[uid]
+        raw = (self.sent_messages if self.selected_sent else self.messages)[uid]
         seen_flag = b"\\Seen" if uid == "101" else b""
         metadata = (
             b"1 (UID "
@@ -199,6 +209,169 @@ class ItuMailClientTests(unittest.TestCase):
         value = datetime(2026, 8, 31, tzinfo=UTC)
 
         self.assertEqual(mail_client._format_imap_search_date(value), "31-Aug-2026")
+
+    def test_list_sent_uses_special_use_folder_and_headers_only(self) -> None:
+        client, fake, _ = self.make_client()
+        result = client.list_sent(since_days=0, limit=1)
+        self.assertEqual(fake.select_calls, [(b'"Sent Items"', True)])
+        self.assertEqual(result["mailbox"], "SENT")
+        self.assertEqual(result["matched_count"], 2)
+        self.assertEqual(result["returned_count"], 1)
+        self.assertEqual(result["messages"][0]["mailbox"], "SENT")
+        self.assertEqual(result["messages"][0]["uid"], "102")
+        self.assertEqual(result["messages"][0]["subject"], "Test message sent-102")
+        self.assertEqual(fake.uid_calls[0], ("SEARCH", None, "ALL"))
+        self.assertIn("BODY.PEEK[HEADER.FIELDS", fake.uid_calls[1][2])
+        self.assertNotIn("body_text", result["messages"][0])
+        self.assertTrue(fake.logged_out)
+
+    def test_sent_and_inbox_same_uid_read_different_messages(self) -> None:
+        client, fake, _ = self.make_client()
+        sent = client.get_message("102", mailbox="SENT")
+        inbox = client.get_message("102")
+        self.assertEqual(sent["subject"], "Test message sent-102")
+        self.assertEqual(inbox["subject"], "Test message 102")
+        self.assertEqual(sent["mailbox"], "SENT")
+        self.assertEqual(inbox["mailbox"], "INBOX")
+        self.assertEqual(fake.select_calls, [(b'"Sent Items"', True), ("INBOX", True)])
+        self.assertTrue(all("BODY.PEEK[]" in call[2] for call in fake.uid_calls))
+
+    def test_sent_attachment_uses_same_mailbox_and_safety_checks(self) -> None:
+        client, fake, _ = self.make_client()
+        fake.sent_messages["102"] = _attachment_message(
+            _minimal_png(), maintype="image", subtype="png", filename="sent.png",
+        )
+        result = client.get_attachment("102", "2", mailbox="SENT")
+        self.assertEqual(result["mailbox"], "SENT")
+        self.assertEqual(result["filename"], "sent.png")
+        self.assertEqual(fake.select_calls, [(b'"Sent Items"', True)])
+        self.assertTrue(all("BODY.PEEK[2" in call[2] for call in fake.uid_calls))
+        fake.sent_messages["102"] = _attachment_message(
+            _minimal_png(), maintype="image", subtype="png", filename="sent.exe",
+        )
+        with self.assertRaises(ItuMailError):
+            client.get_attachment("102", "2", mailbox="SENT")
+
+    def test_invalid_mailbox_fails_before_connecting(self) -> None:
+        client, _, factory = self.make_client()
+        for value in ("Trash", "ALL", "INBOX\r\nSTORE", "", None):
+            with self.subTest(value=value):
+                with self.assertRaises(ItuMailError):
+                    client.get_message("102", mailbox=value)
+                with self.assertRaises(ItuMailError):
+                    client.get_attachment("102", "2", mailbox=value)
+        self.assertEqual(factory.calls, [])
+
+    def test_special_use_takes_priority_over_conventional_name(self) -> None:
+        client, fake, _ = self.make_client()
+        fake.list_rows = [b'() "/" "Sent"', b'(\\sEnT) "/" "Custom/Outgoing"']
+        client.list_sent()
+        self.assertEqual(fake.select_calls, [(b'"Custom/Outgoing"', True)])
+
+    def test_conventional_fallback_including_localized_utf7(self) -> None:
+        self.assertEqual(mail_client._imap_utf7("Sent & Archives"), "Sent &- Archives")
+        self.assertEqual(mail_client._imap_utf7("Öğ"), "&ANYBHw-")
+        names = (
+            ("Sent", b"Sent"), ("sent-mail", b"sent-mail"),
+            ("Sent Items", b"Sent Items"), ("Sent Messages", b"Sent Messages"),
+            ("INBOX.Sent", b"INBOX.Sent"),
+            ("Gönderilmiş Öğeler", b"G&APY-nderilmi&AV8- &ANYBHw-eler"),
+        )
+        for name, wire in names:
+            with self.subTest(name=name):
+                client, fake, _ = self.make_client()
+                fake.list_rows = [b'() "/" "' + wire + b'"']
+                client.list_sent()
+                self.assertEqual(fake.select_calls, [(b'"' + wire + b'"', True)])
+
+    def test_missing_or_ambiguous_sent_folders_fail_without_inbox_fallback(self) -> None:
+        rows = ([], [b'() "/" INBOX'], [b'(\\Noselect \\Sent) "/" Sent'],
+                [b'(\\Sent) "/" A', b'(\\Sent) "/" B'],
+                [b'() "/" Sent', b'() "/" "Sent Items"'])
+        for listed in rows:
+            with self.subTest(rows=listed):
+                client, fake, _ = self.make_client()
+                fake.list_rows = listed
+                with self.assertRaisesRegex(ItuMailError, "missing or ambiguous"):
+                    client.get_message("102", mailbox="SENT")
+                self.assertEqual(fake.select_calls, [])
+                self.assertEqual(fake.uid_calls, [])
+                self.assertTrue(fake.logged_out)
+
+    def test_configured_folder_must_exist_and_resolves_ambiguity(self) -> None:
+        client, fake, _ = self.make_client()
+        fake.list_rows = [b'(\\Sent) "/" A', b'(\\Sent) "/" B']
+        with patch.dict(os.environ, {"NINOVA_MAIL_SENT_MAILBOX": "B"}):
+            client.list_sent()
+        self.assertEqual(fake.select_calls, [(b'"B"', True)])
+        fake.select_calls.clear()
+        with patch.dict(os.environ, {"NINOVA_MAIL_SENT_MAILBOX": "Missing"}):
+            with self.assertRaises(ItuMailError):
+                client.list_sent()
+        self.assertEqual(fake.select_calls, [])
+
+    def test_quoted_and_literal_names_are_safely_selected(self) -> None:
+        for row, expected in (
+            (b'(\\Sent) NIL "My \\"sent\\" \\\\ folder"', b'"My \\"sent\\" \\\\ folder"'),
+            ((b'(\\Sent) "/" {10}', b'Sent Items'), b'"Sent Items"'),
+        ):
+            with self.subTest(row=row):
+                client, fake, _ = self.make_client()
+                fake.list_rows = [row]
+                client.list_sent()
+                self.assertEqual(fake.select_calls, [(expected, True)])
+
+    def test_malformed_or_injected_list_rows_are_not_selected(self) -> None:
+        for row in (None, (), b'garbage', b'(\\Sent) "/" "broken',
+                    (b'(\\Sent) "/" {5}', b'X\r\nY'), b'(\\Sent) "/" {5}',
+                    (b'(\\Sent) "/" {20}', b'Sent Items')):
+            with self.subTest(row=row):
+                client, fake, _ = self.make_client()
+                fake.list_rows = [row]
+                with self.assertRaises(ItuMailError):
+                    client.list_sent()
+                self.assertEqual(fake.select_calls, [])
+
+    def test_sent_limits_are_bounded_and_empty_folder_is_valid(self) -> None:
+        client, fake, _ = self.make_client()
+        fake.sent_messages = {str(uid): _message_bytes(f"sent-{uid}") for uid in range(1, 121)}
+        original_uid = fake.uid
+
+        def large_mailbox(command, *args):
+            if command == "SEARCH":
+                fake.uid_calls.append((command, *args))
+                return "OK", [b" ".join(str(uid).encode() for uid in range(1, 121))]
+            return original_uid(command, *args)
+
+        with patch.object(fake, "uid", side_effect=large_mailbox):
+            result = client.list_sent(since_days=-1, limit=1000)
+        self.assertEqual(result["since_days"], 0)
+        self.assertEqual(result["matched_count"], 120)
+        self.assertEqual(result["returned_count"], 50)
+        self.assertEqual(result["messages"][0]["uid"], "120")
+        self.assertEqual(result["messages"][-1]["uid"], "71")
+        self.assertEqual(len([call for call in fake.uid_calls if call[0] == "FETCH"]), 50)
+        with patch.object(fake, "uid", side_effect=large_mailbox), patch.object(mail_client, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 10, 13, tzinfo=UTC)
+            bounded = client.list_sent(since_days=4000, limit=0)
+        self.assertEqual(bounded["since_days"], 3650)
+        self.assertEqual(bounded["returned_count"], 1)
+        self.assertEqual(bounded["messages"][0]["uid"], "120")
+        self.assertEqual(fake.uid_calls[-2], ("SEARCH", None, "ALL", "SINCE", "15-Oct-2016"))
+        with patch.object(fake, "uid", return_value=("OK", [b""])):
+            result = client.list_sent(since_days=0, limit=1)
+        self.assertEqual(result["matched_count"], 0)
+        self.assertEqual(result["messages"], [])
+
+    def test_list_and_select_failures_do_not_fetch_messages(self) -> None:
+        for attribute in ("list_status", "select_status"):
+            with self.subTest(attribute=attribute):
+                client, fake, _ = self.make_client()
+                setattr(fake, attribute, "NO")
+                with self.assertRaises(ItuMailError):
+                    client.list_sent()
+                self.assertEqual(fake.uid_calls, [])
+                self.assertTrue(fake.logged_out)
 
     def test_get_message_extracts_plain_text_without_attachment_content(self) -> None:
         client, fake, _ = self.make_client()

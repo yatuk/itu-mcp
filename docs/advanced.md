@@ -122,7 +122,7 @@ only the groups you need. Each tool belongs to exactly one group:
 | `campus` | 5 | No login: shuttle, directory, buildings, sports hours, announcements |
 | `library` | 7 | Catalog search, availability, account, loans |
 | `archive` | 15 | Course archive: history, instructors, fill rates, grade distribution |
-| `mail` | 4 | Read-only ITU Mail |
+| `mail` | 5 | Read-only ITU Mail |
 
 ```bash
 export NINOVA_TOOLSETS="ninova,obs,archive"      # publish only these groups
@@ -326,6 +326,7 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
 - `auth_status` — check whether credentials exist and a fresh Ninova session can be created.
 - `mail_status` — verify the read-only IMAPS connection and return inbox counts.
 - `mail_list_inbox` — list bounded message headers and UIDs without changing unread state.
+- `mail_list_sent` — list saved sent-message headers and UIDs from the server's sent folder.
 - `mail_get_message` — read one bounded text body and attachment metadata with `BODY.PEEK`.
 - `mail_get_attachment` — inspect one size-limited PDF, JPEG, or PNG attachment in memory.
 - `refresh_session` — force a new login with the configured credentials.
@@ -478,7 +479,14 @@ server-to-client stream open.
 
 ### Mail read-only scope
 
-Mail tools select only `INBOX` with `readonly=True` and fetch content with `BODY.PEEK`.
+Mail tools select `INBOX` or the existing sent folder with `readonly=True` and fetch
+content with `BODY.PEEK`. Use `mailbox="SENT"` for a UID from `mail_list_sent`,
+including when inspecting its attachment. The default is `INBOX`. Sent-folder
+discovery uses the IMAP role or a known existing name, including ITU's `sent-mail`.
+If discovery is ambiguous, set `NINOVA_MAIL_SENT_MAILBOX` in the process environment
+or an explicitly chosen environment file to the existing folder's display name.
+Listings use descending UID order, reflecting the order messages
+were added to that folder. Only copies saved on the IMAP server are available.
 They cannot send, delete, move, flag, or mark messages as read. Attachment inspection accepts
 only bounded PDF, JPEG, and PNG data and never executes files. Remote HTTP keeps all mail tools
 disabled unless `NINOVA_REMOTE_ENABLE_MAIL=1`; `NINOVA_REMOTE_ALLOWED_TOOLS` can further narrow

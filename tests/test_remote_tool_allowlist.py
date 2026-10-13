@@ -7,6 +7,14 @@ from ninova_mcp.server import MAIL_TOOL_NAMES, OBS_REGISTRATION_WRITE_TOOL_NAMES
 
 
 class RemoteToolAllowlistTests(unittest.TestCase):
+    def test_sent_mail_requires_remote_opt_in(self) -> None:
+        with patch.dict(os.environ, {"NINOVA_REMOTE_ALLOWED_TOOLS": "mail_list_sent"}):
+            os.environ.pop("NINOVA_REMOTE_ENABLE_MAIL", None)
+            with self.assertRaises(RuntimeError):
+                _selected_remote_tool_names()
+            os.environ["NINOVA_REMOTE_ENABLE_MAIL"] = "1"
+            self.assertEqual(_selected_remote_tool_names(), ["mail_list_sent"])
+
     def test_mail_is_disabled_by_default(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("NINOVA_REMOTE_ALLOWED_TOOLS", None)

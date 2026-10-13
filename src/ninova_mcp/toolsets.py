@@ -197,10 +197,11 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "mail": (
-        "ITU Mail, read-only: inbox, messages, attachments",
+        "ITU Mail, read-only: inbox, sent messages, attachments",
         (
             "mail_status",
             "mail_list_inbox",
+            "mail_list_sent",
             "mail_get_message",
             "mail_get_attachment",
         ),

@@ -59,6 +59,7 @@ PUBLISH_ORDER: tuple[str, ...] = (
     "auth_status",
     "mail_status",
     "mail_list_inbox",
+    "mail_list_sent",
     "mail_get_message",
     "mail_get_attachment",
     "refresh_session",
