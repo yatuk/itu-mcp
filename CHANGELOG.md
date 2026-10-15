@@ -1,5 +1,20 @@
 # Changelog
 
+## Yayınlanmamış
+
+### Yeni araçlar
+
+- **`mail_list_sent`:** İTÜ Mail'de gönderilmiş iletilerin başlıklarını listeler. `mail_get_message`
+  ve `mail_get_attachment` artık `mailbox="SENT"` alıyor, varsayılan hâlâ gelen kutusu. Gönderilmiş
+  klasörü sunucunun bildirdiği role ya da bilinen adlara göre bulunur, bulunamazsa
+  `NINOVA_MAIL_SENT_MAILBOX` ile belirtilir. Her şey salt okunur, uzak sunucuda posta yine ayrıca
+  açılmadıkça kapalı ([@tzi4](https://github.com/tzi4), #11)
+
+### Testler
+
+- Bilinmeyen istem ve kaynak testleri artık doğru hata mesajını bekliyor, araç kaydı denetimleri tek
+  yerde toplandı ([@tzi4](https://github.com/tzi4), #12)
+
 ## v1.2.1
 
 ### Düzeltmeler
