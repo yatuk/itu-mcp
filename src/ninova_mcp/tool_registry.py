@@ -23,6 +23,7 @@ LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",
     "mail_list_inbox",
+    "mail_list_sent",
     "mail_get_message",
     "mail_get_attachment",
 }

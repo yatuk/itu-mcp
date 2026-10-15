@@ -146,6 +146,24 @@ class ToolRegistrationTests(unittest.TestCase):
                     self.assertIn(name, registered)
                     self.assertTrue(callable(getattr(app, name)))
 
+    def test_sent_mail_methods_forward_mailbox_to_client(self) -> None:
+        from unittest.mock import Mock
+
+        listing = {"mailbox": "SENT", "messages": [{"uid": "102"}]}
+        message = {"mailbox": "SENT", "uid": "102", "body_text": "Sent body"}
+        attachment = {"kind": "pdf_text", "text": "Attachment body"}
+        app = NinovaMcpApp()
+        app._mail = Mock()
+        app._mail.list_sent.return_value = listing
+        app._mail.get_message.return_value = message
+        app._mail.get_attachment.return_value = attachment
+        self.assertIs(app.mail_list_sent(since_days=0, limit=1), listing)
+        app._mail.list_sent.assert_called_once_with(since_days=0, limit=1)
+        self.assertIs(app.mail_get_message("102", mailbox="SENT"), message)
+        app._mail.get_message.assert_called_once_with("102", max_chars=12000, mailbox="SENT")
+        self.assertIs(app.mail_get_attachment("102", "2", mailbox="SENT"), attachment)
+        app._mail.get_attachment.assert_called_once_with("102", "2", max_chars=50000, mailbox="SENT")
+
     def test_every_tool_name_is_a_callable_app_method(self) -> None:
         app = NinovaMcpApp()
         for name in LOCAL_TOOL_NAMES:
@@ -229,8 +247,8 @@ class ToolRegistrationTests(unittest.TestCase):
         from mcp.types import TextContent
 
         class FakeMail:
-            def get_attachment(self, uid: str, part_id: str, *, max_chars: int):
-                del uid, part_id, max_chars
+            def get_attachment(self, uid: str, part_id: str, *, max_chars: int, mailbox: str):
+                del uid, part_id, max_chars, mailbox
                 return {
                     "kind": "image",
                     "content_type": "image/png",

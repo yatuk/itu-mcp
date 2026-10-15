@@ -92,6 +92,8 @@ AUTO_ENV_BLOCKED_KEYS: frozenset[str] = frozenset(
         "NINOVA_LIBRARY_BASE_URL",
         "NINOVA_MAIL_HOST",
         "NINOVA_MAIL_PORT",
+        # An explicit sent-folder override should be chosen by the operator.
+        "NINOVA_MAIL_SENT_MAILBOX",
         # TLS trust and proxying.
         "NINOVA_LIBRARY_CA_BUNDLE",
         "NINOVA_LIBRARY_PROXY_URL",
