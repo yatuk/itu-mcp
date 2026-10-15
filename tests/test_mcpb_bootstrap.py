@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_PY = ROOT / "mcpb" / "server" / "main.py"
@@ -39,11 +39,30 @@ class McpbBootstrapTests(unittest.TestCase):
         )
 
     def test_candidates_all_exist_and_deduped(self) -> None:
-        candidates = self.mod._candidate_interpreters()
-        self.assertIsInstance(candidates, list)
-        self.assertEqual(len(candidates), len(set(candidates)))
-        for candidate in candidates:
-            self.assertTrue(os.path.exists(candidate), candidate)
+        discovered = {
+            "python3.14": "/fixture/python3.14",
+            "python3.13": "/fixture/missing-python3.13",
+            "python3.12": "/fixture/python3.12",
+            "python3": "/fixture/python3.12",
+            "python": "/fixture/python3.14",
+        }
+        expected = [
+            "/fixture/python3.14",
+            "/fixture/python3.12",
+            str(Path("/opt/homebrew/bin") / "python3.14"),
+            "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+        ]
+        with patch("shutil.which", side_effect=discovered.get), patch.object(
+            self.mod.os.path, "exists", side_effect=lambda path: str(path) in expected,
+        ):
+            candidates = self.mod._candidate_interpreters()
+        self.assertEqual(candidates, expected)
+
+    def test_candidate_discovery_can_be_empty_when_no_interpreter_exists(self) -> None:
+        with patch("shutil.which", return_value=None), patch.object(
+            self.mod.os.path, "exists", return_value=False,
+        ):
+            self.assertEqual(self.mod._candidate_interpreters(), [])
 
     def test_importing_main_did_not_reexec_on_modern_python(self) -> None:
         # If the bootstrap had re-exec'd, this module would never have imported.

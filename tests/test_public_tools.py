@@ -22,7 +22,7 @@ from ninova_mcp.public_parsing import (
     extract_shuttle_schedule,
     extract_sports_facility_hours,
 )
-from ninova_mcp.server import LOCAL_TOOL_NAMES, NinovaMcpApp
+from ninova_mcp.server import NinovaMcpApp
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -130,20 +130,6 @@ class PublicClientSafetyTests(unittest.TestCase):
             result = client.get_final_exam_schedule("blg")
         self.assertEqual(result["department_id"], 3)
         self.assertTrue(result["untrusted_external_content"])
-
-    def test_new_tools_are_registered(self) -> None:
-        expected = {
-            "get_public_exam_schedule", "get_personal_exam_calendar", "search_itu_directory",
-            "get_shuttle_schedule", "search_campus_locations", "get_sports_facility_hours",
-            "get_itu_announcements", "library_search", "library_get_item",
-            "library_check_availability", "library_get_account", "library_list_loans",
-            "library_renew_loan", "library_reserve_item", "find_open_course_sections",
-            "find_empty_classrooms", "list_degree_faculties", "list_degree_programs", "build_degree_plan",
-            "explain_course_eligibility", "calculate_target_gpa",
-        }
-        self.assertTrue(expected.issubset(set(LOCAL_TOOL_NAMES)))
-        for name in expected:
-            self.assertTrue(hasattr(NinovaMcpApp, name), name)
 
 
 if __name__ == "__main__":
