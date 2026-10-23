@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "1.2.1"
+SERVER_VERSION = "1.3.0"
 
 SERVER_INSTRUCTIONS = (
     "This connector reads the user's own İTÜ Ninova LMS and İTÜ OBS "
@@ -22,7 +22,7 @@ SERVER_INSTRUCTIONS = (
     "resolve the one the user means, then call the specific tool (e.g. "
     "get_course_assignments, get_course_grades, get_course_announcements). For "
     "'what's due / upcoming' use get_upcoming_deadlines; for a broad status use "
-    "get_dashboard. To read a PDF/DOCX from Ninova, call read_resource_text with "
+    "get_dashboard. To read a PDF/DOCX/PPTX from Ninova, call read_resource_text with "
     "the file URL (or path from download_resource). Use compact=true on heavy "
     "tools when the full payload is not needed. OBS tools return the reduced "
     "answer by default; a result with raw_available says that include_raw=true "

@@ -162,5 +162,122 @@ class TextExtractTests(unittest.TestCase):
         self.assertIn("first 50 of 57 pages", long["truncation_note"])
 
 
+def _pptx(slides: dict[int, str], *, notes: dict[int, str] | None = None, media: int = 0,
+          extra_parts: dict[str, bytes] | None = None) -> bytes:
+    """Build a tiny PPTX (zip of DrawingML parts); ``slides`` maps slide number to its paragraphs XML."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for number, body in slides.items():
+            archive.writestr(
+                f"ppt/slides/slide{number}.xml",
+                f'<p:sld xmlns:a="a" xmlns:p="p"><p:txBody>{body}</p:txBody></p:sld>',
+            )
+            if notes and number in notes:
+                archive.writestr(
+                    f"ppt/slides/_rels/slide{number}.xml.rels",
+                    f'<Relationships><Relationship Target="../notesSlides/notesSlide{number + 10}.xml"/></Relationships>',
+                )
+                archive.writestr(
+                    f"ppt/notesSlides/notesSlide{number + 10}.xml",
+                    f"<p:notes><a:p><a:r><a:t>{notes[number]}</a:t></a:r></a:p></p:notes>",
+                )
+        for index in range(media):
+            archive.writestr(f"ppt/media/image{index}.png", b"png")
+        for name, content in (extra_parts or {}).items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _para(*runs: str) -> str:
+    return "<a:p>" + "".join(f"<a:r><a:t>{run}</a:t></a:r>" for run in runs) + "</a:p>"
+
+
+class PptxExtractionTests(unittest.TestCase):
+    def test_slide_text_in_slide_order_not_zip_order(self) -> None:
+        data = _pptx({2: _para("Second"), 1: _para("First")})
+        result = extract_text_from_bytes(data, extension=".pptx")
+        self.assertTrue(result["ok"])
+        self.assertLess(result["text"].index("First"), result["text"].index("Second"))
+        self.assertIn("--- slide 1 ---", result["text"])
+        self.assertEqual(result["slide_count"], 2)
+
+    def test_runs_in_one_paragraph_join_and_paragraphs_split(self) -> None:
+        data = _pptx({1: _para("Midterm: ", "10 Nov") + _para("Final: 5 Jan")})
+        text = extract_text_from_bytes(data, extension=".pptx")["text"]
+        self.assertIn("Midterm: 10 Nov\nFinal: 5 Jan", text)
+
+    def test_entities_are_decoded(self) -> None:
+        data = _pptx({1: _para("Q&amp;A &lt;draft&gt; caf&#233;")})
+        self.assertIn("Q&A <draft> café", extract_text_from_bytes(data, extension=".pptx")["text"])
+
+    def test_speaker_notes_are_attached_to_their_slide(self) -> None:
+        data = _pptx({1: _para("Syllabus")}, notes={1: "Exam dates are in the notes"})
+        text = extract_text_from_bytes(data, extension=".pptx")["text"]
+        self.assertIn("[notes] Exam dates are in the notes", text)
+
+    def test_entity_definitions_are_not_expanded(self) -> None:
+        """No XML parser runs, so a DOCTYPE entity bomb or external entity does nothing."""
+        bomb = (
+            '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "AAAA"><!ENTITY b "&a;&a;&a;&a;">'
+            '<!ENTITY ext SYSTEM "file:///etc/passwd">]>'
+            "<p:sld><a:p><a:r><a:t>&b;&ext;</a:t></a:r></a:p></p:sld>"
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("ppt/slides/slide1.xml", bomb)
+        text = extract_text_from_bytes(buffer.getvalue(), extension=".pptx")["text"]
+        self.assertNotIn("AAAA", text)
+        self.assertNotIn("root:", text)
+
+    def test_oversized_part_is_skipped_and_reported(self) -> None:
+        with patch("ninova_mcp.text_extract.MAX_PPTX_PART_BYTES", 200):
+            data = _pptx({1: _para("small"), 2: _para("x" * 500)})
+            result = extract_text_from_bytes(data, extension=".pptx")
+        self.assertIn("small", result["text"])
+        self.assertNotIn("xxxx", result["text"])
+        self.assertTrue(result["truncated"])
+        self.assertIn("size safety limit", result["truncation_note"])
+
+    def test_slide_count_cap_is_reported(self) -> None:
+        with patch("ninova_mcp.text_extract.MAX_PPTX_SLIDES", 2):
+            data = _pptx({n: _para(f"s{n}") for n in range(1, 5)})
+            result = extract_text_from_bytes(data, extension=".pptx")
+        self.assertIn("first 2 of 4 slides", result["truncation_note"])
+        self.assertNotIn("s3", result["text"])
+
+    def test_image_only_deck_explains_why_it_is_empty(self) -> None:
+        data = _pptx({1: "<a:p></a:p>"}, media=3)
+        result = extract_text_from_bytes(data, extension=".pptx")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["empty"])
+        self.assertIn("3 images", result["image_only_hint"])
+
+    def test_pptx_detected_from_content_without_extension(self) -> None:
+        result = extract_text_from_bytes(_pptx({1: _para("Hello")}), extension="")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["extension"], ".pptx")
+        self.assertIn("Hello", result["text"])
+
+    def test_content_type_maps_to_pptx(self) -> None:
+        ctype = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        self.assertEqual(guess_extension(content_type=ctype), ".pptx")
+
+    def test_legacy_ppt_gets_a_specific_hint(self) -> None:
+        legacy = bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 64
+        result = extract_text_from_bytes(legacy, extension=".ppt")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["extension"], ".ppt")
+        self.assertIn("PowerPoint", result["error"])
+
+    def test_corrupt_pptx_returns_error_not_exception(self) -> None:
+        result = extract_text_from_bytes(b"PK\x03\x04 not really a zip", extension=".pptx")
+        self.assertFalse(result["ok"])
+
+    def test_pages_out_gets_one_entry_per_slide(self) -> None:
+        pages: list = []
+        extract_text_from_bytes(_pptx({1: _para("A"), 2: _para("B")}), extension=".pptx", pages_out=pages)
+        self.assertEqual([page for page, _ in pages], [1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,7 +75,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
         "title": "Download Resource",
         "description": (
             "Download a Ninova file or other authenticated resource to disk. The text of a saved "
-            "PDF/DOCX/TXT is also added to the local index that search_content searches."
+            "PDF/DOCX/PPTX/TXT is also added to the local index that search_content searches."
         ),
         "inputSchema": {
             "type": "object",
@@ -101,7 +101,7 @@ FILES_TOOLS: list[dict[str, Any]] = [
         "name": "read_resource_text",
         "title": "Read Resource Text",
         "description": (
-            "Extract plain text from a Ninova PDF/DOCX/TXT (or a local path from "
+            "Extract plain text from a Ninova PDF/DOCX/PPTX/TXT (or a local path from "
             "download_resource) so the assistant can read lecture notes and assignments. "
             "The extracted text is also added to the local index that search_content searches."
         ),

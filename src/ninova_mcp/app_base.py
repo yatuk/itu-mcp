@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from .community_data import CrossCheckDataClient
     from .library_client import LibraryClient
     from .mail_client import ItuMailClient
+    from .moodle_client import MoodleClient
     from .obs_client import ObsClient, ObsPublicClient
+    from .pool_client import PoolSiteClient
     from .public_client import ItuPublicClient
 
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
@@ -60,6 +62,8 @@ class AppBase:
         self._obs_public: ObsPublicClient | None = None
         self._itu_public: ItuPublicClient | None = None
         self._library: LibraryClient | None = None
+        self._moodle: MoodleClient | None = None
+        self._pool: PoolSiteClient | None = None
         self._mail: ItuMailClient | None = None
         self._archive: ItuArchiveClient | None = None
         self._prereq_crosscheck: CrossCheckDataClient | None = None
@@ -134,6 +138,22 @@ class AppBase:
         return self._library
 
     @property
+    def moodle(self) -> MoodleClient:
+        if self._moodle is None:
+            with self._client_lock:
+                if self._moodle is None:
+                    self._moodle = server_namespace().MoodleClient()
+        return self._moodle
+
+    @property
+    def pool(self) -> PoolSiteClient:
+        if self._pool is None:
+            with self._client_lock:
+                if self._pool is None:
+                    self._pool = server_namespace().PoolSiteClient()
+        return self._pool
+
+    @property
     def mail(self) -> ItuMailClient:
         if self._mail is None:
             with self._client_lock:
@@ -165,6 +185,10 @@ class AppBase:
             self._itu_public._cache.clear()
         if self._library is not None:
             self._library._cache.clear()
+        if self._moodle is not None:
+            self._moodle._cache.clear()
+        if self._pool is not None:
+            self._pool._cache.clear()
         if self._archive is not None:
             self._archive._cache.clear()
         if self._prereq_crosscheck is not None:

@@ -27,6 +27,7 @@ from .app_search import SearchToolsMixin
 from .app_tracking import TrackingToolsMixin
 from .archive_tools import ArchiveDatasetToolsMixin
 from .calendar_export import CalendarExportToolsMixin
+from .moodle_tools import MoodleToolsMixin
 from .seat_watch import SeatWatchToolsMixin
 
 
@@ -47,6 +48,7 @@ class NinovaMcpApp(
     CampusToolsMixin,
     PlanningToolsMixin,
     LibraryToolsMixin,
+    MoodleToolsMixin,
     ArchiveHistoryToolsMixin,
     GpaSimulationToolsMixin,
     SearchToolsMixin,

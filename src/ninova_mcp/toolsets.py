@@ -176,6 +176,18 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "library_reserve_item",
         ),
     ),
+    "moodle": (
+        "İTÜ Moodle courses and the FIZ/KIM/MAT pool course sites: files, announcements, deadlines",
+        (
+            "moodle_list_courses",
+            "moodle_get_course",
+            "moodle_get_announcements",
+            "moodle_get_upcoming_events",
+            "moodle_read_resource",
+            "pool_list_documents",
+            "pool_read_document",
+        ),
+    ),
     "archive": (
         "Course archive since 2016: history, instructors, fill rates, grade distribution",
         (

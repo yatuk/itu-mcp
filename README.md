@@ -33,7 +33,7 @@
 
 ## In English
 
-**İTÜ MCP** is an unofficial, open source [Model Context Protocol](https://modelcontextprotocol.io) server for students of Istanbul Technical University (İTÜ). It runs on your own computer and lets an AI assistant such as Claude, ChatGPT, Cursor or Codex read İTÜ's systems for you: the Ninova LMS (courses, assignments, files, announcements), OBS (grades, schedule, registration status, transcript, graduation progress), the student Portal, the library catalog and a public archive of past course offerings.
+**İTÜ MCP** is an unofficial, open source [Model Context Protocol](https://modelcontextprotocol.io) server for students of Istanbul Technical University (İTÜ). It runs on your own computer and lets an AI assistant such as Claude, ChatGPT, Cursor or Codex read İTÜ's systems for you: the Ninova LMS (courses, assignments, files, announcements), İTÜ Moodle and the physics, chemistry and math pool course sites (syllabi, guides, announcements), OBS (grades, schedule, registration status, transcript, graduation progress), the student Portal, the library catalog and a public archive of past course offerings.
 
 - Ask in plain language: "what is due this week", "what will my GPA be if I get BB in everything", "which sections of MAT 210E still have seats".
 - Read-only by default. The two actions that change something (uploading an assignment, saving a registration draft) ask you for confirmation first.
@@ -58,6 +58,7 @@ The rest of this page is in Turkish. Setup: [3 adımda kur](#3-adımda-kur). Ful
 | "Bu dersi geçen yıl kim verdi, kaç kişi AA aldı?" | Ders arşivi |
 | "Kütüphanede bu kitap var mı?" | Kütüphane kataloğu |
 | "Okunmamış maillerimi özetle" | İTÜ Mail |
+| "FIZ 102E izlencesini ve duyurularını oku" | Moodle ve havuz siteleri |
 | "Bu şubede yer açılınca haberim olsun" | Kontenjan takibi |
 | "Ders programımı telefonumun takvimine ekle" | Takvim dosyası (.ics) |
 
@@ -375,7 +376,7 @@ NINOVA_TOOLSETS=ninova,obs,archive        # yalnızca bu gruplar açık olsun
 NINOVA_DISABLED_TOOLSETS=library,mail     # ya da: bunlar dışında her şey açık olsun
 ```
 
-Gruplar: `core`, `ninova`, `files`, `obs`, `registration`, `portal`, `planning`, `public`, `campus`, `library`, `archive`, `mail`. İkisini de yazmazsan her şey açık kalır. Hangi grupta ne olduğunu `itu-mcp --list-toolsets` gösterir.
+Gruplar: `core`, `ninova`, `files`, `obs`, `registration`, `portal`, `planning`, `public`, `campus`, `library`, `moodle`, `archive`, `mail`. İkisini de yazmazsan her şey açık kalır. Hangi grupta ne olduğunu `itu-mcp --list-toolsets` gösterir.
 
 </details>
 
@@ -448,7 +449,8 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>obs_calculate_gpa</code> · <code>obs_simulate_cumulative_gpa</code> · <code>calculate_target_gpa</code><br/>
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
-      <code>build_degree_plan</code> · <code>library_*</code>
+      <code>build_degree_plan</code> · <code>library_*</code><br/>
+      <code>moodle_*</code> · <code>pool_*</code>
     </td>
     <td valign="top">
       <code>archive_who_taught</code> · <code>archive_course_history</code><br/>

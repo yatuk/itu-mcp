@@ -1,8 +1,21 @@
 # Changelog
 
-## Yayınlanmamış
+## v1.3.0
 
 ### Yeni araçlar
+
+- **İTÜ Moodle:** `moodle_list_courses`, `moodle_get_course`, `moodle_get_announcements`,
+  `moodle_get_upcoming_events` ve `moodle_read_resource`. Moodle (moodle.itu.edu.tr) Ninova gibi
+  girisv3 ile değil kendi formuyla açılıyor ama aynı İTÜ kullanıcı adı ve şifreyi kabul ediyor, yeni
+  bir ayar gerekmiyor. Şifre yalnızca moodle.itu.edu.tr adresine gönderilir, yönlendirmeler de aynı
+  sunucuyla sınırlı. Oturum bellekte tutulur, süresi dolunca bir kez yeniden giriş yapılır
+- **Havuz dersi siteleri:** `pool_list_documents` ve `pool_read_document`. Fizik, kimya ve matematik
+  havuz sitelerindeki (fizikhavuz, kimyahavuz, mathavuz) izlence, kısa sınav rehberi ve ders sayfaları
+  listelenip okunuyor (örn. `FIZ 102E`). Herkese açık, giriş gerekmiyor
+- **PPTX okuma:** `read_resource_text` artık `.pptx` dosyalarını da okuyor (slayt sırasıyla metin ve
+  konuşmacı notları). Dosya XML ayrıştırıcıdan geçirilmiyor, boyut ve slayt sayısı sınırlı. Yalnızca
+  görsel içeren slaytlar için uyarı verilir, eski `.ppt` biçimi için `.pptx` olarak kaydetme önerilir
+- Yeni `moodle` araç grubu (`NINOVA_TOOLSETS` / `NINOVA_DISABLED_TOOLSETS` ile açılıp kapatılır)
 
 - **`mail_list_sent`:** İTÜ Mail'de gönderilmiş iletilerin başlıklarını listeler. `mail_get_message`
   ve `mail_get_attachment` artık `mailbox="SENT"` alıyor, varsayılan hâlâ gelen kutusu. Gönderilmiş

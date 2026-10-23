@@ -58,6 +58,15 @@ EXPECTED_TOOL_GROUPS = {
         "search_campus_locations",
         "search_itu_directory",
     ),
+    "moodle": (
+        "moodle_list_courses",
+        "moodle_get_course",
+        "moodle_get_announcements",
+        "moodle_get_upcoming_events",
+        "moodle_read_resource",
+        "pool_list_documents",
+        "pool_read_document",
+    ),
     "archive": (
         "archive_list_terms",
         "archive_course_history",

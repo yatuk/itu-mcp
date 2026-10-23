@@ -357,7 +357,7 @@ own routes such as `/Sinif/<id>.<id>/Notlar`, `/MesajPanosu`, `/Yoklama`, and
   or path, it accepts the Ninova host only.
 - `crawl_course` — inventory internal pages and downloadable resources inside a course.
 - `download_resource`: download a file or page response into the downloads directory.
-- `read_resource_text`: extract plain text from a PDF/DOCX/TXT (URL, or a path inside the
+- `read_resource_text`: extract plain text from a PDF/DOCX/PPTX/TXT (PPTX: slide text and speaker notes, one block per slide) (URL, or a path inside the
   downloads directory) for the LLM.
 - `get_assignment_upload_slots` — list file slots / fill status on an assignment upload page.
 - `submit_assignment` — upload a **local** file to one slot (requires `confirm=true`; dry-run otherwise).

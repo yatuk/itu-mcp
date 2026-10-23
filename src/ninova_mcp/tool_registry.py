@@ -12,6 +12,7 @@ from typing import Any
 
 from .archive_tools import ARCHIVE_DATASET_TOOLS
 from .calendar_export import CALENDAR_EXPORT_TOOLS
+from .moodle_tools import MOODLE_TOOLS
 from .seat_watch import SEAT_WATCH_STATEFUL_TOOL_NAMES, SEAT_WATCH_TOOLS
 from .tool_metadata import BASE_TOOLS
 
@@ -19,6 +20,7 @@ TOOLS: list[dict[str, Any]] = list(BASE_TOOLS)
 TOOLS.extend(ARCHIVE_DATASET_TOOLS)
 TOOLS.extend(SEAT_WATCH_TOOLS)
 TOOLS.extend(CALENDAR_EXPORT_TOOLS)
+TOOLS.extend(MOODLE_TOOLS)
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",
@@ -35,6 +37,7 @@ REMOTE_EXCLUDED_TOOLS = {
     "submit_assignment",
     "get_assignment_upload_slots",
     "read_resource_text",
+    "moodle_read_resource",
     "read_page",
     "library_renew_loan",
     "library_reserve_item",

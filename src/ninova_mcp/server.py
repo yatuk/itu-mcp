@@ -43,6 +43,8 @@ from .client import NinovaClient
 from .community_data import CrossCheckDataClient
 from .env import load_ninova_env
 from .library_client import LibraryClient
+from .moodle_client import MoodleClient
+from .pool_client import PoolSiteClient
 from .mail_client import ItuMailClient
 from .obs_client import ObsClient, ObsPublicClient
 from .parsing import match_upload_slot
@@ -76,6 +78,8 @@ __all__ = [
     "ItuPublicClient",
     "LOCAL_TOOL_NAMES",
     "LibraryClient",
+    "MoodleClient",
+    "PoolSiteClient",
     "MAIL_TOOL_NAMES",
     "MAX_UPLOAD_BYTES",
     "NinovaClient",

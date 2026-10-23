@@ -3,7 +3,7 @@
   "name": "io.github.yatuk/itu-mcp",
   "title": "İTÜ MCP",
   "description": "İTÜ Ninova, OBS, Portal, kampüs servisleri ve kütüphane için MCP sunucusu",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "websiteUrl": "https://github.com/yatuk/itu-mcp",
   "repository": {
     "url": "https://github.com/yatuk/itu-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "itu-mcp",
-      "version": "1.2.1",
+      "version": "1.3.0",
       "transport": {
         "type": "stdio"
       },

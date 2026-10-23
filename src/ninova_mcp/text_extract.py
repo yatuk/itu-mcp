@@ -10,13 +10,19 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}
 DEFAULT_MAX_CHARS = 50_000
 # Largest file read into memory for extraction, for a URL and for a local path alike.
 MAX_EXTRACT_BYTES = 25 * 1024 * 1024
 # Same page limit as the mail attachment reader. Pages beyond it are not read
 # and the result says so.
 MAX_PDF_PAGES = 50
+# PowerPoint limits. A .pptx is a zip, so a small upload can expand a lot: the
+# slide count, each part's uncompressed size and the total are all capped, and
+# the result says when any cap cut the reading short.
+MAX_PPTX_SLIDES = 200
+MAX_PPTX_PART_BYTES = 5 * 1024 * 1024
+MAX_PPTX_TOTAL_BYTES = 40 * 1024 * 1024
 
 
 class _VisibleTextParser(HTMLParser):
@@ -93,6 +99,7 @@ def guess_extension(
     mapping = {
         "application/pdf": ".pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
         "text/plain": ".txt",
         "text/markdown": ".md",
         "text/csv": ".csv",
@@ -163,6 +170,104 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(paragraphs).strip()
 
 
+# Text inside a DrawingML run, plus the paragraph and line breaks between runs.
+# Run text cannot contain "<" (it is escaped), so [^<]* keeps this linear. No XML
+# parser is used on purpose: entity definitions in an untrusted file are never
+# expanded, so there is no entity-expansion or external-entity surface.
+_PPTX_TOKEN_RE = re.compile(r"<a:t(?:\s[^>]*)?>([^<]*)</a:t>|(</a:p>)|(<a:br\s*/?>)")
+_PPTX_SLIDE_RE = re.compile(r"^ppt/slides/slide(\d+)\.xml$")
+_PPTX_NOTES_TARGET_RE = re.compile(r'Target="[^"]*notesSlides/(notesSlide\d+\.xml)"')
+
+
+def _pptx_part_text(xml: str) -> str:
+    import html
+
+    lines: list[str] = []
+    current: list[str] = []
+    for text, para_end, line_break in _PPTX_TOKEN_RE.findall(xml):
+        if para_end or line_break:
+            if current:
+                lines.append("".join(current).strip())
+                current = []
+            continue
+        current.append(html.unescape(text))
+    if current:
+        lines.append("".join(current).strip())
+    return "\n".join(line for line in lines if line)
+
+
+def _extract_pptx(
+    data: bytes, pages_out: list[tuple[int | None, str]] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Return slide text and speaker notes, one block per slide, in slide order."""
+    import zipfile
+
+    details: dict[str, Any] = {}
+    parts: list[str] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        infos = {info.filename: info for info in archive.infolist()}
+        slides = sorted(
+            (int(m.group(1)), name)
+            for name in infos
+            if (m := _PPTX_SLIDE_RE.match(name))
+        )
+        details["slide_count"] = len(slides)
+        details["image_count"] = sum(1 for name in infos if name.startswith("ppt/media/"))
+        total = 0
+
+        def read_part(name: str) -> str | None:
+            nonlocal total
+            info = infos.get(name)
+            if info is None:
+                return None
+            # Declared size is only a hint; the bounded read is the real limit.
+            if info.file_size > MAX_PPTX_PART_BYTES or total + info.file_size > MAX_PPTX_TOTAL_BYTES:
+                details["size_limit_hit"] = True
+                return None
+            with archive.open(info) as handle:
+                raw = handle.read(MAX_PPTX_PART_BYTES + 1)
+            if len(raw) > MAX_PPTX_PART_BYTES:
+                details["size_limit_hit"] = True
+                return None
+            total += len(raw)
+            return raw.decode("utf-8", errors="replace")
+
+        for number, name in slides[:MAX_PPTX_SLIDES]:
+            xml = read_part(name)
+            if xml is None:
+                continue
+            slide_text = _pptx_part_text(xml)
+            notes_text = ""
+            rels = read_part(f"ppt/slides/_rels/slide{number}.xml.rels")
+            target = _PPTX_NOTES_TARGET_RE.search(rels) if rels else None
+            if target:
+                notes_xml = read_part(f"ppt/notesSlides/{target.group(1)}")
+                if notes_xml:
+                    notes_text = _pptx_part_text(notes_xml)
+            block = slide_text
+            if notes_text and notes_text != slide_text:
+                block = f"{slide_text}\n[notes] {notes_text}".strip()
+            if block:
+                parts.append(f"--- slide {number} ---\n{block}")
+                if pages_out is not None:
+                    pages_out.append((number, block))
+        if len(slides) > MAX_PPTX_SLIDES:
+            details["pages_truncated"] = True
+            details["truncation_note"] = (
+                f"Only the first {MAX_PPTX_SLIDES} of {len(slides)} slides were read (slide safety limit)."
+            )
+        if details.get("size_limit_hit"):
+            details["pages_truncated"] = True
+            details.setdefault("truncation_note", "Some slides were skipped: a part exceeded the size safety limit.")
+    text = "\n\n".join(parts).strip()
+    if not text and details["image_count"]:
+        details["image_only_hint"] = (
+            f"No text found, but the file has {details['image_count']} images: the slides are "
+            "probably pictures of text, which cannot be read here. Ask for a PDF or text version."
+        )
+    return text, details
+
+
 def _extract_plain(data: bytes) -> str:
     for encoding in ("utf-8", "utf-8-sig", "cp1254", "latin-1"):
         try:
@@ -174,6 +279,11 @@ def _extract_plain(data: bytes) -> str:
 
 _LEGACY_OFFICE_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 _ZIP_MAGIC = bytes.fromhex("504b0304")
+LEGACY_PPT_HINT = (
+    "This is a legacy PowerPoint (.ppt) file, which cannot be read here. Next step: get the file "
+    "as .pptx or PDF (open it in PowerPoint or LibreOffice and save it as .pptx or PDF, or ask "
+    "the instructor for a PDF) and read that; download_resource still saves the original for the user."
+)
 LEGACY_DOC_HINT = (
     "This is a legacy Word (.doc) file, which cannot be read here. Next step: get the file as "
     ".docx or PDF (open it in Word or LibreOffice and save it as .docx or PDF, or ask the "
@@ -182,7 +292,7 @@ LEGACY_DOC_HINT = (
 
 
 def sniff_extension(data: bytes) -> str:
-    """Name the file type from its first bytes: ``.pdf``, ``.docx``, ``.doc`` or ``""``."""
+    """Name the file type from its first bytes: ``.pdf``, ``.docx``, ``.pptx``, ``.doc`` or ``""``."""
     if data[:1024].lstrip().startswith(b"%PDF-"):
         return ".pdf"
     if data.startswith(_LEGACY_OFFICE_MAGIC):
@@ -197,6 +307,8 @@ def sniff_extension(data: bytes) -> str:
             return ""
         if any(name.startswith("word/") for name in names):
             return ".docx"
+        if any(name.startswith("ppt/") for name in names):
+            return ".pptx"
     return ""
 
 
@@ -218,11 +330,11 @@ def extract_text_from_bytes(
             ext = sniffed
             details["extension_source"] = "content"
         else:
-            legacy = ext == ".doc" or sniffed == ".doc"
+            legacy = ext in {".doc", ".ppt"} or sniffed == ".doc"
             return {
                 "ok": False,
-                "extension": ".doc" if legacy else ext or None,
-                "error": LEGACY_DOC_HINT if legacy else (
+                "extension": ext if ext in {".doc", ".ppt"} else (".doc" if legacy else ext or None),
+                "error": (LEGACY_PPT_HINT if ext == ".ppt" else LEGACY_DOC_HINT) if legacy else (
                     f"Unsupported file type {ext or '(unknown)'}. "
                     f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
                 ),
@@ -249,6 +361,9 @@ def extract_text_from_bytes(
             details.update(pdf_details)
         elif ext == ".docx":
             text = _extract_docx(data)
+        elif ext == ".pptx":
+            text, pptx_details = _extract_pptx(data, pages_out)
+            details.update(pptx_details)
         else:
             text = _extract_plain(data)
             if ext in {".html", ".htm"}:
@@ -265,7 +380,7 @@ def extract_text_from_bytes(
         }
 
     text = (text or "").strip()
-    if pages_out is not None and ext != ".pdf" and text:
+    if pages_out is not None and ext not in {".pdf", ".pptx"} and text:
         pages_out.append((None, text))
     truncated_text, truncated = _truncate(text, max_chars)
     return {
