@@ -183,7 +183,8 @@ class MoodleClient:
         with self._lock:
             if not self._sesskey:
                 self.login()
-            assert self._sesskey is not None
+            if self._sesskey is None:
+                raise MoodleAuthError("Moodle session is not available.")
             return self._sesskey
 
     def auth_status(self) -> dict[str, Any]:
