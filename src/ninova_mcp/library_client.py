@@ -14,6 +14,7 @@ import requests
 from .cache import TtlCache, parse_ttl_seconds
 from .client import DEFAULT_HEADERS, _request_delay_seconds
 from .http_security import request_with_safe_redirects
+from .library_account import LibraryAccountClient
 from .library_catalog import CATALOG_URL, RECORD_PATTERN, SEARCH_FIELDS, parse_record, parse_search, record_url
 from .parsing import clean_text, make_soup
 from .public_parsing import (
@@ -94,6 +95,7 @@ class LibraryClient:
         self._min_request_interval = _request_delay_seconds()
         self._last_request_at = 0.0
         self._account_response: requests.Response | None = None
+        self._account_client: LibraryAccountClient | None = None
 
     def _verify_value(self) -> bool | str:
         ca_bundle = os.getenv("NINOVA_LIBRARY_CA_BUNDLE")
@@ -375,13 +377,22 @@ class LibraryClient:
         self._account_response = response
         return response
 
+    def _sirsi_account(self) -> LibraryAccountClient:
+        if self._account_client is None:
+            self._account_client = LibraryAccountClient()
+        return self._account_client
+
     def get_account(self) -> dict[str, Any]:
+        if not self._legacy:
+            return self._sirsi_account().get_account()
         response = self._login()
         result = extract_library_account(response.text, response.url)
         result["source"] = "divit.library.itu.edu.tr/patroninfo"
         return self._mark(result)
 
     def list_loans(self) -> dict[str, Any]:
+        if not self._legacy:
+            return self._sirsi_account().list_loans()
         account = self.get_account()
         return self._mark({
             "loan_count": account.get("loan_count", 0),
@@ -391,6 +402,8 @@ class LibraryClient:
         })
 
     def renew_loan(self, loan_id: str, *, confirm: bool = False) -> dict[str, Any]:
+        if not self._legacy:
+            raise LibraryError(f"Renewals are not implemented for the new Sirsi catalog; nothing was submitted. Use {CATALOG_URL}")
         target = clean_text(loan_id)
         if not target or len(target) > 100:
             raise LibraryError("Geçerli bir loan_id gerekli.")

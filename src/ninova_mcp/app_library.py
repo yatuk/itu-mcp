@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from .article_search import ArticleSearchClient
 from .library_client import LibraryClient
+from .proquest_client import ProQuestClient
+from .library_databases import LibraryDatabasesClient
 
 
 class LibraryToolsMixin:
     """Tool methods mixed into ``NinovaMcpApp``, which supplies ``library``."""
 
     library: LibraryClient
+    articles: ArticleSearchClient
+    proquest: ProQuestClient
+    library_databases: LibraryDatabasesClient
 
     def library_search(
         self,
@@ -21,6 +27,55 @@ class LibraryToolsMixin:
     ) -> dict[str, Any]:
         """Search the public İTÜ Library catalog."""
         return self.library.search(query, search_type=search_type, limit=limit, offset=offset)
+
+    def search_articles(
+        self,
+        query: str,
+        from_year: int | None = None,
+        to_year: int | None = None,
+        open_access_only: bool = False,
+        article_type: str | None = None,
+        sort: str = "relevance",
+        limit: int = 10,
+        page: int = 1,
+    ) -> dict[str, Any]:
+        """Search journal articles in the open OpenAlex index, with İTÜ access links."""
+        return self.articles.search(
+            query,
+            from_year=from_year,
+            to_year=to_year,
+            open_access_only=open_access_only,
+            article_type=article_type,
+            sort=sort,
+            limit=limit,
+            page=page,
+        )
+
+    def proquest_search(
+        self,
+        query: str,
+        full_text_only: bool = True,
+        peer_reviewed_only: bool = False,
+        from_year: int | None = None,
+        to_year: int | None = None,
+    ) -> dict[str, Any]:
+        """Search İTÜ's ProQuest subscription with the library account (opt-in)."""
+        return self.proquest.search(
+            query,
+            full_text_only=full_text_only,
+            peer_reviewed_only=peer_reviewed_only,
+            from_year=from_year,
+            to_year=to_year,
+        )
+
+    def library_search_databases(
+        self,
+        query: str | None = None,
+        subject: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Search the İTÜ Library's licensed article and e-book databases."""
+        return self.library_databases.search(query=query, subject=subject, limit=limit)
 
     def library_get_item(self, record_id: str) -> dict[str, Any]:
         """Read a public library catalog record."""

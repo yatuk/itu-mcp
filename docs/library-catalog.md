@@ -17,10 +17,33 @@ copy location, barcode and call number and reports a pending status as unknown.
 only status evidence. The official catalog link is the source for current shelf
 availability. Missing copy tables do not prove that an item has no copies.
 
-Account, loan, renewal and reservation support has not been implemented for
-Sirsi. The existing tool names remain discoverable with explicit unavailable
-descriptions. On this platform they fail before reading account credentials or
-submitting an account action, including when `confirm=true` is supplied.
+`library_get_account` and `library_list_loans` read the student's own account
+on the current catalog. The account is separate from Ninova: it signs in with
+the university number and a library PIN (`NINOVA_LIBRARY_ID`,
+`NINOVA_LIBRARY_PIN`; `NINOVA_LIBRARY_NAME` is only for the legacy platform).
+The PIN goes only to the catalog's own sign-in form on
+`katalog.kutuphane.itu.edu.tr`, through a private session that shares no
+cookies with the anonymous public client. The tools read the account page and
+return the status, loans and holds (title, `SD_ILS:` record ID, dates) and the
+fines total. They never change anything. If the account reports more loans or
+holds than could be read from the page, `parse_warning` says so.
+
+Renewal and reservation are not implemented for Sirsi. `library_renew_loan` and
+`library_reserve_item` fail before any request is sent, including when
+`confirm=true` is supplied.
+
+## Searching for sources: `library_search_databases`
+
+`library_search_databases` lists the library's licensed article, journal and
+e-book databases (about 250) for a topic. It reads the public JSON service
+behind <https://kutuphane.itu.edu.tr/arastirma/veritabanlari> once, caches it
+(`NINOVA_LIBRARY_DATABASES_CACHE_TTL_SECONDS`, six hours by default) and
+searches it locally: a query matches the name, subjects, publisher and
+description, with Turkish diacritics ignored, and databases that match more
+words rank higher. `subject` narrows to one subject area, and a call with no
+arguments returns the subject list. Each result carries the on-campus link and
+the OpenAthens off-campus link. The tool finds databases to search in. It does
+not search inside them, and it needs no credentials.
 
 An explicitly configured legacy `https://divit.library.itu.edu.tr` base retains
 the old WebPAC implementation for compatibility. Its operational availability is
@@ -29,6 +52,38 @@ numeric portion; search the current catalog to obtain its actual record ID.
 Modern base URLs are restricted to the official root, with TLS verification and
 redirect host validation enabled. HTTP 403, TLS errors, wrong item identity and
 unrecognized search HTML remain errors rather than successful empty results.
+
+## Articles: `search_articles`
+
+`search_articles` searches individual journal articles in the open OpenAlex
+index: title, authors, journal, year, abstract, DOI, citation count and an open
+access link when one exists. Each result with a DOI also gets `itu_access_url`,
+which goes through the library's OpenAthens redirector, so the article opens
+with İTÜ's subscription in the student's browser. Only `api.openalex.org` is
+called and no İTÜ credentials are used. Without a key, OpenAlex shares one
+daily quota per IP address; `NINOVA_OPENALEX_API_KEY` gives the server its own.
+
+## ProQuest: `proquest_search` (off by default)
+
+`proquest_search` searches İTÜ's ProQuest subscription signed in with the
+library account, the way a browser does: ProQuest's sign-in for Istanbul
+Technical University opens İTÜ's OpenAthens form, which takes
+`NINOVA_LIBRARY_ID` and `NINOVA_LIBRARY_PIN`, and a SAML response is posted
+back to ProQuest.
+
+It is off until the operator sets `NINOVA_PROQUEST_ENABLE=1` in the MCP client
+configuration or an explicitly named env file; an auto-discovered `.env` cannot
+turn it on. The licence covers the student's own research, so the tool is kept
+small on purpose: one page of up to 20 results per call, at least three seconds
+between searches, a daily cap (`NINOVA_PROQUEST_DAILY_SEARCHES`, 40 by default),
+identical searches answered from a 30 minute cache without using the cap, and
+no full-text download. Results carry `itu_url` links that open the record in the
+browser. It is not offered on the remote HTTP transport.
+
+The password is sent only to İTÜ's tenant on `login.openathens.net`
+(`/auth/itu.edu.tr/`), the SAML response only to ProQuest's service provider,
+and the search form only to `www.proquest.com`. Every request and redirect is
+limited to those three hosts.
 
 ## Optional local proxy for public catalog traffic
 

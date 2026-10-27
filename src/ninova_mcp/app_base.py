@@ -17,9 +17,12 @@ from .private_io import ensure_private_dir
 
 if TYPE_CHECKING:
     from .archive_client import ItuArchiveClient
+    from .proquest_client import ProQuestClient
+    from .article_search import ArticleSearchClient
     from .client import NinovaClient
     from .community_data import CrossCheckDataClient
     from .library_client import LibraryClient
+    from .library_databases import LibraryDatabasesClient
     from .mail_client import ItuMailClient
     from .moodle_client import MoodleClient
     from .obs_client import ObsClient, ObsPublicClient
@@ -62,6 +65,9 @@ class AppBase:
         self._obs_public: ObsPublicClient | None = None
         self._itu_public: ItuPublicClient | None = None
         self._library: LibraryClient | None = None
+        self._library_databases: LibraryDatabasesClient | None = None
+        self._articles: ArticleSearchClient | None = None
+        self._proquest: ProQuestClient | None = None
         self._moodle: MoodleClient | None = None
         self._pool: PoolSiteClient | None = None
         self._mail: ItuMailClient | None = None
@@ -138,6 +144,30 @@ class AppBase:
         return self._library
 
     @property
+    def proquest(self) -> ProQuestClient:
+        if self._proquest is None:
+            with self._client_lock:
+                if self._proquest is None:
+                    self._proquest = server_namespace().ProQuestClient()
+        return self._proquest
+
+    @property
+    def articles(self) -> ArticleSearchClient:
+        if self._articles is None:
+            with self._client_lock:
+                if self._articles is None:
+                    self._articles = server_namespace().ArticleSearchClient()
+        return self._articles
+
+    @property
+    def library_databases(self) -> LibraryDatabasesClient:
+        if self._library_databases is None:
+            with self._client_lock:
+                if self._library_databases is None:
+                    self._library_databases = server_namespace().LibraryDatabasesClient()
+        return self._library_databases
+
+    @property
     def moodle(self) -> MoodleClient:
         if self._moodle is None:
             with self._client_lock:
@@ -185,6 +215,10 @@ class AppBase:
             self._itu_public._cache.clear()
         if self._library is not None:
             self._library._cache.clear()
+        if self._articles is not None:
+            self._articles._cache.clear()
+        if self._library_databases is not None:
+            self._library_databases._cache.clear()
         if self._moodle is not None:
             self._moodle._cache.clear()
         if self._pool is not None:

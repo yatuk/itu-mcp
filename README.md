@@ -57,6 +57,7 @@ The rest of this page is in Turkish. Setup: [3 adımda kur](#3-adımda-kur). Ful
 | "Bugün yemekte ne var?" | Portal |
 | "Bu dersi geçen yıl kim verdi, kaç kişi AA aldı?" | Ders arşivi |
 | "Kütüphanede bu kitap var mı?" | Kütüphane kataloğu |
+| "Ödevim için uyku ve akademik başarı üzerine makale bul" | Makale indeksi, kütüphane veritabanları |
 | "Okunmamış maillerimi özetle" | İTÜ Mail |
 | "FIZ 102E izlencesini ve duyurularını oku" | Moodle ve havuz siteleri |
 | "Bu şubede yer açılınca haberim olsun" | Kontenjan takibi |
@@ -450,7 +451,8 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>estimate_relative_grade</code> · <code>check_course_conflicts</code><br/>
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>library_*</code><br/>
-      <code>moodle_*</code> · <code>pool_*</code>
+      <code>moodle_*</code> · <code>pool_*</code><br/>
+      <code>search_articles</code> · <code>proquest_search</code>
     </td>
     <td valign="top">
       <code>archive_who_taught</code> · <code>archive_course_history</code><br/>

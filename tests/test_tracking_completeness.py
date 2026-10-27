@@ -250,6 +250,29 @@ class CoverageParsingTests(unittest.TestCase):
             self.assertEqual(scope_coverage(html, ROOT, ROOT, "assignments", payload)["status"], "partial")
             self.assertEqual(enrollment_coverage(html, ROOT, ROOT, [COURSE])["status"], "partial")
 
+    def test_announcement_page_without_cards_is_an_empty_inventory(self):
+        # Ninova's page for a class with no announcements, as served.
+        root = COURSE["url"] + "/Duyurular"
+        bare = ('<div class="orta"> <div class="ic"> <div id="ctl00_pnlHeader"> <h1> Duyurular</h1> </div> '
+                '</div> </div><div class="sag"><p>Sınıf duyurularınız yan tarafta görüntülenmektedir.</p></div>')
+        result = scope_coverage(bare, root, root, "announcements", {"announcements": []})
+        self.assertEqual((result["status"], result["reason"]), ("complete", "empty_announcement_page"))
+        # Anything else in the content block keeps the page unrecognised.
+        for extra in ('<div class="hata">Beklenmeyen içerik</div>', "Bir hata oluştu", '<table><tr><td>x</td></tr></table>'):
+            html = bare.replace("</h1> </div> ", "</h1> </div> " + extra, 1)
+            with self.subTest(extra=extra):
+                self.assertEqual(
+                    scope_coverage(html, root, root, "announcements", {"announcements": []})["reason"],
+                    "scope_content_not_recognized",
+                )
+        # Another heading, or the same markup reached through a redirect, is not proof.
+        other = bare.replace("Duyurular", "Ödevler")
+        self.assertNotEqual(scope_coverage(other, root, root, "announcements", {"announcements": []})["status"], "complete")
+        self.assertEqual(scope_coverage(bare, BASE + "/Kampus1", root, "announcements", {"announcements": []})["status"], "failed")
+        # Cards present but none parsed stays partial.
+        with_card = bare.replace("</h1> </div> ", '</h1> </div> <div class="duyuruGoruntule">x</div>', 1)
+        self.assertEqual(scope_coverage(with_card, root, root, "announcements", {"announcements": []})["status"], "partial")
+
     def test_unexpected_redirect_is_incomplete_despite_content(self):
         self.assertEqual(scope_coverage("<h1>Other page</h1>", BASE + "/login", ROOT, "class_files", {"entries": [{}]})["status"], "failed")
 

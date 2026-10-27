@@ -51,6 +51,10 @@ AUTO_ENV_SAFE_KEYS: frozenset[str] = frozenset(
         "NINOVA_LIBRARY_ID",
         "NINOVA_LIBRARY_PIN",
         "NINOVA_LIBRARY_CACHE_TTL_SECONDS",
+        "NINOVA_LIBRARY_DATABASES_CACHE_TTL_SECONDS",
+        "NINOVA_ARTICLE_CACHE_TTL_SECONDS",
+        "NINOVA_PROQUEST_CACHE_TTL_SECONDS",
+        "NINOVA_OPENALEX_API_KEY",
         "NINOVA_MOODLE_CACHE_TTL_SECONDS",
         "NINOVA_POOL_CACHE_TTL_SECONDS",
         "NINOVA_COURSE_CACHE_TTL_SECONDS",
@@ -105,6 +109,9 @@ AUTO_ENV_BLOCKED_KEYS: frozenset[str] = frozenset(
         "NINOVA_ENV_FILE",
         # Account writes.
         "NINOVA_OBS_REGISTRATION_WRITES",
+        # Signing in to a licensed third-party platform with the library account.
+        "NINOVA_PROQUEST_ENABLE",
+        "NINOVA_PROQUEST_DAILY_SEARCHES",
         # Remote HTTP transport.
         # Whoever writes the file would choose the secret. The remote server
         # refuses to start when this is skipped, so a setup that kept its key

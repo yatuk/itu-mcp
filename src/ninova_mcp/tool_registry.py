@@ -38,6 +38,9 @@ REMOTE_EXCLUDED_TOOLS = {
     "get_assignment_upload_slots",
     "read_resource_text",
     "moodle_read_resource",
+    # Signs in to a licensed third-party platform with the library password;
+    # the licence is for the student's own research, so it stays local.
+    "proquest_search",
     "read_page",
     "library_renew_loan",
     "library_reserve_item",
@@ -74,4 +77,6 @@ STATEFUL_TOOL_NAMES = {
     "export_table",
 }
 STATEFUL_TOOL_NAMES |= SEAT_WATCH_STATEFUL_TOOL_NAMES
+# Signs in to a third-party platform and counts against a daily search limit.
+STATEFUL_TOOL_NAMES.add("proquest_search")
 DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft"}

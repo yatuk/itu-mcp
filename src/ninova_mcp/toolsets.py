@@ -168,6 +168,9 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
         "Library: catalog search, availability, account, loans",
         (
             "library_search",
+            "library_search_databases",
+            "search_articles",
+            "proquest_search",
             "library_get_item",
             "library_check_availability",
             "library_get_account",

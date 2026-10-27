@@ -38,11 +38,14 @@ from .app_registration import (
     obs_registration_writes_enabled,
 )
 from .archive_client import ItuArchiveClient
+from .article_search import ArticleSearchClient
+from .proquest_client import ProQuestClient
 from .cli import build_arg_parser, main
 from .client import NinovaClient
 from .community_data import CrossCheckDataClient
 from .env import load_ninova_env
 from .library_client import LibraryClient
+from .library_databases import LibraryDatabasesClient
 from .moodle_client import MoodleClient
 from .pool_client import PoolSiteClient
 from .mail_client import ItuMailClient
@@ -69,6 +72,8 @@ from .tool_registry import (
 )
 
 __all__ = [
+    "ArticleSearchClient",
+    "ProQuestClient",
     "COURSES_CACHE_KEY",
     "CrossCheckDataClient",
     "DEFAULT_COURSE_CACHE_TTL_SECONDS",
@@ -78,6 +83,7 @@ __all__ = [
     "ItuPublicClient",
     "LOCAL_TOOL_NAMES",
     "LibraryClient",
+    "LibraryDatabasesClient",
     "MoodleClient",
     "PoolSiteClient",
     "MAIL_TOOL_NAMES",

@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.4.0
+
+### Yeni araçlar
+
+- **`library_search_databases`:** Kütüphanenin lisanslı makale, dergi ve e-kitap veritabanlarında
+  (yaklaşık 250) konuya göre arama. Ödev için kaynak ararken IEEE Xplore, JSTOR, Scopus gibi
+  hangi veritabanına bakılacağını söyler. Ad, konu, yayıncı ve açıklamada arar, Türkçe harfleri
+  ayırt etmez, kampüs içi ve OpenAthens kampüs dışı bağlantıyı verir. Giriş gerekmez
+- **`library_get_account` ve `library_list_loans`:** Yeni kütüphane kataloğunda (Sirsi) artık çalışıyor.
+  Üniversite numarası ve ayrı kütüphane PIN'i ister (`NINOVA_LIBRARY_ID`, `NINOVA_LIBRARY_PIN`),
+  Ninova şifresi kullanılmaz. Şimdilik giriş ve hesap durumu okunuyor. Katalog ödünç ve ayırtma
+  listelerini sayfadan sonra ayrı bir istekle yüklüyor, bu istek henüz çözülmedi. Liste
+  okunamadığında sayı boş bırakılıp uyarı veriliyor, "0" denmiyor. Yenileme ve ayırtma yok
+- **`search_articles`:** Makale düzeyinde arama (OpenAlex açık indeksi): başlık, yazarlar, dergi,
+  yıl, özet, DOI, atıf sayısı, açık erişim linki. Her sonuçta İTÜ OpenAthens linki var, tarayıcıda
+  kütüphane hesabıyla tam metne gider. Yıl, açık erişim, tür ve sıralama filtreleri. Giriş gerekmez,
+  isteğe bağlı `NINOVA_OPENALEX_API_KEY` ile kendi günlük kotası olur
+- **`proquest_search` (varsayılan kapalı):** İTÜ'nün ProQuest aboneliğinde kütüphane hesabıyla
+  (OpenAthens) arama. Çağrı başına bir sayfa (en çok 20 sonuç), istekler arası bekleme, günlük
+  arama sınırı (`NINOVA_PROQUEST_DAILY_SEARCHES`, varsayılan 40). Tam metin indirmez, İTÜ linki
+  verir. Şifre yalnızca login.openathens.net adresine gider. Lisans kişisel araştırma içindir;
+  açmak için MCP istemci ayarında `NINOVA_PROQUEST_ENABLE=1` gerekir, otomatik bulunan `.env` açamaz
+
+### Güvenlik
+
+- ProQuest girişinde şifre yalnızca İTÜ'nün OpenAthens sayfasına (`/auth/itu.edu.tr/`) gider; aynı
+  sunucudaki başka bir kurumun giriş formuna gönderilmez. `proquest_search` uzak (HTTP) sunucuda
+  sunulmaz. Veritabanı ve makale sonuçlarında yalnızca http(s) bağlantıları döner
+
+### Düzeltmeler
+
+- Duyurusu olmayan Ninova derslerinde (ör. CEN 322E, CEN 500) duyuru sayfası `scope_content_not_recognized`
+  hatası veriyordu. Ninova bu durumda "duyuru yok" yazmıyor, içerik bölümünde yalnızca başlık kalıyor.
+  Bu boş sayfa artık `empty_announcement_page` olarak tamam sayılıyor. Başka içerik varsa hâlâ "tanınmadı" der
+- ProQuest aynı sorguyu 30 dakika önbellekten veriyor, günlük hakkı harcamıyor. Bekleme yalnızca
+  aramalar arasında, giriş adımları arasında değil. Kütüphane hesabı girişte açılan sayfayı tekrar istemiyor
+
 ## v1.3.0
 
 ### Yeni araçlar

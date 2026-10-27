@@ -75,6 +75,29 @@ def _explicit_empty(text: str, scope: str) -> bool:
     return bool(re.search(noun + r"[^.!?]{0,100}(?:bulunmamaktadir|bulunamadi|yoktur)", text))
 
 
+def _bare_announcement_page(soup: Any) -> bool:
+    """True for Ninova's announcement page of a class that has no announcements.
+
+    Ninova prints no "no announcements" sentence. The content block then holds
+    the "Duyurular" heading and nothing else, while a class with announcements
+    has its ``div.duyuruGoruntule`` cards next to that heading. Any other element
+    or text in the block keeps the page unrecognised.
+    """
+    header = soup.select_one(".orta .ic > #ctl00_pnlHeader")
+    if header is None:
+        return False
+    heading = header.find("h1")
+    if heading is None or normalize_lookup_text(heading.get_text(" ", strip=True)) != "duyurular":
+        return False
+    block = header.parent
+    for child in block.children:
+        if child is header:
+            continue
+        if getattr(child, "name", None) is not None or str(child).strip():
+            return False
+    return True
+
+
 def enrollment_coverage(html: str, page_url: str, expected_url: str, courses: list[dict[str, Any]]) -> dict[str, Any]:
     result = page_coverage(html, page_url, expected_url)
     if result["status"] != "complete":
@@ -209,6 +232,9 @@ def scope_coverage(html: str, page_url: str, expected_url: str, scope: str, payl
         cards = soup.select("div.duyuruGoruntule")
         if cards and len(cards) != count:
             return coverage("partial", "unparsed_announcement_cards")
+        # page_coverage already confirmed this is the requested class's page.
+        if not cards and not count and _bare_announcement_page(soup):
+            return coverage("complete", "empty_announcement_page")
     if count:
         return result
     if _explicit_empty(text, scope):
