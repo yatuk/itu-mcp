@@ -48,6 +48,7 @@ from .library_client import LibraryClient
 from .library_databases import LibraryDatabasesClient
 from .moodle_client import MoodleClient
 from .pool_client import PoolSiteClient
+from .hocametre import HocametreClient
 from .mail_client import ItuMailClient
 from .obs_client import ObsClient, ObsPublicClient
 from .parsing import match_upload_slot
@@ -86,6 +87,7 @@ __all__ = [
     "LibraryDatabasesClient",
     "MoodleClient",
     "PoolSiteClient",
+    "HocametreClient",
     "MAIL_TOOL_NAMES",
     "MAX_UPLOAD_BYTES",
     "NinovaClient",

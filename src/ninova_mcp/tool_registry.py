@@ -12,6 +12,7 @@ from typing import Any
 
 from .archive_tools import ARCHIVE_DATASET_TOOLS
 from .calendar_export import CALENDAR_EXPORT_TOOLS
+from .hocametre import HOCAMETRE_TOOLS
 from .moodle_tools import MOODLE_TOOLS
 from .seat_watch import SEAT_WATCH_STATEFUL_TOOL_NAMES, SEAT_WATCH_TOOLS
 from .tool_metadata import BASE_TOOLS
@@ -21,6 +22,7 @@ TOOLS.extend(ARCHIVE_DATASET_TOOLS)
 TOOLS.extend(SEAT_WATCH_TOOLS)
 TOOLS.extend(CALENDAR_EXPORT_TOOLS)
 TOOLS.extend(MOODLE_TOOLS)
+TOOLS.extend(HOCAMETRE_TOOLS)
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
     "mail_status",
@@ -41,6 +43,12 @@ REMOTE_EXCLUDED_TOOLS = {
     # Signs in to a licensed third-party platform with the library password;
     # the licence is for the student's own research, so it stays local.
     "proquest_search",
+    # Third-party student site: a shared remote server would query it for
+    # everyone, so instructor ratings stay on the student's own machine.
+    "hocametre_search_instructors",
+    "hocametre_get_instructor",
+    "hocametre_lookup_instructors",
+    "hocametre_rate_course_sections",
     "read_page",
     "library_renew_loan",
     "library_reserve_item",

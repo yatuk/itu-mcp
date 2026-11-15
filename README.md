@@ -56,6 +56,7 @@ The rest of this page is in Turkish. Setup: [3 adımda kur](#3-adımda-kur). Ful
 | "Vize notlarım açıklandı mı?" | OBS |
 | "Bugün yemekte ne var?" | Portal |
 | "Bu dersi geçen yıl kim verdi, kaç kişi AA aldı?" | Ders arşivi |
+| "BLG 223E şubelerinin hocaları nasıl, öğrenciler ne diyor?" | Hocametre (notkutusu.com) ve OBS ders programı |
 | "Kütüphanede bu kitap var mı?" | Kütüphane kataloğu |
 | "Ödevim için uyku ve akademik başarı üzerine makale bul" | Makale indeksi, kütüphane veritabanları |
 | "Okunmamış maillerimi özetle" | İTÜ Mail |
@@ -377,7 +378,7 @@ NINOVA_TOOLSETS=ninova,obs,archive        # yalnızca bu gruplar açık olsun
 NINOVA_DISABLED_TOOLSETS=library,mail     # ya da: bunlar dışında her şey açık olsun
 ```
 
-Gruplar: `core`, `ninova`, `files`, `obs`, `registration`, `portal`, `planning`, `public`, `campus`, `library`, `moodle`, `archive`, `mail`. İkisini de yazmazsan her şey açık kalır. Hangi grupta ne olduğunu `itu-mcp --list-toolsets` gösterir.
+Gruplar: `core`, `ninova`, `files`, `obs`, `registration`, `portal`, `planning`, `public`, `campus`, `library`, `moodle`, `hocametre`, `archive`, `mail`. İkisini de yazmazsan her şey açık kalır. Hangi grupta ne olduğunu `itu-mcp --list-toolsets` gösterir.
 
 </details>
 
@@ -452,7 +453,8 @@ Asistan bir soru aldığında İTÜ MCP'deki uygun aracı çağırır. Araç ilg
       <code>find_open_course_sections</code> · <code>find_empty_classrooms</code><br/>
       <code>build_degree_plan</code> · <code>library_*</code><br/>
       <code>moodle_*</code> · <code>pool_*</code><br/>
-      <code>search_articles</code> · <code>proquest_search</code>
+      <code>search_articles</code> · <code>proquest_search</code><br/>
+      <code>hocametre_*</code>
     </td>
     <td valign="top">
       <code>archive_who_taught</code> · <code>archive_course_history</code><br/>

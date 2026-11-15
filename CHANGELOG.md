@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5.0
+
+### Yeni araçlar
+
+- **Hocametre:** notkutusu.com'daki öğrenci puanları ve yorumları. `hocametre_search_instructors`
+  hoca arar, `hocametre_get_instructor` bir profilin puanlarını (not paylaşımı, yardımseverlik,
+  ödev, yoklama, anlatım; 1-5, oy sayılarıyla) ve son yorumlarını getirir.
+  `hocametre_lookup_instructors` aynı hocanın kopya profillerini bulup oy ağırlıklı birleşik puan
+  verir. `hocametre_rate_course_sections` bir dersin OBS'deki şubelerini hocalarının puanlarıyla
+  yan yana koyar. Giriş gerekmez; yalnızca hoca adları gönderilir, öğrenciye ait bir şey gitmez.
+  Sonuçlar 6 saat önbellekte tutulur (`NINOVA_HOCAMETRE_CACHE_TTL_SECONDS`). Resmi İTÜ kaynağı
+  değildir. Paylaşılan uzak (HTTP) sunucuda sunulmaz
+
 ## v1.4.0
 
 ### Yeni araçlar

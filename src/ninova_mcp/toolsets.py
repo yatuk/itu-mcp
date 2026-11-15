@@ -191,6 +191,15 @@ TOOLSETS: dict[str, tuple[str, tuple[str, ...]]] = {
             "pool_read_document",
         ),
     ),
+    "hocametre": (
+        "Instructor ratings from notkutusu.com's hocametre (student site, no login), also per course section",
+        (
+            "hocametre_search_instructors",
+            "hocametre_get_instructor",
+            "hocametre_lookup_instructors",
+            "hocametre_rate_course_sections",
+        ),
+    ),
     "archive": (
         "Course archive since 2016: history, instructors, fill rates, grade distribution",
         (

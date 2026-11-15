@@ -67,6 +67,12 @@ EXPECTED_TOOL_GROUPS = {
         "pool_list_documents",
         "pool_read_document",
     ),
+    "hocametre": (
+        "hocametre_search_instructors",
+        "hocametre_get_instructor",
+        "hocametre_lookup_instructors",
+        "hocametre_rate_course_sections",
+    ),
     "archive": (
         "archive_list_terms",
         "archive_course_history",

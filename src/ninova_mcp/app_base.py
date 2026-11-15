@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .moodle_client import MoodleClient
     from .obs_client import ObsClient, ObsPublicClient
     from .pool_client import PoolSiteClient
+    from .hocametre import HocametreClient
     from .public_client import ItuPublicClient
 
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
@@ -70,6 +71,7 @@ class AppBase:
         self._proquest: ProQuestClient | None = None
         self._moodle: MoodleClient | None = None
         self._pool: PoolSiteClient | None = None
+        self._hocametre: HocametreClient | None = None
         self._mail: ItuMailClient | None = None
         self._archive: ItuArchiveClient | None = None
         self._prereq_crosscheck: CrossCheckDataClient | None = None
@@ -184,6 +186,14 @@ class AppBase:
         return self._pool
 
     @property
+    def hocametre(self) -> HocametreClient:
+        if self._hocametre is None:
+            with self._client_lock:
+                if self._hocametre is None:
+                    self._hocametre = server_namespace().HocametreClient()
+        return self._hocametre
+
+    @property
     def mail(self) -> ItuMailClient:
         if self._mail is None:
             with self._client_lock:
@@ -223,6 +233,8 @@ class AppBase:
             self._moodle._cache.clear()
         if self._pool is not None:
             self._pool._cache.clear()
+        if self._hocametre is not None:
+            self._hocametre._cache.clear()
         if self._archive is not None:
             self._archive._cache.clear()
         if self._prereq_crosscheck is not None:
